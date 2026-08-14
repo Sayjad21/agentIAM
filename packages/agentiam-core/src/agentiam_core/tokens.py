@@ -19,7 +19,7 @@ never called implicitly by mint or verify.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Final
 from uuid import UUID
 
@@ -34,6 +34,7 @@ from biscuit_auth import (
     Rule,
 )
 
+from agentiam_core.caveats import datalog_date, quote_string
 from agentiam_core.errors import (
     DepthExceededError,
     InvalidSignatureError,
@@ -51,8 +52,6 @@ WARN_SIZE_LIMIT_B64: Final = 4096
 #: Base64 length past which a token is refused outright. Measured: a chain at the maximum
 #: permitted depth of 8 reaches 4,940 characters, so this is never hit in normal operation.
 HARD_SIZE_LIMIT_B64: Final = 8192
-
-_RFC3339: Final = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def generate_keypair() -> KeyPair:
@@ -113,11 +112,6 @@ class VerifiedToken:
     size_warning: bool
 
 
-def _datalog_time(value: datetime) -> str:
-    """Render a datetime as a biscuit date literal, in UTC."""
-    return value.astimezone(UTC).strftime(_RFC3339)
-
-
 def _as_uuid(value: object, field: str) -> UUID:
     """Parse an identifier fact back into a UUID.
 
@@ -128,12 +122,6 @@ def _as_uuid(value: object, field: str) -> UUID:
         return UUID(str(value))
     except (ValueError, AttributeError, TypeError) as exc:
         raise MalformedTokenError(f"{field} is not a valid UUID: {value!r}") from exc
-
-
-def _quote(value: str) -> str:
-    """Quote a string for Datalog, escaping what would otherwise break the literal."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
 
 
 def mint_root(mandate: Mandate, private_key: PrivateKey) -> str:
@@ -154,18 +142,19 @@ def mint_root(mandate: Mandate, private_key: PrivateKey) -> str:
         TokenTooLargeError: If the resulting token exceeds the hard size limit.
     """
     lines: list[str] = [
-        f"mandate({_quote(str(mandate.mandate_id))});",
-        f"task({_quote(str(mandate.task_id))});",
-        f"principal({_quote(mandate.principal_id)});",
-        f"intent({_quote(mandate.intent_hash)});",
-        f"issued_at({_datalog_time(mandate.not_before)});",
-        f"not_before({_datalog_time(mandate.not_before)});",
-        f"expires_at({_datalog_time(mandate.expires_at)});",
+        f"mandate({quote_string(str(mandate.mandate_id))});",
+        f"task({quote_string(str(mandate.task_id))});",
+        f"principal({quote_string(mandate.principal_id)});",
+        f"intent({quote_string(mandate.intent_hash)});",
+        f"issued_at({datalog_date(mandate.not_before)});",
+        f"not_before({datalog_date(mandate.not_before)});",
+        f"expires_at({datalog_date(mandate.expires_at)});",
         f"max_depth({mandate.max_depth});",
     ]
-    lines += [f"scope({_quote(s)});" for s in sorted(mandate.scopes)]
+    lines += [f"scope({quote_string(s)});" for s in sorted(mandate.scopes)]
     lines += [
-        f"budget({_quote(d.value)}, {mandate.budget.scaled(d)});" for d in sorted(BudgetDimension)
+        f"budget({quote_string(d.value)}, {mandate.budget.scaled(d)});"
+        for d in sorted(BudgetDimension)
     ]
     lines += [
         # The operation being attempted must be one this mandate granted.
@@ -177,8 +166,8 @@ def mint_root(mandate: Mandate, private_key: PrivateKey) -> str:
         # Per-dimension ceiling from the mandate.
         "check if requested($dim, $v), budget($dim, $max), $v <= $max;",
         # not_before is inclusive; expires_at is EXCLUSIVE (EC-T06).
-        f"check if time($t), $t >= {_datalog_time(mandate.not_before)};",
-        f"check if time($t), $t < {_datalog_time(mandate.expires_at)};",
+        f"check if time($t), $t >= {datalog_date(mandate.not_before)};",
+        f"check if time($t), $t < {datalog_date(mandate.expires_at)};",
     ]
 
     token = BiscuitBuilder("\n".join(lines)).build(private_key).to_base64()

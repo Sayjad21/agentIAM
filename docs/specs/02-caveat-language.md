@@ -24,30 +24,41 @@ a property we can actually test.
 
 ---
 
-## 2. The `Caveat` protocol
+## 2. The three caveat operations
+
+Every caveat kind MUST support three operations:
 
 ```python
-class Caveat(Protocol):
-    kind: ClassVar[CaveatKind]
+def to_datalog(caveat: Caveat) -> str:
+    """Compile to a biscuit check or reject clause. See §3."""
 
-    def to_datalog(self) -> str:
-        """Compile to a biscuit check or reject clause. See §3."""
+def evaluate(caveat: Caveat, ctx: RequestContext) -> CaveatResult:
+    """Pure Python evaluation, for outcomes Datalog cannot express and for
+    naming the failing caveat on a decision record."""
 
-    def narrows(self, other: Self) -> bool:
-        """True iff self is at least as restrictive as other, same kind.
+def narrows(caveat: Caveat, other: Caveat) -> bool:
+    """True iff caveat is at least as restrictive as other, same kind.
 
-        Reflexive and transitive (P-03, P-04). Comparing different kinds is a
-        programming error, not False — raise.
-        """
-
-    def evaluate(self, ctx: RequestContext) -> CaveatResult:
-        """Pure Python evaluation, for outcomes Datalog cannot express and for
-        naming the failing caveat on a decision record."""
+    Reflexive and transitive (P-03, P-04). Comparing different kinds is a
+    programming error, not False — raise.
+    """
 ```
 
-`to_datalog()` and `evaluate()` MUST agree on allow/deny for every input. A conformance test in
-T-008 asserts this across a generated corpus; a divergence is a security bug, because the PEP
-trusts Datalog for the decision and `evaluate()` for the explanation.
+They are **module-level functions in `caveats.py`, not methods on the models.** `PLAN.md` §5
+puts the Pydantic models in `models.py` and the DSL↔Datalog translation in `caveats.py`, and
+keeping the data types free of behaviour preserves that split. Exhaustiveness is enforced by
+structural pattern matching over the caveat union with `assert_never`, so a new kind fails type
+checking until every operation handles it — the same guarantee a Protocol would give.
+
+`to_datalog()` and `evaluate()` MUST agree on allow/deny for every input. **This is a security
+property, not a nicety:** the PEP trusts Datalog for the decision and `evaluate()` for the
+explanation, so a divergence means a decision record naming a caveat that did not actually fire.
+The conformance test in T-008 asserts it by compiling each caveat into a real biscuit block and
+comparing the authorizer's verdict against `evaluate()` — not by re-implementing the comparison
+twice and hoping.
+
+`RequiresApproval` is exempt from the agreement rule in one direction only: it compiles to a
+fact, so Datalog always allows while `evaluate()` may return `escalate` (§4.9).
 
 ---
 
@@ -181,6 +192,11 @@ reject if arg("email.domain", $d), !["example.com", "corp.example"].contains($d)
 
 - **Consumes:** `arg(path, value)` (optional — vacuous when absent, §3.2)
 - **Operators:** `<=`, `<`, `>=`, `>`, `==`, `!=`, `in`, `not in`
+- **Numeric `arg` facts are scaled by 10⁴**, exactly like budgets, so one comparison rule
+  covers every numeric term in the language. The verifier MUST scale numeric argument values
+  when it builds the request context; string values are passed through unscaled.
+- Compiles to `reject if` with the **negated** predicate, so the caveat is vacuous when the
+  argument is absent and binding when present. `x <= v` becomes `reject if arg(p, $x), $x > v`.
 - **`narrows`:** defined only for the **same path and comparable operator**:
   - numeric upper bounds: `v₁ ≤ v₂`; lower bounds: `v₁ ≥ v₂`
   - set membership: `S₁ ⊆ S₂`
