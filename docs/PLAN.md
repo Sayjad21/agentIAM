@@ -499,6 +499,13 @@ class Mandate(BaseModel):
     model_config = ConfigDict(frozen=True)
 ```
 
+> **Superseded in detail by [`docs/specs/01-token-format.md`](specs/01-token-format.md) (T-002).**
+> The sketch below is correct in intent. Three details in it do not survive contact with
+> biscuit's actual semantics — budget values must be scaled integers rather than strings, depth
+> must come from the block count rather than a block fact, and checks must constrain
+> verifier-supplied request facts rather than the token's own grant facts. All three were
+> measured, not assumed; see ADR-005. Where the two documents disagree, the spec wins.
+
 **Token = biscuit.** Structure:
 
 - **Authority block** (signed by the issuance service, the only block using the root keypair):

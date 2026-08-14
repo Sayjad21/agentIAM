@@ -115,3 +115,79 @@ prose, chosen for readability, and they are never compiled. A formatter rewritin
 specification to satisfy a line-length rule is the tool overruling the spec. The
 milestone spec-drift check (`ENGINEERING-RULES.md` §5) is what keeps documented code honest,
 not the formatter.
+
+---
+
+## ADR-005 — Token checks constrain verifier-supplied request facts
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `docs/specs/01-token-format.md`, T-005, T-007, T-009
+
+**Context:** `PLAN.md` §6.1 sketches the token format: attenuation blocks carry `depth(n)`
+facts and checks described as "scope subset, budget ceilings, time window". Implementing that
+sketch literally produces a token that appears to enforce restrictions and does not. Three
+problems, all confirmed by measurement against `biscuit-python` before any code was written:
+
+1. **Biscuit checks are existential.** `check if scope($s), ["invoice:read"].contains($s)` asks
+   whether *some* granted scope is in the list, not whether the scope *being requested* is. A
+   token granting `invoice:read` and `vendor:read` authorizes `vendor:read` under a caveat
+   naming only `invoice:read`. Measured: the narrowing had no effect.
+2. **A `depth` fact in a block is attacker-controlled.** Combined with existential semantics,
+   `check if depth($d), $d <= 8` is satisfied by the authority block's own `depth(0)` no matter
+   how deep the chain runs. Measured: a depth-9 chain authorized successfully.
+3. **A budget ceiling cannot be a string.** §6.1 shows `budget("spend_bdt", "500000")`. Datalog
+   cannot compare strings numerically, so the token could not enforce its own budget caveat
+   offline — which is the reason for carrying it at all.
+
+**Decision:**
+
+1. Token blocks carry only the **grant**. The verifier supplies the **request context** —
+   `operation`, `requested(dimension, value)` for every dimension, `current_depth`,
+   `request_intent`, `time` — and every check is written against those facts.
+2. Authorization depth is `block_count - 1`, computed by the verifier. A `declared_depth` fact
+   may appear in a block for audit and console rendering, and MUST NOT be used for
+   authorization.
+3. Budget values are integers scaled by 10⁴ (`BUDGET_SCALE`), matching `NUMERIC(20,4)`. Every
+   dimension, money or count, uses the same scale so one comparison rule covers all of them.
+
+A corollary that is easy to miss: a check whose fact is absent **fails**. So the verifier must
+supply a `requested` fact for every dimension on every call, defaulting to zero. Omitting a
+dimension denies the request rather than leaving it unconstrained.
+
+**Consequences:** The verifier becomes responsible for assembling a complete, trustworthy
+request context on every call — a real obligation, and the natural place for a bug. T-019 must
+test that each context fact is populated, and T-051 should include a red-team case for a
+partially-populated context. In exchange, INV-1, INV-2, INV-6, and INV-7 hold against a direct
+fact-injection attack, verified: a block appending `operation(...)`, `scope(...)`,
+`requested(...)`, and `current_depth(0)` could not re-grant anything it had been narrowed out
+of.
+
+This changes the wire format only, not the caveat language, the attenuation semantics, or the
+lease protocol. Those remain as specified in `PLAN.md` §6.2–§6.4.
+
+---
+
+## ADR-006 — Token reference mode stays deferred, now with a measured reason
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** T-010, `PLAN.md` §21 item 6
+
+**Context:** T-010 (opaque token references for chains that overflow HTTP headers) was deferred
+on the assumption that the demo runs at depth 3–4 and would not reach the 8 KB limit. That was
+a guess. The token format spec required real byte counts, so the growth curve was measured.
+
+**Decision:** Keep T-010 deferred. The measurement supports it more strongly than the original
+reasoning did.
+
+**Consequences:** Measured growth is ~410 base64 bytes per attenuation block. At `max_depth = 8`
+— the *maximum permitted chain*, not the demo's depth — a token is 4,940 base64 characters:
+over the 4 KB warning threshold, but 60% of the 8 KB hard limit. Reference mode is therefore
+unreachable within the permitted depth range, and T-010 is dead code until `max_depth` rises
+above roughly 16.
+
+Two live consequences remain. The 4 KB warning fires at depth 6, so that path is reachable and
+EC-T11 must test it. And the full `Authorization` header at depth 5 approaches nginx's 4 KB
+default `large_client_header_buffers` line size — T-018 must raise it deliberately rather than
+discovering it at depth 6.
