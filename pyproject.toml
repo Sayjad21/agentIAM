@@ -73,8 +73,13 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Tests may use assert, and need no module/class docstring ceremony beyond the module one.
-"tests/**" = ["S101", "D100", "D101", "D102", "D103", "D104"]
+# ANN401: canonical-serialization properties are *about* arbitrary input, so `Any` is the
+# honest annotation rather than a gap.
+"tests/**" = ["S101", "ANN401", "D100", "D101", "D102", "D103", "D104"]
 "scripts/**" = ["S101"]
+# S105 flags `TOKEN_EXPIRED = "TOKEN_EXPIRED"` as a hardcoded password because the name
+# contains "TOKEN". These are reason codes from PLAN.md §6.9, not secrets.
+"packages/agentiam-core/src/agentiam_core/errors.py" = ["S105"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

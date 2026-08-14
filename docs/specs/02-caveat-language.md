@@ -85,9 +85,15 @@ context is missing violates rule 6 (fail closed).
 
 ---
 
-## 4. The eight caveat types
+## 4. The nine caveat types
 
-`RateLimit` is deferred (§5). Every `<scaled>` value is an integer scaled by 10⁴ per spec 01 §3.1.
+**On the count.** The language has **nine** caveat types. **Eight** of them compile to a Datalog
+clause — `ScopeSubset`, `BudgetCeiling`, `TimeWindow`, `ToolAllow`, `ToolDeny`, `ArgPredicate`,
+`DepthLimit`, `IntentBound` — which is the set named in T-008's acceptance criteria. The ninth,
+`RequiresApproval`, compiles to a **fact** rather than a clause (§4.9, ADR-008), so it is
+correctly absent from that list. `RateLimit` would be the tenth and is deferred (§5).
+
+Every `<scaled>` value is an integer scaled by 10⁴ per spec 01 §3.1.
 
 ### 4.1 `ScopeSubset`
 

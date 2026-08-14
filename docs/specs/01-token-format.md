@@ -1,4 +1,4 @@
-# Spec 01 — Token Format
+﻿# Spec 01 — Token Format
 
 **Status:** accepted · **Ticket:** T-002 · **Implements:** `PLAN.md` §6.1
 **Consumed by:** T-005 (domain models), T-007 (biscuit wrapper), T-009 (attenuation)
@@ -302,7 +302,7 @@ Procurement task: *"Procure 500 units of packaging film, budget ৳500,000."*
 mandate("01J8ZQ7X4M0000000000000001");
 task("01J8ZQ7X4M0000000000000002");
 principal("kc:9f2c1e40-7a3b-4d21-9c88-1b2e5f0a4d77");
-intent("4f9a1c2d8e3b6057a1d4c9e2f8b30567a9c1e4d78b2f6039c5a8e1d4f7b0c3a26");
+intent("0dc20e2931968ffffd73e255ac7f6984d9677d5ac1508af1a94eacd962537b70");
 issued_at(2026-08-14T11:45:00Z);
 max_depth(8);
 scope("invoice:read");

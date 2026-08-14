@@ -51,7 +51,7 @@ So why have `narrows()` at all? Three reasons, none of them "security":
    what a token *can* do. That requires folding the caveat chain into an effective bound, which
    is exactly what the `narrows()` partial order provides.
 3. **Testable invariants.** INV-1 as a property test needs a decidable comparison between two
-   tokens' authority. Eight closed caveat types with a defined partial order give one.
+   tokens' authority. Nine closed caveat types with a defined partial order give one.
 
 State this distinction plainly when a judge asks "what if `narrows()` has a bug?" The answer is
 that a `narrows()` bug produces a misleading token, not an over-privileged one.
