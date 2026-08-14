@@ -1,0 +1,77 @@
+# --- Local tooling / editor scratch (never committed) ---
+CLAUDE.md
+.claude/
+.cursor/
+.aider*
+.windsurfrules
+*.local.md
+scratch/
+notes-local/
+
+# --- Large source artifacts kept locally, not in the tree ---
+*.pdf
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib60/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtualenvs / uv ---
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# --- Testing / coverage / profiling ---
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.benchmarks/
+.mutmut-cache
+mutmut-stats.json
+
+# --- Secrets & local config ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!deploy/**/*.pub
+
+# --- Runtime data ---
+*.log
+*.sqlite3
+data/
+volumes/
+.locust/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
