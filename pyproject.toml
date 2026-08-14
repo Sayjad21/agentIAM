@@ -118,6 +118,9 @@ disallow_untyped_decorators = false
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# `tests` is an importable package so shared fixtures and hypothesis strategies can be
+# imported by path (`tests.property.strategies`) rather than by sys.path accident.
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = [
     "--strict-markers",

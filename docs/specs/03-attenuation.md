@@ -69,7 +69,7 @@ mint-time check pass a comparison it never actually made.
 |---|---|---|
 | `ScopeSubset(S)` | `S₁ ⊆ S₂` | subset |
 | `BudgetCeiling(d, v)` | same `d`, `v₁ ≤ v₂` | numeric ≤ |
-| `TimeWindow(a, b)` | `a₁ ≥ a₂ ∧ b₁ ≤ b₂` | interval containment |
+| `TimeWindow(a, b)` | `a₁ ≥ a₂ ∧ b₁ ≤ b₂`, **per side** — see below | interval containment |
 | `ToolAllow(A)` | `A₁ ⊆ A₂` | subset |
 | `ToolDeny(D)` | `D₁ ⊇ D₂` | **superset** — denying more is stricter |
 | `ArgPredicate(p, op, v)` | same `p`, comparable `op`; upper bounds `v₁ ≤ v₂`, lower bounds `v₁ ≥ v₂`, membership `S₁ ⊆ S₂` | per operator |
@@ -80,6 +80,23 @@ mint-time check pass a comparison it never actually made.
 Two reversed directions (`ToolDeny`, `RequiresApproval`) and one degenerate one (`IntentBound`).
 These are the three places a hand-written implementation gets it backwards, and the three the
 property tests should hammer hardest.
+
+### 3.0 `TimeWindow` compares side by side
+
+A `TimeWindow` compiles to one Datalog clause **per bound**, so a child supplying only
+`not_after` emits only that clause and asserts nothing about the lower bound — where the
+ancestor's clause still applies. Treating the absent bound as unbounded would make shortening an
+expiry look like widening and refuse it, which is both wrong and the most common attenuation
+there is.
+
+A two-sided window therefore **decomposes into two atoms**, one per side, and each side is its
+own comparability slot. Narrowing is compared atom to atom.
+
+Reading an absent bound as "inherited" *inside* `narrows()` instead would break antisymmetry —
+an upper-only and a lower-only window would be mutually narrowing without being equal — and the
+algebra would stop being a partial order. See ADR-011.
+
+**Any future caveat kind that compiles to more than one clause needs the same treatment.**
 
 ### 3.1 Adding a caveat of a kind the parent does not have
 

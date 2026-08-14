@@ -330,3 +330,40 @@ Related: the clamp to `lease.outstanding` (spec 04 G2) is what prevents a *missi
 guard from becoming a safety bug — once `outstanding` reaches zero, an unclamped replay drives
 `leased` negative on the next delivery. Measured. The two guards are not redundant; they cover
 adjacent failures.
+
+---
+
+## ADR-011 — A `TimeWindow`'s two sides are separate comparability slots
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `docs/specs/03-attenuation.md` §3, T-009, T-011
+
+**Context:** Spec 03 §3 defines `TimeWindow` narrowing as interval containment:
+`[a₁,b₁] ⊑ [a₂,b₂] ⟺ a₁ ≥ a₂ ∧ b₁ ≤ b₂`. Implemented literally, with an absent bound read as
+unbounded, the INV-9 property test failed on a case that is not only safe but is *the most
+common thing a holder wants to do*: a child adding only `not_after` to shorten its life. With
+`not_before` read as −∞, the child looks wider on the lower side and the mint check refuses it.
+
+The reading is wrong because a `TimeWindow` compiles to one Datalog clause per bound. A child
+supplying only `not_after` emits only that clause and claims nothing about the lower bound — and
+the ancestor's lower-bound clause still applies, because every clause in every block must pass.
+
+The obvious repair, treating an absent bound as "inherited" inside `narrows()`, breaks the
+algebra: an upper-only and a lower-only window would then be mutually narrowing without being
+equal, so `narrows()` would no longer be antisymmetric and T-009 explicitly requires that it is.
+
+**Decision:** Introduce `atoms()`. A two-sided `TimeWindow` decomposes into a lower-bound atom
+and an upper-bound atom, and `comparability_slot()` distinguishes `lower`, `upper`, and `both`.
+`narrows()` keeps strict set containment within a slot and stays a partial order;
+`check_narrowing()` compares atom by atom, so a one-sided narrowing is compared only against
+ancestors constraining that same side.
+
+**Consequences:** `TimeWindow` is the only kind that decomposes, which is a wrinkle worth
+remembering when a tenth caveat kind is added — any caveat compiling to more than one clause
+needs the same treatment, or it will produce the same false refusal. The property-test
+generators had to change too: a same-slot group must fix the *side* as well as the kind, or
+transitivity draws are mostly incomparable and pass vacuously.
+
+Found by a property test rather than by review, which is the argument for writing them against
+real tokens: nothing in the spec text looked wrong.
