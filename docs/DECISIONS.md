@@ -367,3 +367,79 @@ transitivity draws are mostly incomparable and pass vacuously.
 
 Found by a property test rather than by review, which is the argument for writing them against
 real tokens: nothing in the spec text looked wrong.
+
+---
+
+## ADR-012 — Thread propagation carries the identity, not a copied `Context`
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `agentiam_sdk.context`, T-011
+
+**Context:** `contextvars` do not cross the thread-pool boundary, and T-011's acceptance
+criteria require that boundary be handled explicitly rather than discovered. The idiomatic fix
+is `contextvars.copy_context()`: snapshot the caller's context, bind it to the callable, and run
+the callable with `Context.run` inside the worker.
+
+Measured before adopting it: **entering one `Context` object from two threads at once raises
+`RuntimeError: cannot enter context ... is already entered`.** Sequential reuse is fine;
+concurrent reuse is not. A bound callable submitted to a pool twice — which is the ordinary way
+to use a pool — therefore crashes under exactly the concurrency the helper exists to serve. The
+failure is timing-dependent, so it would have passed a casual test and failed under load.
+
+**Decision:** `bind_identity()` captures the `AgentIdentity` value at bind time and re-installs
+it inside a fresh scope on each invocation. No `Context` object is shared, so there is nothing to
+enter twice. `run_in_executor()` is a thin wrapper over it.
+
+**Consequences:** Only the AgentIAM identity propagates, not arbitrary context variables. That is
+the correct scope for this package — an SDK that silently transplanted a caller's whole context
+into worker threads would be doing something surprising — but it is a real difference from
+`asyncio.to_thread`, which does copy everything and needs nothing from this module.
+
+Three interpreter behaviours are now pinned by tests rather than trusted: that
+`loop.run_in_executor` does not propagate, that `asyncio.to_thread` does, and that the rejected
+`copy_context()` design really does raise. The last one exists so the guard is demonstrated to be
+load-bearing; a guard never seen to fire is not a guard.
+
+---
+
+## ADR-013 — `role` stays free text, with a character class rather than an enum
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `agentiam_core.models`, `agentiam_core.attenuation`, `docs/specs/01-token-format.md`
+§10 Q4, `docs/specs/02-caveat-language.md` §10 Q3, `docs/threat-model.md` TM-24, T-011
+
+**Context:** Both specs left the same question open for T-011: should `role` be a closed enum so
+the console can render it safely? The motivation was rendering, and probing the rendering path
+turned up the actual hazard, which an enum would only have hidden.
+
+`quote_string()` escapes correctly — a crafted `role` cannot forge a fact inside a signed token,
+and biscuit's block scoping (assumption A1) means an injected block fact could not widen
+authority even if one existed. But `block_source()` renders the string back **unescaped**.
+Measured: a role of `x"); admin(true); //` renders as block text that re-parses into a genuine
+second `admin(true)` fact. The same path exists in the authority block via `principal_id`, which
+the issuance service will populate from Keycloak claims.
+
+Every planned consumer of block source is a display or re-parsing path: the console's caveat
+chain (T-045), the audit explorer (T-048), and the Datalog-to-caveat parser both need
+(`STATUS.md` §3, gap 2). Escaping correctly in each of them is three chances to get it wrong.
+
+**Decision:** `role` is not an enum. A closed set would make adding a role a protocol change,
+and roles are domain vocabulary rather than protocol. Instead `models.validate_label` bans, in
+the three fields that become Datalog string facts, the characters that actually cause harm:
+quote and backslash (they break the round trip), C0/C1 controls (they break the line structure),
+and bidi marks, embeddings, overrides and isolates (they reorder rendered text without changing
+a byte, which spoofs a role name in the console). Length is capped at 128. Everything else is
+permitted.
+
+**Consequences:** A Bengali role name renders as itself, which an ASCII allow-list would have
+prevented — worth stating for a Bangladesh submission. The console still must escape for HTML;
+this closes the Datalog layer, not the browser's.
+
+The check lives in `agentiam-core` rather than the SDK because core is what mints. The PEP and
+the issuance service inherit it without knowing it exists, and `tests/security/` gains its first
+occupant — the directory T-051 will grow into.
+
+**Cost:** two extra validations on the mint path, both regex searches over strings under 128
+characters. Immaterial against NFR-1.

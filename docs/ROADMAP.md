@@ -151,11 +151,14 @@ written and read back against §6 · canonical-serialization property test passi
 | T-007 | `tokens.py` — biscuit mint and verify | `biscuit-python` behaves as the spec assumes in this environment — confirm before building on it |
 | T-008 | `caveats.py` — 8 caveat types → Datalog, table-driven tests | Generated Datalog is correct for each type, by inspection against `specs/02` |
 | **T-009** | `attenuation.py` — narrowing algebra, `narrows()`, hypothesis property tests for INV-1, 2, 6, 7, 9 | **The most important ticket in the project.** Check the property-test *strategies*, not just that the tests pass — a weak strategy passes vacuously |
-| T-011 | SDK `client.py`, `context.py`, `decorators.py` — contextvars propagation, `attenuate()` | Token isolation holds under concurrent asyncio tasks |
+| T-011 | SDK `client.py`, `context.py`, `identity.py`, `decorators.py` — identity propagation, `attenuate()` | Token isolation holds under concurrent asyncio tasks. **Done** — 100 tasks, distinct tokens, zero cross-task visibility; thread boundary handled per ADR-012 |
 | — | Remaining specs `05-policy` … `09-decision-record` | Quick read-back |
 
 **Exit gate:** tokens mint, attenuate, verify · all 8 caveat types compile to Datalog ·
 P-01, P-02, P-05…P-09 pass · SDK propagates tokens across asyncio tasks without leakage.
+
+**Status: code complete.** The five specs `05`–`09` remain; they gate the tickets that implement
+them, not M3, so M3 starts now and the specs land against the milestone that needs them.
 
 ---
 

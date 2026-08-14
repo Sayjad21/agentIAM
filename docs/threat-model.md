@@ -89,9 +89,9 @@ STRIDE: **S**poofing · **T**ampering · **R**epudiation · **I**nformation disc
 
 ### 3.1 Threats found while building, not present in the original catalogue
 
-These four came out of the empirical work in T-002 through T-005. They are implementation
-hazards rather than adversary capabilities, but each produces a security failure and each
-needs a test that does not exist yet.
+These came out of the empirical work in T-002 through T-005 and T-011. They are implementation
+hazards rather than adversary capabilities, but each produces a security failure. TM-19 through
+TM-22 still need a test; TM-24 has one.
 
 | ID | STRIDE | Threat | Mitigation | Status | Tests |
 |---|---|---|---|---|---|
@@ -100,6 +100,7 @@ needs a test that does not exist yet.
 | TM-21 | T | **Late commit against a reclaimed lease.** A commit arriving after `RELEASE`/`REAP`/`REVOKE` decrements `leased` a second time for budget already returned. Measured: `leased` went negative in 55 of 400 random interleavings | Commits against a non-active lease are rejected and recorded as reconciliation anomalies (ADR-009). The pool invariant is preserved; the divergence is surfaced | **partially mitigated** (§5.5) | T-014, P-10 (late-commit rule) |
 | TM-22 | T | **Clock skew beyond the configured allowance.** If the reaper reclaims while a lagging PEP still spends, the same budget is issued twice. Measured with no skew margin: the lease was reaped and re-issued while still in use | PEPs expire early at `expires_at − S`; the reaper reclaims late at `expires_at + S`; `ttl > 2S`. **Safety depends on actual skew staying within `S`** | **partially mitigated** (§5.6) | CH-7, EC-T08 |
 | TM-23 | T | **Agent under-reports the actual amount** to hide spend, where the PEP cannot independently determine it | Over-reporting is clamped to the lease's outstanding, so it cannot break the budget invariant. Under-reporting is flagged and audited wherever the PEP can cross-check, but is not prevented | **accepted risk** (§5.7) | A-19 |
+| TM-24 | S | **A free-text identifier that reshapes rendered Datalog.** `quote_string()` escapes correctly, so a crafted `role`, `agent_id` or `principal_id` cannot forge a fact inside a signed token. But `block_source()` renders the string back **unescaped**: measured, a role of `x"); admin(true); //` renders as block text that re-parses into a genuine second fact. Every planned consumer of block source is a display or parsing path — the console's caveat chain (T-045), the audit explorer (T-048), the Datalog-to-caveat parser both need. A bidi override additionally reorders a rendered role without changing a byte | `models.validate_label` refuses quotes, backslashes, C0/C1 controls and bidi controls in the three fields that become Datalog string facts, at the only places they enter a token: `Mandate.principal_id` and `attenuate()`'s `agent_id` and `role`. Non-ASCII is otherwise unrestricted, so a Bengali role renders as itself | mitigated | `tests/security/test_datalog_labels.py` (66 cases) |
 
 ---
 
@@ -196,10 +197,15 @@ concrete addition to T-051's red-team suite.
 | TM-21 | Commit against a reaped lease is rejected and produces exactly one anomaly record | T-014 |
 | TM-22 | Reaper and a skewed PEP: assert no window in which both consider the lease live | T-013, CH-7 |
 
+~~TM-24~~ — closed in T-011. `tests/security/test_datalog_labels.py` covers the guard, the
+rejected characters, the Bengali case that must still pass, and the rendering hazard itself, so
+the guard is demonstrated to be load-bearing rather than asserted.
+
 `PLAN.md` §12 numbers 33 attacks and the submission scope is 15–20 (`ROADMAP.md` Part 1).
-TM-19 through TM-22 should be counted as additions to that set, not substitutions: they were
-found by measurement rather than brainstorming, which is usually a sign the remaining ones are
-worth looking for the same way.
+TM-19 through TM-22 and TM-24 should be counted as additions to that set, not substitutions:
+they were found by measurement rather than brainstorming, which is usually a sign the remaining
+ones are worth looking for the same way. TM-24 in particular came from asking one question of a
+running library — *what does `block_source()` do with a quote?* — rather than from reading.
 
 ---
 
@@ -210,14 +216,14 @@ repudiation), so the rows below overlap rather than partition.
 
 | Category | Threats | Fully mitigated |
 |---|---|---|
-| Spoofing | TM-01, TM-02, TM-18 | 2 of 3 |
+| Spoofing | TM-01, TM-02, TM-18, TM-24 | 3 of 4 |
 | Tampering | TM-06, TM-08, TM-09, TM-12, TM-15, TM-17, TM-21, TM-22, TM-23 | 6 of 9 |
 | Repudiation | TM-12 | 1 of 1 |
 | Information disclosure | TM-13, TM-16 | 1 of 2 |
 | Denial of service | TM-07, TM-14 | 1 of 2 |
 | Elevation of privilege | TM-02, TM-03, TM-04, TM-05, TM-10, TM-11, TM-19, TM-20 | 6 of 8 |
 
-**23 threats · 15 mitigated · 5 partially mitigated · 3 accepted risks.**
+**24 threats · 16 mitigated · 5 partially mitigated · 3 accepted risks.**
 
 The three accepted risks — bearer replay (TM-01), slow-drift evasion (TM-11), and
 agent-reported amounts (TM-23) — are the ones to raise voluntarily in the pitch. Each is real,

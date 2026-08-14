@@ -52,7 +52,7 @@ Specs `05`–`09` (policy, drift, revocation, audit, decision record) are writte
 | [`DECISIONS.md`](DECISIONS.md) | Append-only ADR log. **11 entries.** Every non-obvious choice, with the context that forced it and what it costs. The receipts behind every "we deferred X because Y" claim in the submission. |
 | [`JOURNAL.md`](JOURNAL.md) | The development narrative: what each ticket did, what was found while doing it, and what changed as a result. |
 | [`STATUS.md`](STATUS.md) | What is done, what remains, and the improvements worth making with their impact. |
-| [`threat-model.md`](threat-model.md) | 23 STRIDE threats, each with a mitigation, a status, and the test id covering it. Four came out of implementation rather than brainstorming. |
+| [`threat-model.md`](threat-model.md) | 24 STRIDE threats, each with a mitigation, a status, and the test id covering it. Six came out of implementation rather than brainstorming. |
 
 ---
 

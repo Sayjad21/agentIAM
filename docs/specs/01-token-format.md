@@ -198,6 +198,15 @@ Appended by a holder, offline, signed with a freshly generated ephemeral key.
 | `role(name)` | yes | Human-readable role, for the console and audit |
 | `declared_depth(n)` | no | Advisory only — see the warning below |
 
+> **`agent`, `role` and the authority block's `principal` are constrained free text.** They
+> are not enums (ADR-013): a closed set would make adding a role a protocol change. They are
+> limited to 128 characters and may not contain a quote, a backslash, a C0/C1 control, or a
+> bidi mark, embedding, override or isolate. `quote_string()` escapes correctly, so none of
+> these can forge a fact inside a signed token; the constraint exists because
+> `block_source()` renders the string back *unescaped*, and rendered block text that
+> re-parses into different Datalog is what the console and the audit explorer would display
+> (TM-24). Non-ASCII is otherwise unrestricted — a Bengali role name is valid.
+
 > **`declared_depth` MUST NOT be used for authorization.** A block's own facts are written by
 > whoever appended the block. Authorization depth comes from `block_count - 1`, computed by
 > the verifier. The fact exists only so the audit trail and the identity tree can show what
@@ -480,4 +489,4 @@ None of these touch the caveat language, the attenuation semantics, or the lease
 | ~~1~~ | ~~Exact boundary handling for `expires_at`~~ — **resolved in T-007**: Datalog supports a strict `<` on dates, so the token enforces the exclusive boundary itself (§5.3) | done |
 | 2 | Root key rotation: how many keys in the accepted set, and for how long (EC-T05) | T-007 |
 | 3 | Does `ArgPredicate` need request facts beyond §7 (e.g. `arg("payment.amount", v)`) | T-003 |
-| 4 | Whether `role` should be constrained to an enum for console rendering | T-011 |
+| ~~4~~ | ~~Whether `role` should be constrained to an enum for console rendering~~ — **resolved in T-011**: no. Free text with a banned-character class instead (§6.1, ADR-013). Probing the rendering path found the real hazard, which an enum would have hidden rather than fixed | done |

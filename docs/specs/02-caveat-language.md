@@ -355,4 +355,4 @@ ever widen a Datalog decision.
 |---|---|---|
 | 1 | The `arg` path vocabulary and its extraction rules | T-020 |
 | 2 | Whether `evaluate()` should return the failing clause index for finer attribution | T-019 |
-| 3 | Whether `role` should be a closed enum for console rendering | T-011 |
+| ~~3~~ | ~~Whether `role` should be a closed enum for console rendering~~ — **resolved in T-011**: no, see `01-token-format.md` §6.1 and ADR-013 | done |

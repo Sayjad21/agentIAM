@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-009 (`ff7bb5e`).
+**Last updated:** after T-011.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | M1 complete · M2 at 3 of 4 tickets |
-| **Tickets** | 9 done · 44 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 532 passing |
-| **Coverage** (`agentiam-core`) | 100% statements · 99% branches |
+| **Milestone** | M1 complete · **M2 code complete**, specs 05–09 outstanding |
+| **Tickets** | 10 done · 43 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 705 passing |
+| **Coverage** (`agentiam-core`, `agentiam-sdk`) | 100% statements · 99% branches |
 | **CI** | green — lint/types/tests, core purity, compose health |
 | **Specs** | 4 of 9 written |
-| **ADRs** | 11 |
+| **ADRs** | 13 |
 
 ---
 
@@ -33,24 +33,26 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-003 | `specs/02-caveat-language.md`, `specs/03-attenuation.md` | `f26e10c` |
 | T-004 | `specs/04-lease-protocol.md` — model-checked | `7a9e9a3` |
 | T-005 | `models.py`, `errors.py`, `hashing.py` | `7122cf0` |
-| T-006 | `threat-model.md` — 23 STRIDE threats | `c565367` |
+| T-006 | `threat-model.md` — 23 STRIDE threats (24 after T-011) | `c565367` |
 | T-007 | `tokens.py` — biscuit mint and verify | `a073b3e` |
 | T-008 | `caveats.py` — DSL to Datalog + conformance suite | `1bfa35a` |
 | T-009 | `attenuation.py` — `narrows()` + invariant properties | `ff7bb5e` |
+| — | `README.md`, `JOURNAL.md`, `STATUS.md` | `e42b0ac` |
+| T-011 | SDK: identity propagation, `attenuate()`, `@requires_scope`, **TM-24** | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-011** | SDK: `contextvars` propagation, `attenuate()`, `@requires_scope` | M2 — last |
-| T-012…T-017 | Budget schema, lease operations, invariant checker, sibling budgets | M3 |
+| **T-012…T-017** | Budget schema, lease operations, invariant checker, sibling budgets | M3 |
 | T-018…T-023 | PEP, decision pipeline, lease pool, **end-to-end thin slice** | M4 |
 | T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
 | T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
 | T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7 |
 
 **Also outstanding from M2:** specs `05`–`09` (policy, drift, revocation, audit, decision
-record). They gate the tickets that implement them, not T-011.
+record). They gate the tickets that implement them, so spec `06-revocation` and
+`09-decision-record` are wanted before M4 rather than before M3.
 
 ### Deferred — 8 tickets
 
@@ -81,10 +83,10 @@ Real debt, not speculation. Each has a home.
 | # | Gap | Impact if left | Where it lands |
 |---|---|---|---|
 | 1 | **TM-19…TM-22 have no tests.** Four threats found by measurement are mitigated in the specs but unverified in code | The four sharpest failure modes are defended only by prose | T-008, T-013, T-014, T-019, T-051 |
-| 2 | **No Datalog→caveat parser.** `attenuate()` checks proposed caveats against the authority grant, but caveats added by *intermediate* blocks are not recoverable from a token | A wider *declared* caveat slips through as a misleading value rather than an error. Cannot widen actual authority — biscuit prevents that — but the console cannot show a true effective bound either | Needed by T-019 (naming the failing caveat) and T-045 (identity tree) |
+| 2 | **No Datalog→caveat parser.** The SDK now carries the caveats *it* minted, so `attenuate()` catches re-widening along a chain it built. A token received from elsewhere still folds to an upper bound | For a chain this process built, closed. For a received token, the console cannot show a true effective bound. Never understates a restriction — biscuit's append-only structure sees to that | Needed by T-019 (naming the failing caveat) and T-045 (identity tree). **Note:** whatever parses block source must not trust it — see TM-24 |
 | 3 | **No LICENSE file.** README and every package declare Apache-2.0; the text is absent | Weakens the §14.4 IP claim for a submission judged on IP ownership | Add via GitHub's license picker — verbatim text matters |
 | 4 | **`mutmut` not yet run.** T-009 asks for ≤10% surviving mutants on `attenuation.py` and `caveats.py` | Coverage says the lines run; mutation says the assertions bite. Untested claim | M7, one run (ROADMAP Part 1) |
-| 5 | **Specs 05–09 unwritten** | Their tickets cannot start spec-first, which is the rule that caught six design errors | M2 tail / M5 |
+| 5 | **Specs 05–09 unwritten** | Their tickets cannot start spec-first, which is the rule that caught seven design errors | M2 tail / M5 |
 | 6 | **A1 re-verification is manual.** The security rests on biscuit scoping block facts; nothing fails if a library upgrade changes it | Silent collapse of INV-1 on a dependency bump | Should become a test — see §4 |
 
 ---
@@ -111,12 +113,13 @@ The conformance suite covers 60 hand-written cases. The agreement is a security 
 over random caveats and contexts would search the space rather than the cases I thought of —
 exactly the move that found ADR-011.
 
-### 4.3 Extract a test-fixture module — **medium value, ~1 hour**
+### 4.3 Finish the test-fixture module — **medium value, ~40 minutes**
 
-`a_mandate()`, `ctx()` and a module-scoped keypair are duplicated across four test files with
-slight variations. `tests/fixtures/` exists and is empty. `PLAN.md` §10.4 already calls for a
-deterministic keypair fixture and a golden depth-4 chain; building them now would make the M3–M4
-integration tests cheaper to write and comparable to each other.
+Started in T-011: `tests/fixtures/tokens.py` now holds `a_mandate()`, `a_root_client()` and a
+frozen clock, and the four SDK and security test modules use it. The four *older* modules still
+carry their own near-duplicate copies. Migrating them, and adding the deterministic keypair and
+golden depth-4 chain `PLAN.md` §10.4 calls for, would make the M3–M4 integration tests cheaper
+to write and comparable to each other.
 
 ### 4.4 Make the milestone review a script — **medium value, ~1 hour**
 

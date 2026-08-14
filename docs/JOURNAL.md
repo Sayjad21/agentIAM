@@ -12,9 +12,10 @@ findings that did *not* need an ADR, and the mistakes worth remembering.
 Before writing any spec, I checked its claims against a running system.
 
 That sounds like overhead for a documentation ticket. It was the opposite. Across T-002,
-T-003, T-004 and T-009 it found **six design errors**, every one of which would otherwise have
-surfaced later as a failing property test — or worse, as a *passing* one written from the same
-wrong premise.
+T-003, T-004, T-009 and T-011 it found **seven design errors**, every one of which would
+otherwise have surfaced later as a failing property test — or worse, as a *passing* one written
+from the same wrong premise. It also turned up a security finding no amount of brainstorming was
+going to produce (TM-24).
 
 The pattern each time was identical: the design was defensible on paper, and wrong against the
 library. Reading harder would not have caught any of them.
@@ -27,6 +28,8 @@ library. Reading harder would not have caught any of them.
 | Spec 02 | One clause form fits all caveats | Half fail closed, half fail **open** |
 | Spec 04 | The seven lease operations are complete | `leased` went negative in 55 of 400 interleavings |
 | Spec 03 | `TimeWindow` narrowing is interval containment | Refuses the most common attenuation there is |
+| SDK | `copy_context()` carries identity into a thread pool | Two threads entering one `Context` raise `RuntimeError` |
+| SDK | Escaping a `role` correctly is enough | `block_source()` renders it back **unescaped** (TM-24) |
 
 ---
 
@@ -450,16 +453,106 @@ falsifying example replayed from `.hypothesis` against code that had just change
 database and confirmed clean across three fresh full runs with zero examples recorded. Recorded
 here rather than left as an unexplained one-off.
 
+### T-011 · SDK: identity propagation and holder-side attenuate
+
+The last M2 ticket, and the first code outside `agentiam-core`. Three deliverables: a
+`contextvars`-based identity that follows an agent across tasks, an `attenuate()` an agent can
+actually call, and a `@requires_scope` decorator.
+
+#### The probe came first, and changed the design
+
+Five questions asked of the interpreter before any of it was written:
+
+| Question | Answer |
+|---|---|
+| Does a task see its parent's identity? | Yes — copied at **creation**, not at first await |
+| Does a child task's change leak to its parent or siblings? | No. This is where isolation actually comes from |
+| Does `await coro()` without a task wrapper? | **Yes.** A bare `set()` inside rewrites the caller |
+| Does `loop.run_in_executor` propagate? | **No** |
+| Does `asyncio.to_thread`? | **Yes** |
+
+Two of those changed what got built. The bare-coroutine leak is why the module exposes no
+unpaired setter at all — `use_identity` is a scope that always resets, because between two agents
+holding different tokens an unpaired `set` is a privilege escalation with no attacker in it. And
+the split between `to_thread` and `run_in_executor` means the thread boundary is narrower than
+"threads": worth documenting precisely rather than overstating.
+
+#### The obvious thread-propagation fix crashes under concurrency
+
+The idiomatic way to carry context into a worker thread is `contextvars.copy_context()`, bind the
+snapshot to the callable, call `Context.run` in the worker. Measured before adopting it: entering
+**one `Context` object from two threads at once raises `RuntimeError: cannot enter context ... is
+already entered`**. Sequential reuse is fine. Concurrent reuse — which is the ordinary way to use
+a pool — is not.
+
+That failure is timing-dependent. It would have passed a casual test and failed under load, in
+the SDK, in someone else's application. `bind_identity()` captures the identity *value* instead
+and re-installs it per invocation, so there is no shared object to enter twice (ADR-012). The
+rejected design is exercised directly in a test, with a `threading.Barrier` forcing the overlap,
+so the guard is demonstrated rather than asserted.
+
+#### What the SDK is actually for
+
+Core's `attenuate()` checks a proposed caveat against the *authority block's* grant, because that
+is all a `VerifiedToken` can recover. Enough to stop a child adding a scope the mandate never
+carried. Not enough to stop a **grandchild re-widening back to a scope its parent gave up** — the
+authority block still lists it.
+
+The SDK minted those intermediate caveats, so it is the one component that still knows them. It
+passes them down as `ancestor_caveats`, and the re-widening is refused. The test that matters
+sits next to one that calls core directly on the same token and shows it accepts — the guard
+proved load-bearing rather than assumed.
+
+Worth being precise about the severity: the widened token could never have *exercised* the
+recovered scope. Biscuit's block scoping (assumption A1) prevents that. What it would have
+carried is a caveat that lies about its own authority, and a console that renders the lie.
+
+#### A rendering hazard, found by asking one question of the library
+
+`role` and `agent_id` become Datalog string facts. Both specs had left the same question open for
+this ticket — *should `role` be a closed enum for console rendering?* Probing the rendering path
+to answer it turned up something better.
+
+`quote_string()` escapes correctly. A crafted role cannot forge a fact inside a signed token.
+But `block_source()` renders the string back **unescaped**: a role of `x"); admin(true); //`
+renders as block text that re-parses into a genuine second `admin(true)` fact. The same path
+exists in the authority block through `principal_id`, which the issuance service will populate
+from Keycloak claims.
+
+Every planned consumer of block source is a display or re-parsing path — the console's caveat
+chain, the audit explorer, the Datalog-to-caveat parser both need. Escaping correctly in each is
+three chances to get it wrong.
+
+So: not an enum (that would make adding a role a protocol change, and would have hidden this
+rather than fixed it). A banned-character class instead, applied in core where minting happens:
+quotes and backslashes break the round trip, C0/C1 controls break the line structure, and bidi
+overrides reorder rendered text without changing a byte. Everything else passes, so a Bengali
+role name renders as itself — worth keeping for a Bangladesh submission. That is ADR-013 and
+threat TM-24, and it gave `tests/security/` its first occupant.
+
+It is a display bug, not an escalation, and the tests say so explicitly. A threat model that
+oversells its findings is worth less than one that bounds them.
+
+#### One test bug, again
+
+The depth chain delegated by denying `tool.N` at each level and `attenuate()` refused it.
+`ToolDeny` narrows by **superset** — dropping a denial is widening — so each level has to deny
+everything its parent did, plus one. The algebra was right and the test was wrong, which is now
+three tickets running.
+
+---
+
 ---
 
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 9 of 53 in scope (61 defined, 8 deferred) |
-| Milestones | M1 complete, M2 at 3 of 4 |
-| Tests | 532, all passing |
-| Coverage on `agentiam-core` | 100% of statements, 99% of branches |
-| ADRs | 11 |
+| Tickets complete | 10 of 53 in scope (61 defined, 8 deferred) |
+| Milestones | M1 complete, M2 code complete (specs 05-09 outstanding) |
+| Tests | 705, all passing |
+| Coverage on `agentiam-core` and `agentiam-sdk` | 100% of statements, 99% of branches |
+| ADRs | 13 |
 | Specs written | 4 of 9 |
-| Design errors caught before implementation | 6 |
+| Design errors caught before implementation | 7 |
+| Threats found by measurement | 6 (TM-19 through TM-24) |

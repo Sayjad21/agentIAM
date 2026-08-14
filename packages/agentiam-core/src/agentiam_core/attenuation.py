@@ -53,6 +53,7 @@ from agentiam_core.models import (
     TimeWindow,
     ToolAllow,
     ToolDeny,
+    validate_label,
 )
 from agentiam_core.tokens import HARD_SIZE_LIMIT_B64, VerifiedToken
 
@@ -313,7 +314,15 @@ def attenuate(
     Raises:
         AttenuationError: If a proposed caveat would widen authority, or if the child
             would exceed the hard size limit. No token is produced in either case.
+        ValueError: If `agent_id` or `role` is empty, over-long, or contains a character
+            that is unsafe in a Datalog string fact. Both become string facts in the new
+            block; `quote_string()` escapes them correctly, but biscuit's
+            `block_source()` renders them back unescaped, so a value containing a quote
+            produces block text that re-parses into different Datalog. See
+            `models.validate_label` and `tests/security/test_datalog_labels.py`.
     """
+    validate_label(agent_id, "agent_id")
+    validate_label(role, "role")
     check_narrowing(caveats, [*_grant_caveats(parent), *ancestor_caveats])
 
     lines = [

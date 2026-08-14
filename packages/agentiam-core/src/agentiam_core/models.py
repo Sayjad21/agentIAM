@@ -47,6 +47,63 @@ MAX_DELEGATION_DEPTH: Final = 8
 _SCOPE_RE: Final = re.compile(r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$")
 _HEX64_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
+#: Longest free-text identifier that may become a Datalog string fact. Generous — a
+#: Keycloak subject plus a prefix is well under it — and bounded, because these end up in
+#: every request header.
+MAX_LABEL_LENGTH: Final = 128
+
+#: Characters forbidden in a free-text identifier that becomes a Datalog string fact.
+#:
+#: Measured in T-011, not assumed. `quote_string()` escapes correctly, so a crafted value
+#: cannot forge a fact *inside a signed token*. But biscuit's `block_source()` renders the
+#: string back **unescaped**: a role of ``x"); admin(true); //`` renders as a block whose
+#: text re-parses into a genuine, separate ``admin(true)`` fact. Anything that displays or
+#: re-parses block source — the console's caveat chain (T-045), the audit explorer
+#: (T-048), the Datalog-to-caveat parser those need — is therefore reading attacker-shaped
+#: text. Closing it here, at the only place these values enter a token, is cheaper than
+#: escaping correctly in every consumer.
+#:
+#: Quote and backslash break the round trip; C0/C1 controls break the line structure; the
+#: bidi overrides reorder rendered text without changing its bytes, which spoofs a role
+#: name in the console without touching the signature. Everything else is permitted, so a
+#: Bengali role name renders as itself.
+_UNSAFE_LABEL_RE: Final = re.compile(
+    r'["\\]'  # break out of the quoted string
+    r"|[\x00-\x1f\x7f-\x9f]"  # C0 and C1 controls, including newline and tab
+    # Bidi marks, embeddings, overrides and isolates. Written as escapes on purpose:
+    # these are invisible, and a source file is the last place they should appear
+    # literally (see tests/unit/test_source_encoding.py).
+    "|[\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+)
+
+
+def validate_label(value: str, field: str) -> str:
+    """Check a free-text identifier is safe to write into a Datalog string fact.
+
+    Args:
+        value: The identifier.
+        field: Its name, for the error message.
+
+    Returns:
+        `value`, unchanged.
+
+    Raises:
+        ValueError: If it is empty, too long, or contains a forbidden character.
+    """
+    if not value:
+        raise ValueError(f"{field} must not be empty")
+    if len(value) > MAX_LABEL_LENGTH:
+        raise ValueError(f"{field} is {len(value)} characters, over the {MAX_LABEL_LENGTH} limit")
+    found = _UNSAFE_LABEL_RE.search(value)
+    if found is not None:
+        raise ValueError(
+            f"{field} contains {found.group()!r} (U+{ord(found.group()):04X}), which is "
+            f"not safe in a Datalog string fact: quotes and backslashes break the "
+            f"block-source round trip, and control or bidi characters misrender it"
+        )
+    return value
+
+
 _FROZEN = ConfigDict(frozen=True, extra="forbid", strict=False)
 
 
@@ -236,6 +293,12 @@ class Mandate(BaseModel):
         if not _HEX64_RE.match(value):
             raise ValueError("intent_hash must be 64 lowercase hex characters (SHA-256)")
         return value
+
+    @field_validator("principal_id")
+    @classmethod
+    def _safe_principal(cls, value: str) -> str:
+        """`principal_id` becomes a Datalog string fact in the authority block."""
+        return validate_label(value, "principal_id")
 
     @field_validator("scopes")
     @classmethod
