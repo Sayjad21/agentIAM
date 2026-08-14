@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-012.
+**Last updated:** after T-013.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | M1, M2 complete · **M3 in progress** (T-012 done), specs 05–09 outstanding |
-| **Tickets** | 11 done · 42 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 740 collected (730 in `make test`; 10 `integration`, need Docker) |
+| **Milestone** | M1, M2 complete · **M3 in progress** (T-012, T-013 done), specs 05–09 outstanding |
+| **Tickets** | 12 done · 41 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 783 collected (753 in `make test`; 30 `integration`, need Docker) |
 | **Coverage** (`agentiam-core`, `agentiam-sdk`) | 100% statements · 99% branches |
 | **CI** | green — lint/types/tests, core purity, compose health |
 | **Specs** | 4 of 9 written |
-| **ADRs** | 14 |
+| **ADRs** | 15 |
 
 ---
 
@@ -39,13 +39,14 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-009 | `attenuation.py` — `narrows()` + invariant properties | `ff7bb5e` |
 | — | `README.md`, `JOURNAL.md`, `STATUS.md` | `e42b0ac` |
 | T-011 | SDK: identity propagation, `attenuate()`, `@requires_scope`, **TM-24** | `66f12cb` |
-| T-012 | `budgets` table + Alembic migration, DB `CHECK` for the pool invariant, testcontainers | — |
+| T-012 | `budgets` table + Alembic migration, DB `CHECK` for the pool invariant, testcontainers | `0905e7a` |
+| T-013 | `leases` table + `ACQUIRE`/`RELEASE`/`REAP`, `FOR UPDATE` and clock-skew guards proven load-bearing, partial P-10/P-20 | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-013…T-017** | Lease operations (ACQUIRE/RELEASE/REAP, RESERVE/COMMIT), invariant checker, sibling budgets | M3 |
+| **T-014…T-017** | `RESERVE`/`COMMIT`/`LEDGER_COMMIT` (extends T-013's P-10/P-20 machine), invariant checker, sibling budgets | M3 |
 | T-018…T-023 | PEP, decision pipeline, lease pool, **end-to-end thin slice** | M4 |
 | T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
 | T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
@@ -83,13 +84,14 @@ Real debt, not speculation. Each has a home.
 
 | # | Gap | Impact if left | Where it lands |
 |---|---|---|---|
-| 1 | **TM-19…TM-22 have no tests.** Four threats found by measurement are mitigated in the specs but unverified in code | The four sharpest failure modes are defended only by prose | T-008, T-013, T-014, T-019, T-051 |
+| 1 | **TM-19…TM-21 have no tests; TM-22's reaper side does (T-013).** Threats found by measurement, mitigated in the specs but only TM-22's reaper half is verified in code — the PEP-side skew-refusal half is still open | Three of four sharpest failure modes are defended only by prose | T-008, T-014, T-019, T-051 |
 | 2 | **No Datalog→caveat parser.** The SDK now carries the caveats *it* minted, so `attenuate()` catches re-widening along a chain it built. A token received from elsewhere still folds to an upper bound | For a chain this process built, closed. For a received token, the console cannot show a true effective bound. Never understates a restriction — biscuit's append-only structure sees to that | Needed by T-019 (naming the failing caveat) and T-045 (identity tree). **Note:** whatever parses block source must not trust it — see TM-24 |
 | 3 | **No LICENSE file.** README and every package declare Apache-2.0; the text is absent | Weakens the §14.4 IP claim for a submission judged on IP ownership | Add via GitHub's license picker — verbatim text matters |
 | 4 | **`mutmut` not yet run.** T-009 asks for ≤10% surviving mutants on `attenuation.py` and `caveats.py` | Coverage says the lines run; mutation says the assertions bite. Untested claim | M7, one run (ROADMAP Part 1) |
 | 5 | **Specs 05–09 unwritten** | Their tickets cannot start spec-first, which is the rule that caught seven design errors | M2 tail / M5 |
 | 6 | **A1 re-verification is manual.** The security rests on biscuit scoping block facts; nothing fails if a library upgrade changes it | Silent collapse of INV-1 on a dependency bump | Should become a test — see §4 |
 | 7 | **`budgets.mandate_id` carries no foreign key.** No `mandates` SQL table exists yet — T-005 built `Mandate` as a pure Pydantic model, no persistence (ADR-014) | A budget row can reference a mandate id that was never issued; nothing in the schema catches it | Whichever ticket first persists mandates (issuance service, `PLAN.md` §8 — not yet its own ticket) |
+| 8 | **`ACQUIRE` does not clamp by `max_fraction`.** Spec 04 §4.1's clamp is mathematically incompatible with T-013's own acceptance test, applied to a fixed caller-`requested` amount (ADR-015, measured) | No single-PEP-crash blast-radius bound beyond `ttl` — a PEP can be granted more than a quarter of the pool in one `ACQUIRE` | T-015 (adaptive lease sizing, deferred) — that's where the formula actually applies |
 
 ---
 

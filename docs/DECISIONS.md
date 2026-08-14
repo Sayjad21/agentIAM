@@ -486,3 +486,49 @@ depend on the FK existing: it is a property of one row, not a join.
 `leases` and `reservations` will each need their own `CHECK` constraints when T-013 and T-014
 add them (spec 04 §5, guards G2/G3), and by the same reasoning, each should be added by the
 ticket that implements the operations that would otherwise leave the guard untested.
+
+---
+
+## ADR-015 — `ACQUIRE` does not apply the `max_fraction` clamp
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `docs/specs/04-lease-protocol.md` §4.1, §12, T-013, T-015
+
+**Context:** Spec 04 §4.1's pseudocode computes `grant := min(requested, available,
+max_fraction * available)`. `PLAN.md` §6.4's version of `ACQUIRE` has no such term:
+`grant = min(requested, available)`. Implementing the clamp literally was tried first, since
+spec 04 supersedes the plan on protocol detail (`ENGINEERING-RULES.md` rule 2) — but it does
+not survive contact with this ticket's own acceptance test.
+
+**Measured.** With `max_fraction = 0.25` (spec 04 §12's default) and 50 concurrent callers each
+requesting `1` against a `total` of `10`: the clamp only binds once `available < 4`, and past
+that point each grant is `0.25 * available` — so `available` shrinks by a factor of `0.75` per
+acquire and *never reaches zero* in any bounded number of calls; it only hits exactly `0.0000`
+once `NUMERIC(20,4)` rounding forces it there, around the 40th call in this scenario. Every one
+of the 50 callers gets a nonzero grant. `PLAN.md` §9's stated acceptance bar for T-013 —
+"exactly 10 succeed, 40 get `Insufficient`" — is unreachable with the clamp applied to an
+explicit caller-supplied `requested` amount, for any `total`/`requested` large enough to make
+the concurrency test meaningful. This is not a rounding-corner case; it is the clamp's ordinary
+behavior on the exact scenario the ticket specifies.
+
+**Decision:** `ACQUIRE` computes `grant = min(requested, available)` — `PLAN.md` §6.4's
+form, not spec 04 §4.1's. The `max_fraction` term belongs to **adaptive lease sizing** (spec 04
+§12, "Lease sizing policy"): `lease = clamp(EWMA(spend_rate) × target_horizon, min_lease,
+max_fraction × available)` is the formula that decides how large a lease *the ledger itself
+should compute and request*, not a second cap layered on top of whatever amount a caller
+explicitly asked for. Spec 04 §12 itself states "Current: fixed size. Adaptive sizing is
+deferred (T-015...)" — so no caller in the system today derives its `requested` value from that
+formula, and `max_fraction` has nothing to apply to yet. Spec 04 §4.1 folding the clamp directly
+into `ACQUIRE`'s pseudocode conflates the two concerns; §12's own text is the correction.
+
+**Consequences:** `max_fraction`'s actual job — bounding how much a single PEP can strand on
+crash — is unenforced until T-015 computes lease sizes adaptively and applies the clamp there,
+where it behaves as intended (bounding a *computed* size, not repeatedly shrinking a *fixed*
+one). This is consistent with T-015 already being deferred (ROADMAP.md, `PLAN.md` §21) and
+stated as a known gap rather than silently absent: the stranded-budget limitation in spec 04 §14
+is currently bounded only by `ttl`, not additionally by `max_fraction`, until T-015 lands. Per
+rule 9 ("never weaken a test to make it pass — fix the code or fix the spec, and if the spec,
+write the ADR"): the code was fixed to match `PLAN.md`'s simpler formula rather than the test
+being loosened, because the simpler formula is what T-013's acceptance criteria were written
+against and the math above shows the two are incompatible as literally specified.

@@ -198,6 +198,21 @@ class Outcome(StrEnum):
     ALLOW_WITH_FLAG = "allow_with_flag"
 
 
+@unique
+class LeaseState(StrEnum):
+    """A lease's position in the state machine (spec 04 §3).
+
+    `ACTIVE` is the only non-terminal state. `RELEASED`, `EXPIRED`, and `REVOKED` are each
+    reached one-way, and each decrements the budget's `leased` field by the lease's
+    `outstanding` amount exactly once — spec 04 §3, §6.
+    """
+
+    ACTIVE = "active"
+    RELEASED = "released"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
 # ---------------------------------------------------------------------------
 # Budget
 # ---------------------------------------------------------------------------

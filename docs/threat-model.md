@@ -90,15 +90,15 @@ STRIDE: **S**poofing · **T**ampering · **R**epudiation · **I**nformation disc
 ### 3.1 Threats found while building, not present in the original catalogue
 
 These came out of the empirical work in T-002 through T-005 and T-011. They are implementation
-hazards rather than adversary capabilities, but each produces a security failure. TM-19 through
-TM-22 still need a test; TM-24 has one.
+hazards rather than adversary capabilities, but each produces a security failure. TM-19…TM-21
+still need a test; TM-22's reaper-side half is covered as of T-013; TM-24 has one.
 
 | ID | STRIDE | Threat | Mitigation | Status | Tests |
 |---|---|---|---|---|---|
 | TM-19 | E | **A caveat that appears to enforce and does not.** Biscuit checks are existential: written against the token's own grant facts, `check if scope($s), [...].contains($s)` passes if *any* granted scope matches, not the one being requested. Measured: narrowing to `invoice:read` still authorized `vendor:read` | Checks are written against verifier-supplied request context only (ADR-005). Spec 01 §2 states the rule normatively | mitigated | **new test needed** (§6) |
 | TM-20 | E | **Incomplete request context.** A check whose fact is absent *fails*, so an omitted `requested(dimension)` denies — but a caveat form chosen wrongly can instead fail **open**: `reject if time($t), $t > EXPIRY` is vacuous when the verifier omits `time()`, and the token never expires | `check if` for facts supplied on every request, `reject if` only for legitimately optional facts (ADR-007). `RequestContext` validates at construction that every budget dimension is present | mitigated | **new test needed** (§6) |
 | TM-21 | T | **Late commit against a reclaimed lease.** A commit arriving after `RELEASE`/`REAP`/`REVOKE` decrements `leased` a second time for budget already returned. Measured: `leased` went negative in 55 of 400 random interleavings | Commits against a non-active lease are rejected and recorded as reconciliation anomalies (ADR-009). The pool invariant is preserved; the divergence is surfaced | **partially mitigated** (§5.5) | T-014, P-10 (late-commit rule) |
-| TM-22 | T | **Clock skew beyond the configured allowance.** If the reaper reclaims while a lagging PEP still spends, the same budget is issued twice. Measured with no skew margin: the lease was reaped and re-issued while still in use | PEPs expire early at `expires_at − S`; the reaper reclaims late at `expires_at + S`; `ttl > 2S`. **Safety depends on actual skew staying within `S`** | **partially mitigated** (§5.6) | CH-7, EC-T08 |
+| TM-22 | T | **Clock skew beyond the configured allowance.** If the reaper reclaims while a lagging PEP still spends, the same budget is issued twice. Measured with no skew margin: the lease was reaped and re-issued while still in use | PEPs expire early at `expires_at − S`; the reaper reclaims late at `expires_at + S`; `ttl > 2S`. **Safety depends on actual skew staying within `S`** | **partially mitigated** (§5.6) | `test_ledger.py` (reaper side, T-013); CH-7, EC-T08 (PEP side) |
 | TM-23 | T | **Agent under-reports the actual amount** to hide spend, where the PEP cannot independently determine it | Over-reporting is clamped to the lease's outstanding, so it cannot break the budget invariant. Under-reporting is flagged and audited wherever the PEP can cross-check, but is not prevented | **accepted risk** (§5.7) | A-19 |
 | TM-24 | S | **A free-text identifier that reshapes rendered Datalog.** `quote_string()` escapes correctly, so a crafted `role`, `agent_id` or `principal_id` cannot forge a fact inside a signed token. But `block_source()` renders the string back **unescaped**: measured, a role of `x"); admin(true); //` renders as block text that re-parses into a genuine second fact. Every planned consumer of block source is a display or parsing path — the console's caveat chain (T-045), the audit explorer (T-048), the Datalog-to-caveat parser both need. A bidi override additionally reorders a rendered role without changing a byte | `models.validate_label` refuses quotes, backslashes, C0/C1 controls and bidi controls in the three fields that become Datalog string facts, at the only places they enter a token: `Mandate.principal_id` and `attenuate()`'s `agent_id` and `role`. Non-ASCII is otherwise unrestricted, so a Bengali role renders as itself | mitigated | `tests/security/test_datalog_labels.py` (66 cases) |
 
@@ -187,7 +187,7 @@ flagged and audited wherever the PEP can cross-check.
 
 ## 6. Coverage gaps
 
-Four threats have no test yet. Recorded here rather than left implicit, and each is a
+Three threats still have no test. Recorded here rather than left implicit, and each is a
 concrete addition to T-051's red-team suite.
 
 | Threat | Test to add | Ticket |
@@ -195,7 +195,14 @@ concrete addition to T-051's red-team suite.
 | TM-19 | A caveat compiled against the token's own grant facts must fail the conformance suite — assert the *wrong* encoding does not enforce | T-008 |
 | TM-20 | Authorization with a deliberately incomplete `RequestContext` must deny, never allow. Cover every omitted fact individually | T-019, T-051 |
 | TM-21 | Commit against a reaped lease is rejected and produces exactly one anomaly record | T-014 |
-| TM-22 | Reaper and a skewed PEP: assert no window in which both consider the lease live | T-013, CH-7 |
+
+~~TM-22~~ (reaper side) — closed in T-013. `tests/integration/test_ledger.py`'s
+`test_reap_does_not_reclaim_within_the_skew_margin` and
+`test_reap_reclaims_a_lease_past_the_skew_margin` prove the margin is load-bearing against real
+Postgres: the skew-margin cutoff was temporarily removed, the first test was run and observed to
+fail (a lease 3 s past `expires_at`, within the 5 s margin, was reclaimed anyway), then restored.
+The other half of TM-22 — refusing a lease to a PEP whose reported clock is skewed beyond `S` at
+`ACQUIRE` time (spec 04 §17 Q1) — is still open, as is CH-7 (a full chaos scenario).
 
 ~~TM-24~~ — closed in T-011. `tests/security/test_datalog_labels.py` covers the guard, the
 rejected characters, the Bengali case that must still pass, and the rendering hazard itself, so

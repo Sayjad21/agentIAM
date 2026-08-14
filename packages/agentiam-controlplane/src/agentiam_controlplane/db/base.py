@@ -21,9 +21,13 @@ class Base(DeclarativeBase):
     """Declarative base for every control-plane ORM model."""
 
 
-def make_engine(database_url: str) -> AsyncEngine:
-    """Build an async engine for `database_url` (a `postgresql+asyncpg://...` DSN)."""
-    return create_async_engine(database_url)
+def make_engine(database_url: str, **engine_kwargs: object) -> AsyncEngine:
+    """Build an async engine for `database_url` (a `postgresql+asyncpg://...` DSN).
+
+    `engine_kwargs` passes through to `create_async_engine` — e.g. `poolclass=NullPool` for
+    a test that needs more concurrent connections than the default pool allows.
+    """
+    return create_async_engine(database_url, **engine_kwargs)
 
 
 def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
