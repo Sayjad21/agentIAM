@@ -532,3 +532,98 @@ rule 9 ("never weaken a test to make it pass — fix the code or fix the spec, a
 write the ADR"): the code was fixed to match `PLAN.md`'s simpler formula rather than the test
 being loosened, because the simpler formula is what T-013's acceptance criteria were written
 against and the math above shows the two are incompatible as literally specified.
+
+---
+
+## ADR-016 — `RESERVE`/`COMMIT` live in `agentiam-pep`, not `agentiam-controlplane`
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `docs/specs/04-lease-protocol.md` §4.2, §4.3, T-014, T-018, T-021
+
+**Context:** T-013's `db/ledger.py` holds `ACQUIRE`/`RELEASE`/`REAP` — all three are ledger-side,
+take an `AsyncSession`, and run inside `SELECT ... FOR UPDATE`. Spec 04 §4.2/§4.3 describe
+`RESERVE` and `COMMIT` as PEP-side: "no network, no ledger mutation, no lock," touching only a
+`LocalLease.remaining_local` the PEP holds in memory (spec 04 §2.3). `CONTEXT.md`'s hand-off from
+T-013 left where they belong as this ticket's call.
+
+**Decision:** They land in a new `agentiam_pep.lease` module — `LocalLease`, `Reservation`,
+`CommitOutcome` dataclasses plus pure `reserve()`/`commit()` functions, with `agentiam_pep.errors`
+mirroring the `ReservationInsufficientError` pattern already used by `LeaseUnavailableError` and
+`LeaseNotActiveError`. Not `agentiam_controlplane.db.ledger` alongside the three DB operations
+(wrong: they touch no database, and putting them in `db/` beside `AsyncSession`-taking functions
+invites a future edit to reach for a session that shouldn't exist), and not `agentiam_core` either
+(that package is the *correctness core* — token format, caveats, attenuation — not runtime
+protocol state; `LocalLease` is mutable, per-PEP, per-process state, which is a different kind of
+thing than the immutable value types `agentiam_core` holds). `agentiam-pep` already depends only
+on `agentiam-core`, so this adds no new dependency, and it gives T-018/T-021 (which build the real
+PEP gateway and wire a lease pool into it) a working starting point rather than a second
+from-scratch design.
+
+**Consequences:** `agentiam_pep` gains real source ahead of T-018, which its own module docstring
+says is "Implemented from T-018" — narrowly true of the decision *pipeline*, not of every module
+the package will ever hold. The `reservations` table (`PLAN.md` §7) is written only by
+`LEDGER_COMMIT`, never by `RESERVE`: `reservations.id` is the PEP-generated idempotency key (spec
+04 §10), but no row exists for it until the ledger actually applies a commit, so a `Reservation`
+that is never committed leaves no trace in Postgres — consistent with "no ledger mutation" at
+`RESERVE` time, and cheap, since an uncommitted reservation was never spend that happened.
+
+`reconciliation_anomalies` is a new table with no entry in `PLAN.md` §7's data-model block —
+spec 04 §11's late-commit rule (found by model-checking `PLAN.md` §6.4's original pseudocode, not
+present in it) requires the rejection to be recorded, and nothing else in the schema does that.
+It carries `lease_id`, `reservation_id`, `reported_amount`, and `lease_state` (the three fields
+spec 04 §4.4's pseudocode names plus the reservation id for audit trace), with no uniqueness on
+`reservation_id` — a late commit retried by a reconnecting PEP produces one anomaly row per
+attempt, since spec 04 §11 states no dedup requirement for anomalies (unlike `reservations`,
+where dedup is the entire point).
+
+**Escalation, in `commit()`.** Spec 04 §4.3's pseudocode reads "`RESERVE(lease, delta) or
+escalate — must be covered before committing`," which could be read as blocking the commit
+outright. It does not: the tool call the reservation was covering has already executed by the
+time `COMMIT` runs, so the spend is real regardless of local headroom. `commit()` always returns
+a `CommitOutcome` carrying the full, unclamped `actual` for the caller to enqueue as
+`LEDGER_COMMIT` — clamping to what the ledger will actually accept is `ledger_commit()`'s G2, not
+this function's job (spec 04 §6: "a PEP cannot break this"). `escalated=True` on the outcome is
+the signal a caller acts on; it never suppresses the enqueue.
+
+---
+
+## ADR-017 — `LEDGER_COMMIT` checks idempotency after locking the lease, not before
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `docs/specs/04-lease-protocol.md` §4.4, §10, T-014 (G4/P-12)
+
+**Context:** Spec 04 §4.4's pseudocode writes `LEDGER_COMMIT` in this order: check whether
+`reservation_id` is already settled, *then* `SELECT lease FOR UPDATE`. Implemented literally,
+this is a TOCTOU race — the dedup check runs against an unlocked read, so two concurrent commits
+carrying the same `reservation_id` (a retried batch send racing itself, the exact scenario G4
+exists for) can both observe "not yet settled" before either takes the lease's row lock, and both
+then proceed to apply.
+
+**Measured.** Ten concurrent `ledger_commit()` calls, same `lease_id` and `reservation_id`, run
+against the literal spec order: the race reproduced on all three runs attempted (`asyncio.gather`
+over 10 tasks against a `NullPool` engine, same shape as T-013's 50-concurrent-acquire test). The
+failure is not a silent double-apply — the `reservations.id` primary key catches the second
+`INSERT` — but it surfaces as an **unhandled
+`asyncpg.exceptions.UniqueViolationError: duplicate key value violates unique constraint
+"reservations_pkey"`** propagating out of `ledger_commit()`, rather than the clean `False`
+(idempotent no-op) the caller should be able to rely on. A batched-commit worker calling this in
+a retry loop would crash instead of degrading gracefully.
+
+**Decision:** `ledger_commit()` acquires `SELECT lease FOR UPDATE` first, and checks
+`reservations` for the `reservation_id` second, both inside the lock's scope. The postcondition —
+a duplicate `reservation_id` applies nothing and returns `False` — is unchanged; only the order of
+two independent reads changed, so this is not a deviation from the protocol spec 04 describes,
+only from the literal statement order of its pseudocode. Reordering closes the race because every
+concurrent `LEDGER_COMMIT` against the same lease now serializes on the row lock before either one
+re-reads `reservations`, so the second caller's dedup check runs *after* the first caller's
+`INSERT` has committed and become visible.
+
+**Consequences:** None to the external contract — `ledger_commit()`'s return type and raised
+exception are exactly as documented regardless of this ordering. The risk this ADR guards against
+is a future edit "fixing" the code to match spec 04 §4.4's literal statement order, silently
+reintroducing the crash. Verified guard-proof style (`docs/JOURNAL.md`'s recurring lesson): the
+literal order was restored, `test_concurrent_duplicate_ledger_commits_apply_exactly_once` was
+rerun and failed with the exact error above on repeated attempts, then the lock-first order was
+restored and the full `test_ledger_commit.py` suite rerun green.

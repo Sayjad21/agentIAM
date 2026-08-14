@@ -1,11 +1,12 @@
-"""`ACQUIRE`, `RELEASE`, `REAP` — spec 04 §4.1, §4.5, §4.6.
+"""`ACQUIRE`, `RELEASE`, `REAP`, `LEDGER_COMMIT` — spec 04 §4.1, §4.4, §4.5, §4.6.
 
-`RESERVE`, `COMMIT`, and `LEDGER_COMMIT` are T-014's. Each operation here runs in its own
-serialized transaction on the rows it touches, matching spec 04 §4's "everything inside
-BEGIN … COMMIT runs in one serialized transaction." Callers pass a fresh `AsyncSession`
-per call (concurrent operations must not share a session — SQLAlchemy sessions are not
-safe for concurrent use) and an explicit `now`, so every operation is deterministic and
-testable without a real clock.
+`RESERVE` and `COMMIT` are PEP-side, local, no-network operations (spec 04 §4.2, §4.3) and
+live in `agentiam_pep.lease` instead — this module only holds the operations that mutate the
+database. Each operation here runs in its own serialized transaction on the rows it touches,
+matching spec 04 §4's "everything inside BEGIN … COMMIT runs in one serialized transaction."
+Callers pass a fresh `AsyncSession` per call (concurrent operations must not share a session
+— SQLAlchemy sessions are not safe for concurrent use) and an explicit `now`, so every
+operation is deterministic and testable without a real clock.
 
 **No `max_fraction` clamp on `ACQUIRE`.** Spec 04 §4.1's pseudocode computes
 `grant = min(requested, available, max_fraction * available)`, but that clamp belongs to
@@ -14,6 +15,13 @@ adaptive lease sizing (spec 04 §12, T-015 — deferred) rather than to a caller
 ticket's own acceptance test: it shrinks each subsequent grant by 25% of what remains
 instead of ever reaching zero, so a fixed `requested` value never triggers `Insufficient`
 in any finite number of calls. See ADR-015.
+
+**`ledger_commit()` checks idempotency after locking the lease, not before.** Spec 04 §4.4's
+own pseudocode writes the `reservation_id` dedup check *before* `SELECT lease FOR UPDATE`.
+Taken literally that is a TOCTOU race: two concurrent commits carrying the same
+`reservation_id` can both read "not yet settled" before either takes the lock, and both then
+apply. Checking after the lock closes it — the postcondition (a duplicate is a no-op) is
+identical, only the order of two independent reads changed. See ADR-016.
 """
 
 from __future__ import annotations
@@ -25,8 +33,13 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agentiam_controlplane.db.models import BudgetRow, LeaseRow
-from agentiam_controlplane.errors import LeaseUnavailableError
+from agentiam_controlplane.db.models import (
+    BudgetRow,
+    LeaseRow,
+    ReconciliationAnomalyRow,
+    ReservationRow,
+)
+from agentiam_controlplane.errors import LeaseNotActiveError, LeaseUnavailableError
 from agentiam_core.models import LeaseState
 
 #: Clock-skew allowance (spec 04 §9). A PEP must stop using a lease at `expires_at - S`;
@@ -114,6 +127,79 @@ async def reap(session: AsyncSession, *, now: datetime) -> list[uuid.UUID]:
             if await _retire(session, lease_id=lease_id, next_state=LeaseState.EXPIRED):
                 reclaimed.append(lease_id)
     return reclaimed
+
+
+async def ledger_commit(
+    session: AsyncSession,
+    *,
+    lease_id: uuid.UUID,
+    reservation_id: uuid.UUID,
+    amount: Decimal,
+    now: datetime,
+) -> bool:
+    """`LEDGER_COMMIT` — spec 04 §4.4.
+
+    Idempotent by `reservation_id` (G4, spec 04 §10): a row in `reservations` carrying that
+    id is the entire dedup mechanism, so a replay finds it already there and applies nothing.
+    `amount` is clamped to `lease.outstanding` (G2) rather than trusted — a compromised or
+    buggy PEP cannot drive `leased` negative by over-reporting.
+
+    Returns:
+        `True` if this call mutated the ledger, `False` if it was a no-op — either the
+        `reservation_id` was already settled (idempotent replay) or the clamped amount was
+        `<= 0` (the lease was already fully settled by a prior, different commit).
+
+    Raises:
+        LeaseNotActiveError: the lease is not `active` (G3, spec 04 §11 / ADR-009) — a late
+            commit against a lease already released, reaped, or revoked. Rejected rather than
+            applied, and recorded as a `ReconciliationAnomalyRow` so the divergence is
+            surfaced instead of silently corrupting `leased` (TM-21).
+    """
+    reject_state: str | None = None
+    async with session.begin():
+        lease_result = await session.execute(
+            select(LeaseRow).where(LeaseRow.id == lease_id).with_for_update()
+        )
+        lease = lease_result.scalar_one()
+
+        # Checked after the lock, not before — see this module's docstring and ADR-016.
+        dup = await session.execute(
+            select(ReservationRow.id).where(ReservationRow.id == reservation_id)
+        )
+        if dup.scalar_one_or_none() is not None:
+            return False
+
+        if lease.state != LeaseState.ACTIVE.value:
+            session.add(
+                ReconciliationAnomalyRow(
+                    lease_id=lease_id,
+                    reservation_id=reservation_id,
+                    reported_amount=amount,
+                    lease_state=lease.state,
+                    created_at=now,
+                )
+            )
+            reject_state = lease.state
+        else:
+            applied = min(amount, lease.outstanding)
+            if applied <= 0:
+                return False
+            budget_result = await session.execute(
+                select(BudgetRow).where(BudgetRow.id == lease.budget_id).with_for_update()
+            )
+            budget = budget_result.scalar_one()
+            budget.committed += applied
+            budget.leased -= applied
+            lease.settled += applied
+            session.add(
+                ReservationRow(id=reservation_id, lease_id=lease_id, amount=applied, created_at=now)
+            )
+
+    if reject_state is not None:
+        raise LeaseNotActiveError(
+            f"lease {lease_id} is {reject_state!r}, not active — commit rejected (spec 04 §11)"
+        )
+    return True
 
 
 async def _retire(session: AsyncSession, *, lease_id: uuid.UUID, next_state: LeaseState) -> bool:

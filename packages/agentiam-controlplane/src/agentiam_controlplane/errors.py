@@ -24,4 +24,16 @@ class LeaseUnavailableError(ControlPlaneError):
     reason_code = ReasonCode.LEASE_UNAVAILABLE
 
 
-__all__ = ["ControlPlaneError", "LeaseUnavailableError"]
+class LeaseNotActiveError(ControlPlaneError):
+    """`LEDGER_COMMIT` was called against a lease that already left `active` — spec 04 §4.4, §11.
+
+    A distinct code from `LEASE_UNAVAILABLE`: that one means the pool had nothing left to
+    grant at `ACQUIRE` time, this one means a settlement arrived for a lease the ledger has
+    already released, expired, or revoked (ADR-009). The commit is rejected and recorded as
+    a reconciliation anomaly rather than silently corrupting `leased` (spec 04 §11, TM-21).
+    """
+
+    reason_code = ReasonCode.LEASE_NOT_ACTIVE
+
+
+__all__ = ["ControlPlaneError", "LeaseNotActiveError", "LeaseUnavailableError"]

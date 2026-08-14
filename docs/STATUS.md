@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-013.
+**Last updated:** after T-014.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | M1, M2 complete · **M3 in progress** (T-012, T-013 done), specs 05–09 outstanding |
-| **Tickets** | 12 done · 41 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 783 collected (753 in `make test`; 30 `integration`, need Docker) |
-| **Coverage** (`agentiam-core`, `agentiam-sdk`) | 100% statements · 99% branches |
+| **Milestone** | M1, M2 complete · **M3 in progress** (T-012…T-014 done), specs 05–09 outstanding |
+| **Tickets** | 13 done · 40 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 833 collected (788 in `make test`; 45 `integration`, need Docker) |
+| **Coverage** (`agentiam-core`, `agentiam-sdk`, `agentiam-pep`) | 100% statements · 99%+ branches |
 | **CI** | green — lint/types/tests, core purity, compose health |
 | **Specs** | 4 of 9 written |
-| **ADRs** | 15 |
+| **ADRs** | 17 |
 
 ---
 
@@ -40,13 +40,14 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | — | `README.md`, `JOURNAL.md`, `STATUS.md` | `e42b0ac` |
 | T-011 | SDK: identity propagation, `attenuate()`, `@requires_scope`, **TM-24** | `66f12cb` |
 | T-012 | `budgets` table + Alembic migration, DB `CHECK` for the pool invariant, testcontainers | `0905e7a` |
-| T-013 | `leases` table + `ACQUIRE`/`RELEASE`/`REAP`, `FOR UPDATE` and clock-skew guards proven load-bearing, partial P-10/P-20 | — |
+| T-013 | `leases` table + `ACQUIRE`/`RELEASE`/`REAP`, `FOR UPDATE` and clock-skew guards proven load-bearing, partial P-10/P-20 | `0c145ec` |
+| T-014 | `RESERVE`/`COMMIT` (`agentiam_pep.lease`, pure) + `LEDGER_COMMIT` (`reservations`, `reconciliation_anomalies`), G2/G3/G4 guards proven load-bearing, TM-21 closed, P-10/P-12 extended | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-014…T-017** | `RESERVE`/`COMMIT`/`LEDGER_COMMIT` (extends T-013's P-10/P-20 machine), invariant checker, sibling budgets | M3 |
+| **T-016…T-017** | invariant checker, sibling budgets | M3 |
 | T-018…T-023 | PEP, decision pipeline, lease pool, **end-to-end thin slice** | M4 |
 | T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
 | T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
@@ -84,7 +85,7 @@ Real debt, not speculation. Each has a home.
 
 | # | Gap | Impact if left | Where it lands |
 |---|---|---|---|
-| 1 | **TM-19…TM-21 have no tests; TM-22's reaper side does (T-013).** Threats found by measurement, mitigated in the specs but only TM-22's reaper half is verified in code — the PEP-side skew-refusal half is still open | Three of four sharpest failure modes are defended only by prose | T-008, T-014, T-019, T-051 |
+| 1 | **TM-19…TM-20 have no tests.** TM-21 closed in T-014; TM-22's reaper side closed in T-013 — the PEP-side skew-refusal half of TM-22 is still open | Two of four sharpest failure modes are defended only by prose | T-008, T-019, T-051 |
 | 2 | **No Datalog→caveat parser.** The SDK now carries the caveats *it* minted, so `attenuate()` catches re-widening along a chain it built. A token received from elsewhere still folds to an upper bound | For a chain this process built, closed. For a received token, the console cannot show a true effective bound. Never understates a restriction — biscuit's append-only structure sees to that | Needed by T-019 (naming the failing caveat) and T-045 (identity tree). **Note:** whatever parses block source must not trust it — see TM-24 |
 | 3 | **No LICENSE file.** README and every package declare Apache-2.0; the text is absent | Weakens the §14.4 IP claim for a submission judged on IP ownership | Add via GitHub's license picker — verbatim text matters |
 | 4 | **`mutmut` not yet run.** T-009 asks for ≤10% surviving mutants on `attenuation.py` and `caveats.py` | Coverage says the lines run; mutation says the assertions bite. Untested claim | M7, one run (ROADMAP Part 1) |
@@ -161,7 +162,7 @@ From `PLAN.md` §17, with the current reading.
 | Risk | State |
 |---|---|
 | **R-2** Python latency undermines the story | Unmeasured. §4.5 above would de-risk it early |
-| **R-3** Lease protocol bug found late | **Reduced.** Model-checking in T-004 found one before implementation (ADR-009) |
+| **R-3** Lease protocol bug found late | **Reduced.** Model-checking in T-004 found one before implementation (ADR-009); guard-proof testing in T-014 found a second, narrower one — a TOCTOU race in `LEDGER_COMMIT`'s literal spec order — before it shipped (ADR-017) |
 | **R-8** Single developer, no second reviewer | Live and structural. Mitigated by specs-first and property tests, which caught six errors review would not have |
 | **R-6** Scope creep | Holding. Every deviation so far is an ADR with a stated cost |
 | **R-1** Hyperscalers ship equivalent agent IAM | Untracked. §17 says review monthly |

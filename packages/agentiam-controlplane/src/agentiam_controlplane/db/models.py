@@ -1,8 +1,9 @@
 """ORM models for the budget ledger.
 
-`budgets` (T-012) and `leases` (T-013) land here. `reservations` (`PLAN.md` §7) is schema
-owned by T-014, the ticket that implements the operations that give it meaning — see
-`docs/DECISIONS.md`.
+`budgets` (T-012) and `leases` (T-013) land here. `reservations` (T-014, `PLAN.md` §7) and
+`reconciliation_anomalies` (T-014, spec 04 §11 — not in `PLAN.md`'s data model, added by the
+ticket that implements the late-commit gap the spec found, see `docs/DECISIONS.md`) land
+alongside them.
 """
 
 from __future__ import annotations
@@ -101,3 +102,50 @@ class LeaseRow(Base):
     def outstanding(self) -> Decimal:
         """`granted - settled` — spec 04 §2.2. What `RELEASE`/`REAP`/`REVOKE` return to the pool."""
         return self.granted - self.settled
+
+
+class ReservationRow(Base):
+    """A settled `LEDGER_COMMIT` — spec 04 §2.2, §10, `PLAN.md` §7.
+
+    `id` is the **client-generated UUID** minted by the PEP at `RESERVE` time (spec 04 §10);
+    it is the primary key and carries no `default=uuid.uuid4`, unlike `budgets.id`/`leases.id`.
+    A row here exists only once `LEDGER_COMMIT` has actually applied it to the ledger — `RESERVE`
+    and `COMMIT` are PEP-local and never write to this table (spec 04 §4.2, §4.3). A second
+    `LEDGER_COMMIT` for the same `id` finds this row already present and is a no-op (G4):
+    that is the whole idempotency mechanism, not a separate check.
+
+    `amount` is the *clamped* amount actually applied (spec 04 §4.4's G2), which may be less
+    than what the PEP reported — this row is the ledger's record of the truth, not the PEP's.
+    """
+
+    __tablename__ = "reservations"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    lease_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("leases.id"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ReconciliationAnomalyRow(Base):
+    """A rejected `LEDGER_COMMIT` against a non-`active` lease — spec 04 §11, ADR-009, TM-21.
+
+    Recorded instead of applied: `RELEASE`/`REAP`/`REVOKE` already returned this lease's
+    `outstanding` to the pool, so applying the commit as well would drive `leased` negative
+    (G3). The spend already happened and is not reflected in `committed` — this row is the
+    reconciliation trail spec 04 §11 requires, and its count must be zero in a clean chaos run.
+    """
+
+    __tablename__ = "reconciliation_anomalies"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    lease_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("leases.id"), nullable=False
+    )
+    reservation_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    reported_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    lease_state: Mapped[str] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

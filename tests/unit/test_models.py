@@ -477,6 +477,7 @@ class TestReasonCodes:
             "BUDGET_EXHAUSTED_MANDATE",
             "BUDGET_EXHAUSTED_CAVEAT",
             "LEASE_UNAVAILABLE",
+            "LEASE_NOT_ACTIVE",
             "RATE_LIMITED",
             "POLICY_DENIED",
             "POLICY_BUNDLE_STALE",

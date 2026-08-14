@@ -21,6 +21,8 @@ from agentiam_controlplane.db.base import Base
 from agentiam_controlplane.db.models import (  # noqa: F401  (registers on Base.metadata)
     BudgetRow,
     LeaseRow,
+    ReconciliationAnomalyRow,
+    ReservationRow,
 )
 
 config = context.config
