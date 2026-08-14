@@ -443,3 +443,46 @@ occupant — the directory T-051 will grow into.
 
 **Cost:** two extra validations on the mint path, both regex searches over strings under 128
 characters. Immaterial against NFR-1.
+
+---
+
+## ADR-014 — `budgets` ships alone; `mandate_id` carries no foreign key yet
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `docs/PLAN.md` §7, `docs/specs/04-lease-protocol.md` §2.1, T-012, T-013, T-014
+
+**Context:** T-012's ticket text is "Budget schema + migrations," but `PLAN.md` §7 lists
+`budgets`, `leases`, and `reservations` together in one data-model block, and the acceptance
+criteria for T-012 name only the `budgets` invariant `CHECK`. Two questions needed a decision
+before writing the migration, neither answerable from the schema block alone.
+
+**Decision 1 — scope of this migration.** Only `budgets` lands in T-012. `docs/ROADMAP.md`'s
+Milestone 3 table describes T-012's Build column as "Budget schema — SQLAlchemy models +
+Alembic migration" (singular), and spec 04 §16's test-mapping table assigns every `leases`- and
+`reservations`-shaped test (P-10, P-11, P-12, P-20, the concurrent-acquire test, the
+late-commit-rejection test) to T-013 and T-014 — the tickets that implement the operations that
+give those tables meaning. Shipping empty tables now would mean guessing at columns a later
+ticket might need to change, for no test this ticket can write.
+
+**Decision 2 — `mandate_id` has no `FOREIGN KEY`.** T-005 built `Mandate` as a pure Pydantic
+model (`agentiam-core` has zero I/O, `ENGINEERING-RULES.md` rule 3); no `mandates`,
+`tasks`, or `principals` SQL table exists anywhere in the repository, and no ticket in `PLAN.md`
+§9 yet owns creating them — mandate persistence is narrated in `PLAN.md` line 284 ("the
+issuance service ... creates the mandate in the ledger") but is not itself a numbered ticket.
+Building a minimal `mandates` table to satisfy the FK would mean inventing a schema for a table
+this ticket does not otherwise need, ahead of the ticket that actually owns it, and risking a
+second migration to reshape it later. `budgets.mandate_id` is `UUID NOT NULL`, indexed for
+lookup by the `UNIQUE(mandate_id, dimension)` constraint (Postgres can use a composite index's
+leading column), but unconstrained by a `REFERENCES` clause.
+
+**Consequences:** A budget row can be created against a `mandate_id` that was never issued;
+nothing in the schema catches it (`docs/STATUS.md` §3, gap 7). This is a real gap, not a
+theoretical one, and it is closed by whichever ticket first persists mandates — at that point
+the FK should be added in a follow-up migration, not deferred again. Until then, the pool
+invariant itself (`committed + leased <= total`, this ticket's actual acceptance bar) does not
+depend on the FK existing: it is a property of one row, not a join.
+
+`leases` and `reservations` will each need their own `CHECK` constraints when T-013 and T-014
+add them (spec 04 §5, guards G2/G3), and by the same reasoning, each should be added by the
+ticket that implements the operations that would otherwise leave the guard untested.

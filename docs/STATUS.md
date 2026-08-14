@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-011.
+**Last updated:** after T-012.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | M1 complete · **M2 code complete**, specs 05–09 outstanding |
-| **Tickets** | 10 done · 43 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 705 passing |
+| **Milestone** | M1, M2 complete · **M3 in progress** (T-012 done), specs 05–09 outstanding |
+| **Tickets** | 11 done · 42 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 740 collected (730 in `make test`; 10 `integration`, need Docker) |
 | **Coverage** (`agentiam-core`, `agentiam-sdk`) | 100% statements · 99% branches |
 | **CI** | green — lint/types/tests, core purity, compose health |
 | **Specs** | 4 of 9 written |
-| **ADRs** | 13 |
+| **ADRs** | 14 |
 
 ---
 
@@ -38,13 +38,14 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-008 | `caveats.py` — DSL to Datalog + conformance suite | `1bfa35a` |
 | T-009 | `attenuation.py` — `narrows()` + invariant properties | `ff7bb5e` |
 | — | `README.md`, `JOURNAL.md`, `STATUS.md` | `e42b0ac` |
-| T-011 | SDK: identity propagation, `attenuate()`, `@requires_scope`, **TM-24** | — |
+| T-011 | SDK: identity propagation, `attenuate()`, `@requires_scope`, **TM-24** | `66f12cb` |
+| T-012 | `budgets` table + Alembic migration, DB `CHECK` for the pool invariant, testcontainers | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-012…T-017** | Budget schema, lease operations, invariant checker, sibling budgets | M3 |
+| **T-013…T-017** | Lease operations (ACQUIRE/RELEASE/REAP, RESERVE/COMMIT), invariant checker, sibling budgets | M3 |
 | T-018…T-023 | PEP, decision pipeline, lease pool, **end-to-end thin slice** | M4 |
 | T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
 | T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
@@ -88,6 +89,7 @@ Real debt, not speculation. Each has a home.
 | 4 | **`mutmut` not yet run.** T-009 asks for ≤10% surviving mutants on `attenuation.py` and `caveats.py` | Coverage says the lines run; mutation says the assertions bite. Untested claim | M7, one run (ROADMAP Part 1) |
 | 5 | **Specs 05–09 unwritten** | Their tickets cannot start spec-first, which is the rule that caught seven design errors | M2 tail / M5 |
 | 6 | **A1 re-verification is manual.** The security rests on biscuit scoping block facts; nothing fails if a library upgrade changes it | Silent collapse of INV-1 on a dependency bump | Should become a test — see §4 |
+| 7 | **`budgets.mandate_id` carries no foreign key.** No `mandates` SQL table exists yet — T-005 built `Mandate` as a pure Pydantic model, no persistence (ADR-014) | A budget row can reference a mandate id that was never issued; nothing in the schema catches it | Whichever ticket first persists mandates (issuance service, `PLAN.md` §8 — not yet its own ticket) |
 
 ---
 
