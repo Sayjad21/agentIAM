@@ -525,6 +525,13 @@ class Mandate(BaseModel):
 
 A thin, typed Python DSL that compiles to biscuit Datalog. The DSL exists so that the *narrowing check* is decidable in our code; raw Datalog is not.
 
+> **Superseded in detail by [`docs/specs/02-caveat-language.md`](specs/02-caveat-language.md) (T-003).**
+> Two additions the table below does not capture, both measured: the choice between `check if`
+> and `reject if` depends on whether the constrained fact is always present, and getting it
+> wrong makes a caveat either deny unrelated calls or fail open (ADR-007). And `RequiresApproval`
+> cannot be a Datalog clause at all, because Datalog has no `escalate` — it is a block fact
+> evaluated in `agentiam-core` (ADR-008). `RateLimit` is deferred, leaving 8 types.
+
 | Caveat | Form | Semantics |
 |---|---|---|
 | `ScopeSubset` | `scopes ⊆ S` | Allowed scopes limited to `S` |
@@ -552,6 +559,13 @@ class Caveat(Protocol):
 ### 6.3 Attenuation semantics + invariants
 
 **Definition.** `attenuate(T, C) → T'` appends caveat set `C` to token `T`, producing `T'`.
+
+> **Elaborated in [`docs/specs/03-attenuation.md`](specs/03-attenuation.md) (T-003).** The ten
+> invariants below are unchanged. The spec adds the `narrows()` partial order per caveat type,
+> counterexamples for INV-1/INV-5/INV-9 that the T-009 generators must be able to produce, and
+> one clarification worth stating plainly: the security boundary is biscuit's append-only
+> structure, not `narrows()`. A `narrows()` bug yields a misleading token, not an
+> over-privileged one.
 
 **Invariants (these become property tests, and they are the formal core of the paper):**
 

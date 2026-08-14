@@ -191,3 +191,76 @@ Two live consequences remain. The 4 KB warning fires at depth 6, so that path is
 EC-T11 must test it. And the full `Authorization` header at depth 5 approaches nginx's 4 KB
 default `large_client_header_buffers` line size — T-018 must raise it deliberately rather than
 discovering it at depth 6.
+
+---
+
+## ADR-007 — `check if` for mandatory facts, `reject if` for optional ones
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `docs/specs/02-caveat-language.md`, T-008, T-019
+
+**Context:** Biscuit offers two clause forms, and they behave oppositely when the fact they
+constrain is absent. `check if BODY` passes only if BODY has a solution, so it **denies** when
+the fact is missing. `reject if BODY` fails only if BODY has a solution, so it **passes** when
+the fact is missing. Both are supported by `biscuit-python`; this was verified before choosing.
+
+Picking one form for all caveats breaks half of them in opposite directions:
+
+- As `check if`, an `ArgPredicate` on `payment.amount` denies an `invoice:read` call, which
+  carries no such argument. Measured: exactly that happened.
+- As `reject if`, a `TimeWindow` becomes vacuous whenever the verifier omits `time()` — the
+  token would simply never expire. This is the worse failure, because it fails *open*.
+
+**Decision:** The form follows the fact, not the caveat.
+
+- Caveats constraining facts the verifier supplies on **every** request — `operation`,
+  `requested(dimension, …)` for every dimension, `current_depth`, `request_intent`, `time` —
+  compile to `check if`.
+- Caveats constraining facts that may legitimately be **absent** — `tool`, `arg` — compile to
+  `reject if`.
+
+`ToolAllow` is the deliberate exception: it constrains the optional `tool` fact but uses
+`check if`, because a call with no tool identity must not satisfy an allow-list. Fail closed.
+
+**Consequences:** The two forms must not be mixed up per caveat type, so T-008's table-driven
+tests must cover the absent-fact case for every type — not just the present-and-passing and
+present-and-failing cases, which is the natural thing to write and would miss the entire class
+of bug. Verified as sound: `reject if` is vacuous when its fact is absent, binding when present,
+and a later block adding a benign `tool` fact cannot escape an earlier block's `reject`.
+
+---
+
+## ADR-008 — `RequiresApproval` is a block fact evaluated in Python, not a Datalog clause
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `docs/specs/02-caveat-language.md` §4.9, T-008, T-019, T-037
+
+**Context:** `RequiresApproval` must produce the outcome `escalate` — raise the decision to a
+human rather than allow or deny it. A biscuit authorizer has no third answer; it returns
+authorized or not. Encoding `RequiresApproval` as a check would turn every escalation into a
+silent denial, which contradicts both `PLAN.md` §6.6 ("escalation raised to a human, not a
+silent block") and demo Beat 6.
+
+**Decision:** `RequiresApproval` compiles to a **fact** (`requires_approval("scope")`) rather
+than a clause. The PEP reads block sources via `Biscuit.block_source(i)`, reconstructs the
+caveat set in `agentiam-core`, and evaluates it there. Verified: block sources are readable for
+every block in a chain.
+
+**Consequences:** This is not a weaker guarantee, and the reason is worth being precise about.
+The fact cannot be removed, because blocks are append-only and signed. It also cannot influence
+a Datalog decision in either direction: `authorizer.query` returns authority-block facts but
+**nothing** for block facts — verified — so block facts are inert to the Datalog engine. That
+same scoping is what makes fact injection unable to widen authority (ADR-005), and here it is
+what forces evaluation into Python.
+
+The cost is that `agentiam-core` now needs a caveat evaluator that agrees with the Datalog
+compilation on allow/deny for every input. That agreement is a **security property**, not a
+nicety: the PEP trusts Datalog for the decision and the evaluator for the explanation, so a
+divergence means a decision record naming a caveat that did not actually fire. T-008 must
+enforce it with a conformance test over a generated corpus.
+
+A second, welcome consequence: the same evaluator is what lets a decision record name the exact
+failing caveat, since biscuit reports only *that* authorization failed, not which clause caused
+it.
