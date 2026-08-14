@@ -264,3 +264,69 @@ enforce it with a conformance test over a generated corpus.
 A second, welcome consequence: the same evaluator is what lets a decision record name the exact
 failing caveat, since biscuit reports only *that* authorization failed, not which clause caused
 it.
+
+---
+
+## ADR-009 — Commits against a non-active lease are rejected and flagged, not applied
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `docs/specs/04-lease-protocol.md` §11, T-013, T-014, T-047
+
+**Context:** `RELEASE`, `REAP`, and `REVOKE` each return a lease's full `outstanding` amount to
+the pool. The pseudocode in `PLAN.md` §6.4 does not say what happens when a `LEDGER_COMMIT` for
+that lease arrives *afterwards* — a buffered batch from a crashed PEP, or a partitioned PEP
+reconnecting. Applied normally, it decrements `leased` a second time for budget that was already
+returned.
+
+This was found by model-checking the protocol before writing the spec, not by reasoning about
+it. Random interleavings drove `leased` negative in 55 of 400 runs. It is not a corner case: any
+`REAP` racing an in-flight commit reaches it, which is precisely the crash scenario the protocol
+exists to survive.
+
+**Decision:** `LEDGER_COMMIT` against a lease whose state is not `active` MUST be rejected. It
+MUST NOT modify `committed` or `leased`. It MUST be recorded as a reconciliation anomaly with
+the lease id, amount, and terminal state. The anomaly count appears on the budget dashboard
+(T-047) and must be zero in a clean chaos run.
+
+**Consequences:** A spend that really happened is not recorded against the budget. That is the
+cost, and it is the right one: the pool invariant is preserved by construction and the
+divergence is surfaced loudly rather than silently corrupting the ledger. AgentIAM emits
+settlement instructions rather than moving money (`PLAN.md` §1.4), so an anomaly is a
+reconciliation item, not a lost payment.
+
+The stranded-lease window is what makes this reachable at all, so the two limitations are
+linked: shortening `ttl` reduces stranded budget but increases the rate of late commits. Both
+are stated in spec 04 §14 with their bounds.
+
+---
+
+## ADR-010 — Idempotency protects the books, not the pool
+
+**Date:** 2026-08-14
+**Status:** accepted
+**Affects:** `docs/specs/04-lease-protocol.md` §5.1, T-014 (P-12)
+
+**Context:** `PLAN.md` §6.4 lists idempotency-by-`reservation_id` among the correctness
+properties of the lease protocol, alongside the safety argument for `Σ spend ≤ total`. The
+model check contradicted the implied grouping: with replay enabled and idempotency disabled,
+400 interleavings produced **zero** violations of `committed + leased ≤ total`.
+
+The reason is that a replayed commit does `committed += a; leased -= a`, which conserves
+`committed + leased` exactly. The pool cannot notice.
+
+**Decision:** Treat idempotency as an **accounting** guarantee and test it as one. P-12 asserts
+that `committed`, `lease.settled`, and `outstanding` equal their single-delivery values after
+duplicate delivery — not that the safety invariant survives.
+
+**Consequences:** A P-12 written against the safety invariant, which is the natural thing to
+write given how §6.4 groups these properties, would pass while the books were threefold wrong.
+Measured on one real spend of 30 delivered three times: `committed` reaches 90, `outstanding`
+falls to 10. The mandate looks exhausted early, the PEP loses budget it never used, and the
+audit ledger records spend that did not happen. For a system whose pitch is chain of custody
+that is not a lesser failure than overspend, only a different one.
+
+Related: the clamp to `lease.outstanding` (spec 04 G2) is what prevents a *missing* idempotency
+guard from becoming a safety bug — once `outstanding` reaches zero, an unclamped replay drives
+`leased` negative on the next delivery. Measured. The two guards are not redundant; they cover
+adjacent failures.

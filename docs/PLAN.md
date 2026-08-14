@@ -590,6 +590,17 @@ class Caveat(Protocol):
 
 **Problem.** Enforce a global limit (`Σ spend ≤ mandate`) without a network round-trip on every call, under concurrent sub-agents, PEP crashes, and network partition.
 
+> **Superseded in detail by [`docs/specs/04-lease-protocol.md`](specs/04-lease-protocol.md) (T-004).**
+> The protocol below is correct in shape. Model-checking it before implementation found one gap
+> and one mis-grouping. The gap: a `LEDGER_COMMIT` arriving after `RELEASE`/`REAP`/`REVOKE`
+> decrements `leased` a second time for budget already returned — `leased` went negative in 55
+> of 400 random interleavings. Such commits are now rejected and flagged for reconciliation
+> (ADR-009). The mis-grouping: idempotency is listed with the safety properties, but replay
+> conserves `committed + leased` exactly and cannot break the pool — it corrupts the *books*
+> instead, threefold in the measured case (ADR-010). P-12 must assert accounting, not safety.
+> The spec also fixes the `lease.amount` / `lease.remaining` ambiguity below by splitting the
+> ledger's `granted`/`settled` from the PEP's `remaining_local`.
+
 **Design: lease-based allocation with reservation two-phase spend.**
 
 Ledger state per `(mandate_id, dimension)`:
