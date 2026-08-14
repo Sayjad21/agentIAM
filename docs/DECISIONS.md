@@ -72,3 +72,46 @@ restated as a single-point-of-failure risk. The mitigation is unchanged and alre
 every contract is specified in writing before implementation, and the property tests on
 attenuation plus the invariant checker serve as the standing second pair of eyes on the two
 components where a silent bug would be fatal.
+
+---
+
+## ADR-003 — Windows development host; `make.ps1` mirrors the Makefile
+
+**Date:** 2026-08-14
+**Status:** accepted
+
+**Context:** Development happens on Windows 11. `make` is not available there, but the Makefile
+is a specified deliverable of T-001 and CI runs on `ubuntu-latest`, where it works natively.
+Three options were considered: install a Windows `make` port (adds a machine-specific setup
+step and a second `make` dialect to reason about); drop the Makefile and drive everything
+through `uv run` directly (loses the single documented entry point, and CI diverges from local);
+or keep the Makefile authoritative and add a thin Windows shim.
+
+**Decision:** The Makefile stays authoritative and is what CI invokes. `make.ps1` mirrors its
+targets one-for-one for local use on Windows, so `.\make.ps1 check` and `make check` do the same
+thing.
+
+**Consequences:** The two files must be kept in step by hand — a target added to one and not the
+other is a real, if small, drift risk. Accepted because the shim is short and target changes are
+rare. The shim is a convenience wrapper only: it must never contain logic that the Makefile
+lacks, or CI stops being the source of truth about whether the project builds.
+
+---
+
+## ADR-004 — Ruff does not format Markdown
+
+**Date:** 2026-08-14
+**Status:** accepted
+
+**Context:** Ruff 0.16 formats Python code blocks embedded in Markdown files. Applied to
+`docs/`, it rewrites the illustrative Python in `PLAN.md` §6 and §7 — collapsing the aligned
+trailing comments on the `Budget` and `DecisionRecord` models, among others.
+
+**Decision:** `extend-exclude = ["*.md"]` in the Ruff configuration.
+
+**Consequences:** Code blocks in documentation are not format-checked, so they can drift from
+the style of the real code. That is the right trade: the blocks in `PLAN.md` are specification
+prose, chosen for readability, and they are never compiled. A formatter rewriting a
+specification to satisfy a line-length rule is the tool overruling the spec. The
+milestone spec-drift check (`ENGINEERING-RULES.md` §5) is what keeps documented code honest,
+not the formatter.

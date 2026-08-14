@@ -32,9 +32,51 @@ AgentIAM addresses three things nobody currently enforces correctly:
 
 ## Status
 
-**Pre-implementation.** The specification is complete; the build has not started.
+**Milestone 1 — Foundation, in progress.** The specification is complete. The workspace,
+tooling, and CI are in place (T-001); the protocol specs and domain models are next.
 
 Work proceeds ticket by ticket against `docs/PLAN.md`, sequenced by `docs/ROADMAP.md`.
+
+---
+
+## Quickstart
+
+Requires [uv](https://docs.astral.sh/uv/), Python 3.12, and Docker.
+
+```bash
+uv sync                  # create the virtualenv and install the workspace
+uv run pre-commit install
+
+make up                  # start Postgres and Redis, wait for healthy
+make check               # lint, type check, test — everything CI runs
+make down
+```
+
+On Windows, `make` is unavailable; `make.ps1` mirrors every target (ADR-003):
+
+```powershell
+.\make.ps1 up
+.\make.ps1 check
+```
+
+`make help` lists the rest.
+
+### Layout
+
+```
+packages/
+  agentiam-core/          pure domain logic — zero I/O, the correctness core
+  agentiam-sdk/           what agent developers import
+  agentiam-pep/           the enforcement point (hot path)
+  agentiam-controlplane/  issuance, ledger, policy, revocation, audit, console
+  agentiam-demo/          reference procurement agent, stub tools, demo scenarios
+tests/                    unit · property · integration · e2e · security · chaos · perf
+docs/                     specification, roadmap, engineering rules, ADRs
+```
+
+`agentiam-core` is I/O-free by contract, enforced statically on every CI run by
+[`tests/unit/test_core_purity.py`](tests/unit/test_core_purity.py). Every correctness claim
+this project makes is a claim about that package.
 
 ---
 

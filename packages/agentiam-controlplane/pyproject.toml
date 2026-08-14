@@ -1,0 +1,16 @@
+[project]
+name = "agentiam-controlplane"
+version = "0.1.0"
+description = "AgentIAM control plane: issuance, ledger, policy, revocation, audit, console."
+requires-python = ">=3.12,<3.13"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "agentiam-core",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentiam_controlplane"]

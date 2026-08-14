@@ -1,0 +1,58 @@
+# AgentIAM — development infrastructure.
+#
+# Services are introduced per-ticket rather than all at once (ADR-001). Right now that
+# means Postgres and Redis only. Ollama and Keycloak arrive in M5, the observability
+# stack in M6 via docker-compose.observability.yml.
+#
+#   docker compose up -d --wait     # or: make up
+#
+# NFR-8 (full-stack cold start under 90 s) is measured in M6/M7, once the stack is
+# complete. Measuring it against a two-service subset would be measuring nothing.
+
+name: agentiam
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentiam-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentiam}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentiam}
+      POSTGRES_DB: ${POSTGRES_DB:-agentiam}
+      # Money is NUMERIC(20,4); keep the locale deterministic so ordering and
+      # formatting never depend on the host.
+      LANG: C
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentiam} -d ${POSTGRES_DB:-agentiam}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentiam-redis
+    restart: unless-stopped
+    # Leases and revocation gossip live here. appendonly keeps a restart from silently
+    # dropping revocation state during a demo (failure drill F-3).
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+volumes:
+  postgres-data:
+  redis-data:

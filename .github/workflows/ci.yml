@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  quality:
+    name: Lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync workspace
+        run: uv sync
+
+      - name: Lint
+        run: |
+          uv run ruff check --output-format=github .
+          uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Test
+        run: >
+          uv run pytest
+          -m "not integration and not e2e and not chaos and not perf"
+          --cov --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  purity:
+    name: agentiam-core is I/O-free
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync
+
+      # Run separately from the main suite so a purity violation is unmissable in the
+      # checks list rather than buried in a long test log. PLAN.md §5.
+      - name: Check core purity
+        run: uv run pytest tests/unit/test_core_purity.py -v
+
+  infrastructure:
+    name: Compose reaches healthy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Acceptance criterion for T-001. Also the baseline for NFR-8, which is measured
+      # against the complete stack in M6/M7 rather than this subset.
+      - name: Bring up infrastructure, timed
+        run: |
+          start=$(date +%s)
+          docker compose up -d --wait --wait-timeout 90
+          elapsed=$(( $(date +%s) - start ))
+          echo "Cold start: ${elapsed}s (T-001 budget: 90s)"
+          echo "### Cold start: ${elapsed}s / 90s budget" >> "$GITHUB_STEP_SUMMARY"
+          docker compose ps
+
+      - name: Verify services answer
+        run: |
+          docker compose exec -T postgres pg_isready -U agentiam -d agentiam
+          docker compose exec -T redis redis-cli ping
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

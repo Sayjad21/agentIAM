@@ -1,0 +1,142 @@
+[project]
+name = "agentiam"
+version = "0.1.0"
+description = "Identity, authorization, and spend control for AI agents."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "agentiam-controlplane",
+    "agentiam-core",
+    "agentiam-demo",
+    "agentiam-pep",
+    "agentiam-sdk",
+]
+
+# The workspace root is not itself a distributable package.
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+agentiam-controlplane = { workspace = true }
+agentiam-core = { workspace = true }
+agentiam-demo = { workspace = true }
+agentiam-pep = { workspace = true }
+agentiam-sdk = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.112",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-benchmark>=5.1",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["packages/*/src", "tests", "scripts"]
+# Ruff formats Python code blocks inside Markdown. The code in docs/ is illustrative
+# specification, with alignment chosen for readability — it is not compiled and must not
+# be rewritten to satisfy a formatter.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "ANN",  # flake8-annotations
+    "S",    # flake8-bandit
+    "A",    # flake8-builtins
+    "RUF",  # ruff-specific
+    "D",    # pydocstyle — ENGINEERING-RULES: docstrings on all public functions
+]
+ignore = [
+    "D203",  # conflicts with D211
+    "D213",  # conflicts with D212
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use assert, and need no module/class docstring ceremony beyond the module one.
+"tests/**" = ["S101", "D100", "D101", "D102", "D103", "D104"]
+"scripts/**" = ["S101"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "agentiam_controlplane",
+    "agentiam_core",
+    "agentiam_demo",
+    "agentiam_pep",
+    "agentiam_sdk",
+]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+show_error_codes = true
+disallow_any_unimported = true
+# `scripts/` joins this list once it holds source (T-016 adds the first one). mypy errors
+# on an empty directory, so listing it now would fail the build for no reason.
+files = ["packages", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+# Test bodies stay strict, but pytest fixtures are noisy about decorator types.
+disallow_untyped_decorators = false
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
+markers = [
+    "integration: requires Postgres and Redis to be running",
+    "e2e: requires the full stack",
+    "security: red-team / adversarial test (PLAN.md §12)",
+    "chaos: fault-injection test (PLAN.md §13)",
+    "perf: benchmark or load test (PLAN.md §13.1)",
+]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["packages"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
