@@ -5,12 +5,18 @@ description = "Pure domain logic for AgentIAM: tokens, caveats, attenuation, bud
 requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
+    "biscuit-python>=0.4",
     "pydantic>=2.9",
 ]
 
 # NOTE: this package is I/O-free by contract (PLAN.md §5, ENGINEERING-RULES.md rule 3).
 # Enforced by tests/unit/test_core_purity.py. Do not add a dependency here that performs
 # network, database, filesystem, or clock access.
+#
+# biscuit-python is permitted and is locked by PLAN.md §4.1 ("Do not substitute"). It is
+# crypto and serialization only: no network, no database, no filesystem, no clock. Key
+# generation draws OS entropy, which is why `generate_keypair()` is the single explicitly
+# nondeterministic function in the package and is never called implicitly.
 
 [build-system]
 requires = ["hatchling"]

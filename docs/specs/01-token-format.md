@@ -136,7 +136,14 @@ Minted by the issuance service. The only block signed with the root keypair.
 | `principal(sub)` | 1 | yes | The human who approved it |
 | `intent(hash)` | 1 | yes | SHA-256 of the canonicalized task description |
 | `issued_at(ts)` | 1 | yes | Mint time |
+| `not_before(ts)` | 1 | yes | Start of the validity window |
+| `expires_at(ts)` | 1 | yes | End of the validity window, **exclusive** |
 | `max_depth(n)` | 1 | yes | Delegation cap; `n` MUST be ≤ 8 |
+
+> `not_before` and `expires_at` appear as **facts as well as checks**. The checks enforce the
+> window; the facts let a verifier read it back. Without them a verifier can only learn *that*
+> authorization failed, not whether the token was expired or not yet valid — and T-007 requires
+> distinguishing `TOKEN_EXPIRED` from `TOKEN_NOT_YET_VALID`. Two extra facts, ~60 bytes.
 
 ### 5.2 Facts — the grant
 
@@ -156,8 +163,8 @@ check if operation($op), scope($op);
 check if current_depth($d), $d <= 8;
 check if request_intent($h), intent($h);
 check if requested($dim, $v), budget($dim, $max), $v <= $max;
-check if time($t), $t >= 2026-08-14T11:45:00Z;   // not_before
-check if time($t), $t <= 2026-08-14T12:00:00Z;   // expires_at
+check if time($t), $t >= 2026-08-14T11:45:00Z;   // not_before, inclusive
+check if time($t), $t <  2026-08-14T12:00:00Z;   // expires_at, EXCLUSIVE
 ```
 
 | Check | Enforces | Invariant |
@@ -169,10 +176,13 @@ check if time($t), $t <= 2026-08-14T12:00:00Z;   // expires_at
 | `not_before` / `expires_at` | validity window | INV-9 |
 
 Expiry is **exclusive at the boundary**: a token whose `expires_at` equals the verification
-instant MUST be rejected (EC-T06). `$t <= expires_at` with the verifier supplying the current
-instant gives inclusive behaviour, so the verifier MUST supply `time()` such that the boundary
-rejects — in practice, compare with `<` in the PEP's own pre-check and treat the Datalog check
-as the backstop. T-007 owns making this exact and testing both sides of the boundary.
+instant MUST be rejected (EC-T06). Biscuit supports a strict `<` on date terms, so the check is
+written that way and the boundary is enforced by the token itself — no Python pre-check is
+needed as a backstop.
+
+Verified across the boundary: one second before expiry authorizes, *exactly* `expires_at` does
+not, one second after does not. `not_before` is inclusive by the same measurement — exactly
+`not_before` authorizes.
 
 ---
 
@@ -467,7 +477,7 @@ None of these touch the caveat language, the attenuation semantics, or the lease
 
 | # | Question | Owner |
 |---|---|---|
-| 1 | Exact boundary handling for `expires_at` — Datalog `<=` vs. a strict PEP pre-check | T-007 |
+| ~~1~~ | ~~Exact boundary handling for `expires_at`~~ — **resolved in T-007**: Datalog supports a strict `<` on dates, so the token enforces the exclusive boundary itself (§5.3) | done |
 | 2 | Root key rotation: how many keys in the accepted set, and for how long (EC-T05) | T-007 |
 | 3 | Does `ArgPredicate` need request facts beyond §7 (e.g. `arg("payment.amount", v)`) | T-003 |
 | 4 | Whether `role` should be constrained to an enum for console rendering | T-011 |

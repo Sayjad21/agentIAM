@@ -88,6 +88,54 @@ class AttenuationError(AgentIAMError):
     """
 
 
+class TokenError(AgentIAMError):
+    """A token could not be minted or verified.
+
+    Every subclass fixes its own `reason_code`, so a caller that catches `TokenError` can
+    build a decision record without a lookup table (P-18).
+    """
+
+
+class MalformedTokenError(TokenError):
+    """The token could not be parsed at all: absent, empty, or not valid base64."""
+
+    reason_code = ReasonCode.MALFORMED_REQUEST
+
+
+class InvalidSignatureError(TokenError):
+    """The signature chain does not verify against any accepted root key.
+
+    Covers a forged block, a flipped bit, truncated bytes, and a token minted by a key
+    that is not in the accepted set (EC-T02…EC-T05).
+    """
+
+    reason_code = ReasonCode.TOKEN_INVALID_SIGNATURE
+
+
+class TokenExpiredError(TokenError):
+    """`now` is at or past `expires_at`. The boundary is exclusive (EC-T06)."""
+
+    reason_code = ReasonCode.TOKEN_EXPIRED
+
+
+class TokenNotYetValidError(TokenError):
+    """`now` is before `not_before` (EC-T07)."""
+
+    reason_code = ReasonCode.TOKEN_NOT_YET_VALID
+
+
+class TokenTooLargeError(TokenError):
+    """The token exceeds the hard size limit (spec 01 §9, EC-T11)."""
+
+    reason_code = ReasonCode.TOKEN_TOO_LARGE
+
+
+class DepthExceededError(TokenError):
+    """The chain is deeper than the mandate's `max_depth` (INV-6, EC-T10)."""
+
+    reason_code = ReasonCode.DEPTH_EXCEEDED
+
+
 class CaveatError(AgentIAMError):
     """A caveat is malformed, or two caveats were compared across kinds.
 
