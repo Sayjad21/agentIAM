@@ -134,7 +134,7 @@ infrastructure, which is why it is listed separately.
 | T-003 | `docs/specs/02-caveat-language.md`, `03-attenuation.md` | 8 caveat types with Datalog mapping; `narrows()` semantics per type; INV-1…INV-10 stated formally; ≥3 counterexamples each for INV-1, INV-5, INV-9 |
 | T-004 | `docs/specs/04-lease-protocol.md` | All 7 operations in pseudocode; lease state machine; safety and liveness arguments written out; partition behaviour; clock skew; idempotency; explicit known-limitations section |
 | T-005 | `models.py`, `errors.py`, `hashing.py` — frozen Pydantic models, canonical JSON | 100% branch coverage on `models.py`; property test: canonical serialization stable across dict ordering and Unicode normalization; float rejected for every money field |
-| T-006 | `docs/threat-model.md` | ≥12 STRIDE threats, each mapped to the test id that covers it |
+| T-006 | `docs/threat-model.md` | ≥12 STRIDE threats, each mapped to the test id that covers it. Delivered 23: 15 mitigated, 5 partial, 3 accepted risks, plus 4 coverage gaps routed to T-008/T-013/T-014/T-019/T-051 |
 
 **Exit gate:** compose healthy on Postgres + Redis · `make test` and CI green · four specs
 written and read back against §6 · canonical-serialization property test passing.
@@ -274,7 +274,7 @@ runnable · `make demo-reset` under 10 s · Grafana showing real decisions and b
 |---|---|---|
 | T-053 | Locust profiles, 100 and 500 RPS | **Record NFR-1 (in-process decision) and NFR-2 (proxy overhead) separately and label them.** Conflating them is the single fastest way to lose a technical judge. Commit to `docs/benchmarks/` |
 | T-052 | 5 chaos scenarios: CH-1, CH-3, CH-4, CH-8, CH-10 | Invariant checker running throughout every run; commit the results |
-| T-051 | 15–20 red-team tests (A-01…A-09, A-10…A-13, A-17…A-18, A-23…A-26, A-28…A-30) | Each recorded as mitigated / partially mitigated / accepted risk. Write the rationale for the ~3 accepted risks carefully — that honesty is what makes the other 17 believable |
+| T-051 | 15–20 red-team tests (A-01…A-09, A-10…A-13, A-17…A-18, A-23…A-26, A-28…A-30) **plus TM-19…TM-22** from `threat-model.md` §6 | Each recorded as mitigated / partially mitigated / accepted risk. Write the rationale for the 3 accepted risks carefully — that honesty is what makes the other 20 believable. TM-19…TM-22 were found by measurement rather than brainstorming, so treat them as additions, not substitutions |
 | T-054 | bandit, pip-audit, trivy, gitleaks | Clean, or waived with a documented reason |
 | T-019 re-run | Final NFR-1 number | Recorded |
 | — | One `mutmut` run on `attenuation.py`, `caveats.py` | Keep the output as evidence; do not iterate |
