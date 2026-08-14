@@ -1,0 +1,172 @@
+# Status
+
+What is built, what remains, and what is worth improving.
+
+**Last updated:** after T-009 (`ff7bb5e`).
+Keep this current at every milestone boundary — a stale status page is worse than none.
+
+---
+
+## 1. At a glance
+
+| | |
+|---|---|
+| **Milestone** | M1 complete · M2 at 3 of 4 tickets |
+| **Tickets** | 9 done · 44 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 532 passing |
+| **Coverage** (`agentiam-core`) | 100% statements · 99% branches |
+| **CI** | green — lint/types/tests, core purity, compose health |
+| **Specs** | 4 of 9 written |
+| **ADRs** | 11 |
+
+---
+
+## 2. Ticket ledger
+
+### Done
+
+| Ticket | Delivered | Commit |
+|---|---|---|
+| — | Repository bootstrap, docs reworked for solo execution | `b46f8cc` |
+| T-001 | uv workspace, 5 packages, CI, compose, **core purity guard** | `4a0367f` |
+| T-002 | `specs/01-token-format.md` — measured, not derived | `872f375` |
+| T-003 | `specs/02-caveat-language.md`, `specs/03-attenuation.md` | `f26e10c` |
+| T-004 | `specs/04-lease-protocol.md` — model-checked | `7a9e9a3` |
+| T-005 | `models.py`, `errors.py`, `hashing.py` | `7122cf0` |
+| T-006 | `threat-model.md` — 23 STRIDE threats | `c565367` |
+| T-007 | `tokens.py` — biscuit mint and verify | `a073b3e` |
+| T-008 | `caveats.py` — DSL to Datalog + conformance suite | `1bfa35a` |
+| T-009 | `attenuation.py` — `narrows()` + invariant properties | `ff7bb5e` |
+
+### Next
+
+| Ticket | Delivers | Milestone |
+|---|---|---|
+| **T-011** | SDK: `contextvars` propagation, `attenuate()`, `@requires_scope` | M2 — last |
+| T-012…T-017 | Budget schema, lease operations, invariant checker, sibling budgets | M3 |
+| T-018…T-023 | PEP, decision pipeline, lease pool, **end-to-end thin slice** | M4 |
+| T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
+| T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
+| T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7 |
+
+**Also outstanding from M2:** specs `05`–`09` (policy, drift, revocation, audit, decision
+record). They gate the tickets that implement them, not T-011.
+
+### Deferred — 8 tickets
+
+Each is a genuine roadmap item with a resumption trigger, recorded in `PLAN.md` §21. Stating
+them explicitly is part of the submission's honesty story, not an omission to hide.
+
+| Ticket | Why | Resumption trigger |
+|---|---|---|
+| T-010 | Token reference for oversized chains. **Measured unreachable**: at `max_depth = 8` a token is 4,940 base64 chars — 60% of the 8 KB limit (ADR-006) | `max_depth` above ~16 |
+| T-015 | Adaptive lease sizing. Fixed leases behave identically for the demo; the algorithm is specified in spec 04 §12 | Production traffic with variable rate |
+| T-034 | Drift dataset — 2,000+ labelled pairs, weeks of irreducible human labelling | Research phase |
+| T-035 | Calibrated ML drift classifier. Rule-based v0 gives the same demo experience | After T-034 |
+| T-041 | MCP streamable-HTTP gateway. The HTTP PEP proves the full pipeline; MCP is the adoption path | Adoption push |
+| T-042 | MCP scope extractor | With T-041 |
+| T-044 | SPIRE workload identity. mTLS achieves the same demo-visible outcome | Enterprise SPIFFE requirement |
+| T-060 | Academic paper draft. BIIN scores the demo and report, not a publication | Post-BIIN, USENIX/CCS workshop |
+
+**Reduced but in scope:** T-008 (8 caveat clauses, `RateLimit` dropped), T-024 (`CedarEngine`
+only), T-049 (2 dashboards), T-051 (15–20 attacks), T-052 (5 chaos scenarios), T-053 (2 RPS
+profiles), T-061 (public repo, no traction push).
+
+---
+
+## 3. Known gaps in what is already built
+
+Real debt, not speculation. Each has a home.
+
+| # | Gap | Impact if left | Where it lands |
+|---|---|---|---|
+| 1 | **TM-19…TM-22 have no tests.** Four threats found by measurement are mitigated in the specs but unverified in code | The four sharpest failure modes are defended only by prose | T-008, T-013, T-014, T-019, T-051 |
+| 2 | **No Datalog→caveat parser.** `attenuate()` checks proposed caveats against the authority grant, but caveats added by *intermediate* blocks are not recoverable from a token | A wider *declared* caveat slips through as a misleading value rather than an error. Cannot widen actual authority — biscuit prevents that — but the console cannot show a true effective bound either | Needed by T-019 (naming the failing caveat) and T-045 (identity tree) |
+| 3 | **No LICENSE file.** README and every package declare Apache-2.0; the text is absent | Weakens the §14.4 IP claim for a submission judged on IP ownership | Add via GitHub's license picker — verbatim text matters |
+| 4 | **`mutmut` not yet run.** T-009 asks for ≤10% surviving mutants on `attenuation.py` and `caveats.py` | Coverage says the lines run; mutation says the assertions bite. Untested claim | M7, one run (ROADMAP Part 1) |
+| 5 | **Specs 05–09 unwritten** | Their tickets cannot start spec-first, which is the rule that caught six design errors | M2 tail / M5 |
+| 6 | **A1 re-verification is manual.** The security rests on biscuit scoping block facts; nothing fails if a library upgrade changes it | Silent collapse of INV-1 on a dependency bump | Should become a test — see §4 |
+
+---
+
+## 4. Improvements worth making
+
+Not in any ticket. Ordered by value per hour.
+
+### 4.1 Pin assumption A1 with a test — **high value, ~30 minutes**
+
+The entire design rests on biscuit scoping block facts so a later block cannot widen authority.
+It was verified by hand in T-002 and is re-stated in `threat-model.md` §4 as the load-bearing
+assumption. Nothing enforces it.
+
+A dozen-line test that appends a block injecting `operation`, `scope`, `requested` and
+`current_depth` facts, and asserts it authorizes nothing it was narrowed out of, converts *"we
+checked once"* into *"CI checks every push"*. Given the project is a security submission, this
+is the highest-value missing test in the repository.
+
+### 4.2 Property-test the `to_datalog`/`evaluate` agreement — **high value, ~1 hour**
+
+The conformance suite covers 60 hand-written cases. The agreement is a security property
+(ADR-008), and the generators from T-009 already exist. Turning it into a hypothesis property
+over random caveats and contexts would search the space rather than the cases I thought of —
+exactly the move that found ADR-011.
+
+### 4.3 Extract a test-fixture module — **medium value, ~1 hour**
+
+`a_mandate()`, `ctx()` and a module-scoped keypair are duplicated across four test files with
+slight variations. `tests/fixtures/` exists and is empty. `PLAN.md` §10.4 already calls for a
+deterministic keypair fixture and a golden depth-4 chain; building them now would make the M3–M4
+integration tests cheaper to write and comparable to each other.
+
+### 4.4 Make the milestone review a script — **medium value, ~1 hour**
+
+`ENGINEERING-RULES.md` §4 and §5 define a self-review checklist and a spec-drift check. Both are
+currently discipline. Several items are mechanical — TODOs without ticket ids, deny paths not
+mapped to a reason code, floats near money, I/O in core. A `scripts/review.py` emitting the
+findings table would make the checks reliably run rather than reliably intended.
+
+### 4.5 Benchmark the decision path early — **medium value, ~2 hours**
+
+NFR-1 (p99 < 1 ms in-process) is a headline number and T-019 is where it gets measured. But
+`caveats.evaluate()` and `attenuation.narrows()` already exist. Benchmarking them now would find
+a structural latency problem while it is cheap to fix, rather than at M4 when the pipeline is
+built around them. Risk R-2 names exactly this: *if p99 > 2 ms by M8, port `decision.py` to
+Rust* — a decision far better informed early.
+
+### 4.6 CI matrix on Linux and Windows — **low value, ~30 minutes**
+
+Development is on Windows, CI runs on Linux. Two of the problems so far were platform-specific:
+the mojibake corruption and the missing `make`. The test suite is fast enough that adding a
+Windows job costs little and would catch path, encoding and line-ending issues at push time.
+
+### 4.7 Record the biscuit version in the evidence pack — **low value, ~15 minutes**
+
+Every measured claim in specs 01–03 is *"against `biscuit-python` 1.x"*. Pinning the exact
+version in `uv.lock` is already done; surfacing it next to the measurements makes them
+reproducible by a judge or a reviewer, which is the point of measuring rather than asserting.
+
+---
+
+## 5. Risks currently live
+
+From `PLAN.md` §17, with the current reading.
+
+| Risk | State |
+|---|---|
+| **R-2** Python latency undermines the story | Unmeasured. §4.5 above would de-risk it early |
+| **R-3** Lease protocol bug found late | **Reduced.** Model-checking in T-004 found one before implementation (ADR-009) |
+| **R-8** Single developer, no second reviewer | Live and structural. Mitigated by specs-first and property tests, which caught six errors review would not have |
+| **R-6** Scope creep | Holding. Every deviation so far is an ADR with a stated cost |
+| **R-1** Hyperscalers ship equivalent agent IAM | Untracked. §17 says review monthly |
+
+---
+
+## 6. What "done" looks like from here
+
+The gate that matters most is **T-023, the end-to-end thin slice** in M4: an agent with a root
+token calls a stub tool through the PEP, spends budget, is denied when exhausted, and the
+decision lands in the audit ledger.
+
+Everything before it is foundation, everything after it is surface. It is also the first point
+where the project is demonstrable — the roadmap says record a screencast there, and that advice
+is worth taking.
