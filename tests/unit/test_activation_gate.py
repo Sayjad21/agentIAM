@@ -148,9 +148,7 @@ FAILING_CASE = PolicyTestCase(
 class TestActivationGateAcceptsCriterion:
     """The acceptance criterion: a bundle cannot be activated while any test fails (409)."""
 
-    def test_activation_succeeds_when_all_tests_pass(
-        self, key: Ed25519PrivateKey
-    ) -> None:
+    def test_activation_succeeds_when_all_tests_pass(self, key: Ed25519PrivateKey) -> None:
         cache, _ = a_cache(key)
         bundle = a_bundle()
         sig = sign_bundle(bundle, key)
@@ -189,9 +187,7 @@ class TestActivationGateAcceptsCriterion:
         assert cache.serial == 1
         assert cache.bound(a_principal()).evaluate(ctx()).allowed
 
-    def test_activation_failure_reports_which_tests_failed(
-        self, key: Ed25519PrivateKey
-    ) -> None:
+    def test_activation_failure_reports_which_tests_failed(self, key: Ed25519PrivateKey) -> None:
         cache, _ = a_cache(key)
         bundle = a_bundle()
         sig = sign_bundle(bundle, key)

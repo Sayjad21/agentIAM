@@ -147,7 +147,6 @@ def activate_bundle(
         cache.rejected += 1
         raise BundleRejected(str(exc)) from exc
 
-
     now = cache._now()
 
     def evaluate_fn(case: PolicyTestCase) -> PolicyVerdict:

@@ -130,15 +130,9 @@ class TestSummarize:
         assert summary.total == 0
 
     def test_mixed_results(self) -> None:
-        passing = PolicyTestResult(
-            case=_case("pass", expected=True), actual=True, passed=True
-        )
-        failing = PolicyTestResult(
-            case=_case("fail", expected=False), actual=True, passed=False
-        )
-        errored = PolicyTestResult(
-            case=_case("err"), actual=False, passed=False, error="boom"
-        )
+        passing = PolicyTestResult(case=_case("pass", expected=True), actual=True, passed=True)
+        failing = PolicyTestResult(case=_case("fail", expected=False), actual=True, passed=False)
+        errored = PolicyTestResult(case=_case("err"), actual=False, passed=False, error="boom")
         summary = summarize([passing, failing, errored])
         assert summary.total == 3
         assert summary.passed == 1

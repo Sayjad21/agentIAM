@@ -56,6 +56,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | — | `demo/tools.py` — four stub upstreams, deterministic ids (a `hash()` bug caught by running it three times) | `f1ed115` |
 | **T-023** | **The end-to-end thin slice.** `pipeline.py` wires all ten steps; `/readyz` reports `enforcing: true`. Found **TM-27** — the token's intent binding was enforced nowhere on the live path | `90e4a44` |
 | T-025 | `bundles.py` + `policy_cache.py` — Ed25519 signatures over canonical JSON, rollback refused on a monotonic serial, staleness, hot reload (ADR-029) | — |
+| T-026 | `activation.py` + 51-case corpus — operator activation gate for policy bundles, rejecting bundles that fail the test corpus (ADR-030) | — |
+| T-027 | `agentiam-controlplane` Admin Console UI — Cedar authoring UI with live testing and diffing via Jinja+HTMX + premium styling | — |
 
 ### Next
 

@@ -392,20 +392,20 @@ class TestT026Corpus:
 
     def test_the_corpus_has_at_least_fifty_cases(self) -> None:
         """`PLAN.md` T-026 requires ≥50 cases derived from demo workflows."""
-        from agentiam_pep.corpus import CORPUS
+        from agentiam_core.corpus import CORPUS
 
         assert len(CORPUS) >= 50, f"T-026 requires ≥50; have {len(CORPUS)}"
 
     def test_the_corpus_exercises_both_outcomes(self) -> None:
         """All-allow or all-deny would pass against a broken engine."""
-        from agentiam_pep.corpus import CORPUS
+        from agentiam_core.corpus import CORPUS
 
         outcomes = {case.expected for case in CORPUS}
         assert outcomes == {True, False}
 
     def test_every_case_has_a_name_and_description(self) -> None:
         """A corpus whose rows nobody can explain is a corpus nobody will maintain."""
-        from agentiam_pep.corpus import CORPUS
+        from agentiam_core.corpus import CORPUS
 
         for case in CORPUS:
             assert case.name, f"case at index {CORPUS.index(case)} has no name"
@@ -413,7 +413,7 @@ class TestT026Corpus:
 
     def test_every_case_has_tags(self) -> None:
         """Tags trace each case to a demo beat or safety category."""
-        from agentiam_pep.corpus import CORPUS
+        from agentiam_core.corpus import CORPUS
 
         for case in CORPUS:
             assert case.tags, f"{case.name} has no tags"
@@ -422,7 +422,7 @@ class TestT026Corpus:
         "case",
         [
             pytest.param(c, id=c.name)
-            for c in __import__("agentiam_pep.corpus", fromlist=["CORPUS"]).CORPUS
+            for c in __import__("agentiam_core.corpus", fromlist=["CORPUS"]).CORPUS
         ],
     )
     def test_case_against_real_engine(self, case: PolicyTestCase) -> None:

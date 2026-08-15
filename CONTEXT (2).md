@@ -197,12 +197,14 @@ Do not reopen these without reading the ADR.
    test drafts have got this backwards.
 5. **`block_source()` is not a faithful round trip** (TM-24). Mint-time validation stops the
    input; consumers must still treat the output as untrusted.
-6. **A task copies its context at creation, not at first await** — but an awaited bare coroutine
+6. **T-026**: Added operator activation gate (`activation.py`) and 51-case corpus to `agentiam-pep` to ensure a bundle is fully evaluated before hot-reload caching.
+7. **T-027**: Added `agentiam-controlplane` Admin Console UI for Cedar Authoring. Features live testing, corpus evaluation, and diffing via FastAPI, Jinja2, and HTMX. The corpus was moved to `agentiam-core` to be shared between PEP and Control Plane.
+8. **A task copies its context at creation, not at first await** — but an awaited bare coroutine
    shares the caller's.
-7. **Alembic's `command.upgrade`/`downgrade` call `asyncio.run()` internally**, so they raise
+9. **Alembic's `command.upgrade`/`downgrade` call `asyncio.run()` internally**, so they raise
    inside a running loop. The integration fixtures are deliberately *sync* for this reason.
-8. **`make test` excludes the integration tests.** Run `test-integration` after touching the
-   controlplane or the PEP.
+10. **`make test` excludes the integration tests.** Run `test-integration` after touching the
+    controlplane or the PEP.
 
 ---
 

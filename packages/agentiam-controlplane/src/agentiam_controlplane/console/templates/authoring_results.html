@@ -1,0 +1,93 @@
+{% if error %}
+    <div class="alert error">
+        <strong>Policy Bundle Error:</strong>
+        <pre>{{ error }}</pre>
+    </div>
+{% else %}
+    <div class="summary-cards">
+        <div class="card {% if summary.all_passed %}success{% else %}danger{% endif %}">
+            <span class="value">{{ summary.passed }} / {{ summary.total }}</span>
+            <span class="label">Tests Passed</span>
+        </div>
+        <div class="card {% if summary.failed == 0 %}success{% else %}danger{% endif %}">
+            <span class="value">{{ summary.failed }}</span>
+            <span class="label">Failures</span>
+        </div>
+    </div>
+
+    {% if diffs %}
+    <table class="results-table">
+        <thead>
+            <tr>
+                <th>Test Case</th>
+                <th>Expected</th>
+                <th>Candidate Result</th>
+                <th>Change vs Current</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for diff in diffs %}
+            <tr class="{% if not diff.passed %}row-fail{% elif diff.changed %}row-changed{% endif %}">
+                <td>
+                    <strong>{{ diff.case.name }}</strong>
+                    <div class="muted small">{{ diff.case.description }}</div>
+                </td>
+                <td>
+                    <span class="badge {% if diff.case.expected %}allow{% else %}deny{% endif %}">
+                        {{ "Allow" if diff.case.expected else "Deny" }}
+                    </span>
+                </td>
+                <td>
+                    <span class="badge {% if diff.candidate_allowed %}allow{% else %}deny{% endif %}">
+                        {{ "Allow" if diff.candidate_allowed else "Deny" }}
+                    </span>
+                    {% if not diff.passed %}
+                        <span class="x-mark">❌</span>
+                    {% else %}
+                        <span class="check-mark">✅</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if diff.changed %}
+                        {% if diff.current_allowed is not none %}
+                            <span class="badge {% if diff.current_allowed %}allow{% else %}deny{% endif %}">
+                                {{ "Allow" if diff.current_allowed else "Deny" }}
+                            </span>
+                            ➔
+                            <span class="badge {% if diff.candidate_allowed %}allow{% else %}deny{% endif %}">
+                                {{ "Allow" if diff.candidate_allowed else "Deny" }}
+                            </span>
+                        {% else %}
+                            <span class="badge neutral">New</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="muted">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <div class="activation-panel">
+        {% if summary.all_passed %}
+            <p>All tests passed. The policy is safe to activate.</p>
+            <form hx-post="/policy/activate" hx-target="#activation-result">
+                <!-- We pass the source back down to activate it -->
+                <input type="hidden" name="source" id="activate-source-input">
+                <script>
+                    document.getElementById('activate-source-input').value = document.getElementById('cedar-editor').value;
+                </script>
+                <button type="submit" class="btn success">Activate Policy</button>
+            </form>
+            <div id="activation-result" style="margin-top: 1rem;"></div>
+        {% else %}
+            <div class="alert danger">
+                Activation disabled: {{ summary.failed }} tests failed. 
+                A candidate bundle must pass the entire corpus to be activated (T-026).
+            </div>
+            <button class="btn success" disabled style="opacity: 0.5; cursor: not-allowed;">Activate Policy</button>
+        {% endif %}
+    </div>
+{% endif %}

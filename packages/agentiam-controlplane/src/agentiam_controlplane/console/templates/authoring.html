@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentIAM Control Plane - Policy Authoring</title>
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dark-mode">
+    <div class="container">
+        <header>
+            <h1>AgentIAM Control Plane</h1>
+            <p>Cedar Policy Authoring (T-027)</p>
+        </header>
+
+        <main>
+            <div class="editor-section">
+                <h2>Policy Editor</h2>
+                <form id="policy-form" hx-post="/policy/test" hx-target="#results-container" hx-indicator="#loading">
+                    <textarea name="source" id="cedar-editor" spellcheck="false">{{ source }}</textarea>
+                    
+                    <div class="actions">
+                        <button type="submit" class="btn primary">Run Tests & Diff</button>
+                        <span id="loading" class="htmx-indicator">Evaluating corpus...</span>
+                    </div>
+                </form>
+            </div>
+
+            <div class="results-section">
+                <h2>Evaluation Results</h2>
+                <div id="results-container">
+                    <p class="muted">Click "Run Tests & Diff" to evaluate the candidate policy against the 50-case corpus.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>
