@@ -1091,3 +1091,75 @@ argument, since spec 10 §2 declines to deny on that basis.
 
 It also means the mapping carries semantics, not just plumbing, which is a second reason
 `mapping_version` belongs in the decision record (spec 10 §8).
+
+---
+
+## ADR-025 — The lease pool tops up by replacement, off the hot path, one flight at a time
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_pep.pool`, spec 04 §4.1/§4.2/§12, T-021, T-023
+
+**Context:** spec 04 says a top-up *is* an `ACQUIRE` against the same `(mandate, dimension)` —
+"there is no separate operation" (§4.1) — and that `RESERVE` triggers one asynchronously when it
+runs short (§4.2). It does not say what the PEP does with the lease it already holds, how many
+top-ups may be in flight, or what happens when there is nothing to schedule onto. Three
+decisions, and each has a wrong answer that looks reasonable.
+
+**Decision 1 — a top-up replaces the held lease; it does not accumulate.**
+
+The old lease is `RELEASE`d as soon as the new grant lands, returning its unspent remainder to
+the pool in the same breath.
+
+The alternative — hold both and sum the remainders — wastes nothing in principle and is worse in
+practice. Two leases mean two `expires_at` values to expire early against, two `RELEASE`s to keep
+straight at shutdown, and a `remaining_local` that no longer corresponds to any single ledger
+row. Spec 04 §2.3 is explicit that the PEP's view is one number per lease; making it a sum across
+leases is where `leased` starts to drift, which §2's note already identifies as this protocol's
+characteristic failure.
+
+Replacement costs the unspent remainder of the old lease for the moment between the new grant and
+the old release — bounded by `lease_size` and by `max_fraction`, and returned rather than lost.
+
+**Decision 2 — top-ups are single-flight per dimension.**
+
+A burst of requests below the low-water mark must produce **one** `ACQUIRE`, not one per request.
+
+Ten concurrent acquires would each take a slice of the pool, and a PEP that cannot spend them
+before they expire has stranded most of the budget for the full TTL — spec 04 §14 limitation 1,
+which `max_fraction` exists to bound and which this would drive straight to that bound for no
+reason. Measured with the guard removed: six requests crossing the mark produced six extra
+`ACQUIRE` calls.
+
+**Decision 3 — `reserve()` schedules a top-up but never requires an event loop.**
+
+**Measured:** `asyncio.get_running_loop()` raises `RuntimeError` when called from synchronous
+code outside a coroutine — including from a worker thread. `reserve()` is deliberately
+synchronous (spec 04 §4.2: "no network, no ledger mutation, no lock"), so it can be called from
+either place.
+
+Where there is no loop, the top-up is simply not scheduled and the reserve still succeeds. The
+alternative — raising, or blocking to make one — would put a scheduling dependency in the one
+code path whose entire purpose is to have no dependencies. A pool that refuses to spend budget it
+demonstrably holds, because it could not arrange to fetch more, has the failure exactly backwards.
+
+The cost: a PEP driven purely from worker threads never tops up, and runs its lease down until a
+call arrives from the event loop. Acceptable because the PEP is an ASGI application — the hot
+path *is* the loop — and stated so that a future thread-pool caller does not discover it.
+
+**Consequences and what was verified.** Each guard was removed in turn and the suite re-run, per
+the standing rule that a guard never seen to fire is not a guard. The first pass found **four of
+five tests passing vacuously** — the single-flight test never had two concurrent crossings, the
+shutdown-drains-top-ups test released its gate before closing, and nothing constructed an unsafe
+configuration at all. All five now go red when their guard is removed.
+
+One guard was deleted rather than tested: `_acquire` skipped releasing an old lease that was not
+`active`, which is unreachable today because nothing in the pool moves a lease out of `active`
+except `aclose()`, and `aclose()` stops top-ups first. A comment marks where T-038's revocation
+gossip will make it reachable again.
+
+**Also settled here:** spec 04 §17 Q2, whether heartbeat-based early reclaim is worth it. It is
+not — a heartbeat replaces a bound derived from the ledger's own `expires_at` with one derived
+from message arrival, which has no bounded lateness, so a live-but-delayed PEP gets its lease
+reclaimed underneath it. That is TM-22 through a new channel. Reasoning and resumption trigger
+are in spec 04 §17.1.

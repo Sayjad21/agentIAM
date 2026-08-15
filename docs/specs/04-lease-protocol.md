@@ -545,6 +545,30 @@ broke.
 | # | Question | Owner |
 |---|---|---|
 | 1 | Should the ledger refuse a lease to a PEP whose reported clock is skewed beyond `S` (§9.3) | T-013 |
-| 2 | Heartbeat-based early reclaim: worth it, or is TTL sufficient for the demo | T-021 |
+| ~~2~~ | ~~Heartbeat-based early reclaim: worth it, or is TTL sufficient for the demo~~ — **resolved in T-021: TTL is sufficient, and a heartbeat would make things worse.** See below | done |
 | 3 | Batching window for `LEDGER_COMMIT` — latency against ledger write load | T-022 |
 | 4 | Should reconciliation anomalies block a mandate from being marked complete | T-014 |
+
+### 17.1 Why not heartbeats (Q2, T-021)
+
+A heartbeat would let the ledger reclaim a dead PEP's lease in seconds instead of the 80 s
+§7 bounds. It is rejected, and not only on effort.
+
+**It replaces a bounded failure with an unbounded one.** Today the reclaim rule is a function
+of the lease's own `expires_at` — a fact issued once, by the ledger, that no later event can
+move. A heartbeat makes reclaim a function of *message arrival*, so a PEP that is alive and
+spending but whose heartbeat is delayed — GC pause, a saturated NIC, a slow control plane —
+has its lease reclaimed underneath it. That is exactly the double-issue TM-22 describes,
+reintroduced through a channel with no bound on its lateness. The clock-skew margin `S` bounds
+clock disagreement; nothing bounds queueing delay.
+
+So a heartbeat would need its own grace period, which is a TTL by another name, and the
+question becomes why there are two.
+
+**And the bound it improves is already stated and small.** 80 s of at most `max_fraction ×
+available` (a quarter of the pool by default), only when a PEP dies without `RELEASE`.
+Graceful shutdown already covers every planned exit; this is the unplanned-death path only.
+
+**Resumption trigger:** a deployment where PEP crashes are frequent enough that 80 s of
+reduced availability is felt, *and* the heartbeat channel has a bounded delivery latency to
+size the grace period against. Neither is true of the demo or of a single-region deployment.

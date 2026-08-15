@@ -1224,15 +1224,114 @@ note is there, and the test that pins the enum against the plan was updated rath
 ---
 
 
+### T-021 · The lease pool, and four tests that proved nothing
+
+The component that makes NFR-1 possible. `reserve()` is synchronous and touches nothing but
+memory, so a tool call never waits on the ledger; acquiring, topping up and releasing all happen
+off that path. Spec 04 already specified the protocol, so the interesting part of this ticket was
+not the design.
+
+#### Four of five guards were not guards
+
+The suite passed on the first run: 26 green. Then, following the standing rule that *a guard
+never seen to fire is not a guard*, each guard was removed in turn and the suite re-run.
+
+| Guard removed | Result |
+|---|---|
+| single-flight top-up | **26 passed** |
+| low-water comparison | 1 failed ✓ |
+| shutdown drains in-flight top-ups | **26 passed** |
+| `ttl > 2S` configuration check | **26 passed** |
+| lease-state check in `aclose()` | **26 passed** |
+
+Four tests were passing for reasons unrelated to what they claimed to test.
+
+* **Single-flight.** Ten reserves of 8 against a 100 lease cross the 25 mark exactly once — the
+  first nine are above it. The test never had two concurrent crossings, so it could not tell a
+  single-flight implementation from one without.
+* **Shutdown drains top-ups.** The gate was released *before* `aclose()` was called, so nothing
+  was ever in flight. It now asserts `not closing.done()` while the `ACQUIRE` is blocked, which
+  is the actual claim.
+* **`ttl > 2S`.** Nothing constructed an unsafe configuration at all. There was no test.
+* **`aclose()` idempotency.** This one was subtler: the test was fine, but the guard being
+  removed was the wrong one. Idempotency comes from the lease-state check, not from the `_closed`
+  flag — the flag's early return was doing nothing, and was deleted rather than tested.
+
+All five now go red when their guard goes. The lesson is not that the tests were careless; it is
+that *green on the first run* is the least informative signal a test suite emits, and the
+removal sweep costs about ten minutes.
+
+#### Three probes, three things that would have cost an afternoon
+
+**`asyncio.get_running_loop()` raises outside a coroutine** — including from a worker thread.
+`reserve()` is deliberately synchronous, so it may be called from either place, and a top-up
+cannot always be scheduled. It therefore schedules when it can and never requires that it can:
+a pool that refuses to spend budget it demonstrably holds, because it could not arrange to fetch
+more, has the failure backwards (ADR-025).
+
+**`signal.SIGKILL` does not exist on Windows.** `PLAN.md` words the acceptance criterion as
+"tested with SIGKILL". Written literally, that test imports fine in Linux CI and fails on the
+development host. `Popen.kill()` is the portable spelling — `SIGKILL` on POSIX,
+`TerminateProcess` on Windows — and neither gives the child a chance to clean up, which is the
+only property the test needs.
+
+**Patching `socket` around `asyncio.run()` breaks the loop, not the code under test.** Measured:
+`ProactorEventLoop.__init__` calls `socket.socketpair()` for its self-pipe, so the patch fires
+during loop construction and the test fails having proved nothing about `reserve()`. The patch
+goes on *inside* the test body, after pytest-asyncio has built the loop. A second test asserts
+the patched `socket.socket` actually raises, so the zero-network test cannot pass by having no
+teeth.
+
+#### The crash test kills something real
+
+Graceful shutdown is tested against a fake ledger. The fourth acceptance criterion is what
+happens when there *is* no shutdown, and it cannot be faked: a real child process acquires a real
+lease against a real Postgres and is killed mid-sleep. Nothing runs `RELEASE`.
+
+The lease stays `active`, the budget stays stranded, and a reap **before** `expires_at + S`
+correctly reclaims nothing — the skew margin, load-bearing again. Past the margin the full pool
+is spendable without anyone having asked. The 80-second worst case from spec 04 §7 also gets an
+arithmetic test, so the number quoted in the spec, the threat model and the pitch cannot drift
+from the parameters that produce it.
+
+#### Answering a question rather than deferring it
+
+Spec 04 §17 Q2 asked whether heartbeat-based early reclaim is worth building. It is not, and the
+reason is better than "no time": a heartbeat replaces a reclaim rule derived from the ledger's
+own `expires_at` — issued once, immovable — with one derived from message arrival, which has no
+bounded lateness. A live PEP whose heartbeat is delayed by a GC pause gets its lease reclaimed
+underneath it, which is TM-22 arriving through a new channel. The margin `S` bounds clock
+disagreement; nothing bounds queueing delay. So the heartbeat would need its own grace period,
+which is a TTL by another name.
+
+#### Enforcement still does not turn on, and this is the second time that has moved
+
+Gap 11 said T-019, then T-020, and now T-023. That is worth stating plainly rather than editing
+quietly.
+
+The pool supplies the `BudgetOracle` `decide()` requires, so the *budget* half is genuinely ready.
+What is still missing is a `RevocationOracle` and a `PolicyEngine`. An empty revocation set is
+arguably honest — nothing can revoke yet, so nothing is revoked — but an allow-all policy engine
+is not: it reports that policy was evaluated when no policy exists. Shipping both to make
+`/readyz` say `enforcing: true` would buy a true-looking flag with two fail-open stubs, which is
+the exact complaint gap 11 exists to record.
+
+T-023 is the end-to-end thin slice and depends on T-018 through T-022 — it is where the wiring
+was always going to belong. The earlier notes were guesses written before `decide()`'s signature
+was read.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 18 of 53 in scope (61 defined, 8 deferred) |
+| Tickets complete | 19 of 53 in scope (61 defined, 8 deferred) |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1200, all passing (1117 plus 82 integration, plus the NFR-1 benchmark) |
+| Tests | 1248, all passing (1163 plus 84 integration, plus the NFR-1 benchmark) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 24 |
+| ADRs | 25 |
 | Specs written | 6 (01-04, 09, 10); 05-08 outstanding |
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |
