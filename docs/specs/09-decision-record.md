@@ -196,3 +196,55 @@ copied the payload into the audit trail by another route.
 | 1 | Whether `reason_detail` should be a template id plus arguments, so the console can localise it into Bengali | T-046 |
 | 2 | Whether `allow_with_flag` needs its own reason code, or `OK` plus a drift score is enough | T-036 |
 | 3 | Whether step 4 should report *all* failing caveats rather than the first, for the console's benefit | T-045 |
+
+---
+
+## 11. A decision becomes an HTTP response
+
+T-023 wires the pipeline into the gateway, so a `Decision` has to become a status code.
+`PLAN.md` §11.1 fixes one case — EC-T01, a missing token, is 401 — and this section settles
+the rest.
+
+| Reason code | Status | Why that one |
+|---|---|---|
+| `OK` | *the upstream's* | An allow is a proxy hop; the client sees what the tool returned |
+| `MALFORMED_REQUEST`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_EXPIRED`, `TOKEN_NOT_YET_VALID`, `TOKEN_TOO_LARGE` | **401** | *Who are you?* — the credential is absent, unreadable, or out of date. Retrying with a fresh token is the fix |
+| `TOKEN_REVOKED`, `ANCESTOR_REVOKED` | **401** | Also a credential problem, and deliberately indistinguishable from expiry at the status level — §11.1 |
+| `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `INTENT_MISMATCH`, `DEPTH_EXCEEDED`, `POLICY_DENIED` | **403** | *You are who you say, and you may not do this.* A fresh token of the same authority changes nothing |
+| `BUDGET_EXHAUSTED_MANDATE`, `BUDGET_EXHAUSTED_CAVEAT`, `LEASE_UNAVAILABLE`, `RATE_LIMITED` | **429** | Exhaustion, not authority. The request may succeed later — after a top-up, a refund, or a new mandate — and 429 is the only standard code that says *not now* without saying *never* |
+| `APPROVAL_REQUIRED`, `DRIFT_ESCALATION` | **403** | Not permitted **yet**. The escalation id travels in the body, because a client that cannot see it cannot follow up |
+| `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `POLICY_BUNDLE_STALE`, `VERIFICATION_LIMIT_EXCEEDED` | **503** | *We could not decide.* Distinct from a denial: the fix is operational, and a client is right to retry |
+| `UPSTREAM_ERROR` | **502 / 504** | Not a decision at all — §6 |
+
+### 11.1 Why revocation is not its own status
+
+A revoked token returning something distinctive tells a holder of a stolen token that the theft
+was noticed. 401 for every credential failure keeps that quiet at the status level.
+
+The `reason_code` in the body *does* distinguish them, and that is deliberate: the body is read
+by the agent the token was issued to, which is entitled to know why it stopped working, while
+the status line is what a passive observer sees. This is a small mitigation of TM-01's accepted
+bearer-replay risk rather than a fix for it.
+
+### 11.2 Why exhaustion is 429 and not 402
+
+402 Payment Required is semantically apt and reserved by RFC 9110 for future use; clients,
+proxies and load balancers do not treat it consistently. 429 has defined retry semantics and
+existing client support, and the distinction that matters — *no budget* versus *no authority* —
+is carried by the reason code, which every response has.
+
+`Retry-After` is **not** set. The PEP genuinely does not know when budget will return: a top-up
+depends on a sibling committing or a reservation being refunded, neither of which it can
+predict. Guessing would be worse than silence.
+
+### 11.3 The body
+
+Every non-2xx response the PEP originates carries the same shape:
+
+```json
+{"reason_code": "SCOPE_NOT_GRANTED", "detail": "…", "decision_id": "…", "trace_id": "…"}
+```
+
+`decision_id` is what ties the refusal to the audit record, so *why was I denied?* is answerable
+from the client's side without access to the ledger. `detail` names the failing caveat or policy
+statement (§4) and **never** an argument value (§8).

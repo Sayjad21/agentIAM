@@ -1581,16 +1581,98 @@ arrives.
 ---
 
 
+### T-023 · The thin slice, and a check that no code path ran
+
+M4's exit gate, and the first point at which the project's one sentence is demonstrable rather
+than asserted. A root biscuit goes through the T-018 gateway, the T-020 extractor, the T-019
+pipeline, the T-024 Cedar engine, the T-021 lease pool against real Postgres, and the T-022
+emitter into the real audit chain, with the M4 stub tools behind it. Nothing is faked except
+the network, which is an in-process ASGI transport.
+
+#### The finding: an authority check that nothing evaluated
+
+Wiring the intent header produced a test that failed for the wrong reason — a *mismatched*
+intent was allowed.
+
+The token's authority block carries six checks (spec 01 §5), and biscuit's own authorizer
+enforces all six. But `verify()` deliberately never calls `authorize()` — it extracts facts, so
+that reason codes can be precise, which is the whole argument in its module docstring. So
+**whatever `decide()` does not re-implement is enforced nowhere on the path the PEP runs.**
+
+Measured side by side on the same token: `decide()` said ALLOW, biscuit said DENY.
+
+Five of the six were covered — scope by `decide()`, the validity window and the chain's depth by
+`verify()`, the mandate's budget ceiling by the ledger that issues the lease — and intent by
+nothing. That is INV-7's binding and TM-10's defence against task redirection, both decorative
+on the live path since T-019. Recorded as TM-27; `decide()` now checks it, ordered before the
+caveat loop so a wrong task is reported as `INTENT_MISMATCH` rather than as whichever caveat
+happens to fail.
+
+The lesson is about the shape of the mistake rather than the bug. `verify()`'s split was a good
+decision, made for a good reason, and it quietly moved responsibility somewhere nobody wrote
+down. The audit that would have caught it is *for each check the token makes, name the code that
+enforces it* — which is now four lines of comment above step 4.
+
+#### Emitting before forwarding
+
+Spec 09 numbers emit as step 10 and forward as step 8. The pipeline does them the other way
+round, and ADR-026 forces it: a full audit buffer must **deny**, and a policy that denies after
+the upstream has already acted is not a policy.
+
+Everything the record contains is known once step 7 finishes — verdict, failing cause,
+reservation, budget. What is *not* in it is the upstream's answer, and spec 09 §6 already says
+that was never part of the decision. The cost is a record for a call the upstream may then fail;
+the record says *this was authorized*, which stays true.
+
+#### Two bugs the wiring found in code that already passed its own tests
+
+**The emitter raced itself.** `flush()` and the background drain task both call `_write_batch`,
+and both could claim the same pending batch — one finished it, the other asserted on a `None`.
+Invisible until something ran a drain loop alongside an explicit flush, which nothing did until
+now. Serialized with a lock.
+
+**`request.url.query` is a `str`, not bytes.** The gateway called `.decode()` on it. Every app
+test passed because they all build the app *without* a pipeline, so the enforcing branch never
+ran. Fixed, and there is now a unit test that builds an enforcing app — faster than the e2e
+slice and, more to the point, inside the suite `make test` actually runs.
+
+#### The e2e marker ran nowhere
+
+`make test` excludes it and so did every CI job. The slice would have been green on one machine
+and watched by nothing.
+
+This project has made that exact mistake twice: the 45 integration tests no job ran (gap 9), and
+`make bench` pointing at an empty directory. Both were found by accident. There is now a
+`test-e2e` target in both the Makefile and its PowerShell mirror, and a fifth CI job.
+
+#### Gap 11 closes
+
+`/readyz` reports `enforcing: true`, and the flag is **derived from the wiring** rather than
+declared — an app built without a pipeline still reports `false`. A constant would let the flag
+and the behaviour drift apart, which is precisely what gap 11 recorded.
+
+`TestEnforcementIsNotWiredYet` was a tripwire: it failed the moment enforcement landed, which is
+how the change was meant to be noticed. It is retired and replaced by `TestEnforcementIsOptOut`,
+because the property it guarded — a transport that keeps saying it is a transport — is still
+worth pinning.
+
+The estimate for gap 11 moved four times before it landed. Three of those were guesses written
+before reading `decide()`'s signature; the fourth was the decision to build T-024 first so the
+slice would never wire enforcement around a stub.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 21 of 53 in scope (61 defined, 8 deferred) |
+| Tickets complete | 22 of 53 in scope (61 defined, 8 deferred) — **M4 complete** |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1392, all passing (1286 plus 103 integration, plus 3 benchmarks) |
+| Tests | 1496, all passing (1378 plus 103 integration, 12 e2e, plus 3 benchmarks) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
 | ADRs | 28 |
 | Specs written | 8 (01-05, 08, 09, 10); 06-07 outstanding |
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |
-| Threats found by measurement | 8 (TM-19 through TM-26) |
+| Threats found by measurement | 9 (TM-19 through TM-27) |

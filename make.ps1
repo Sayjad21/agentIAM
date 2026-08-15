@@ -17,7 +17,8 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'install', 'up', 'down', 'logs', 'ps', 'test', 'test-unit',
-                 'test-integration', 'lint', 'fmt', 'typecheck', 'check', 'bench', 'cov',
+                 'test-integration', 'test-e2e', 'lint', 'fmt', 'typecheck', 'check',
+                 'bench', 'cov',
                  'clean', 'nuke')]
     [string]$Target = 'help'
 )
@@ -50,6 +51,7 @@ switch ($Target) {
             'test'             = 'Run the test suite, excluding tests that need infrastructure'
             'test-unit'        = 'Run unit and property tests only'
             'test-integration' = 'Run tests that need Docker (spins its own Postgres)'
+            'test-e2e'         = 'Run the end-to-end slice (needs Docker)'
             'lint'             = 'Check formatting and lint rules'
             'fmt'              = 'Apply formatting and autofixable lint rules'
             'typecheck'        = 'Run mypy in strict mode'
@@ -82,6 +84,11 @@ switch ($Target) {
         # context managers. Linux CI does not need this, so it stays out of the Makefile.
         if (-not $env:TESTCONTAINERS_RYUK_DISABLED) { $env:TESTCONTAINERS_RYUK_DISABLED = 'true' }
         Invoke-Step @('uv', 'run', 'pytest', '-m', 'integration')
+    }
+    'test-e2e' {
+        # Same Ryuk workaround as test-integration, and for the same reason.
+        if (-not $env:TESTCONTAINERS_RYUK_DISABLED) { $env:TESTCONTAINERS_RYUK_DISABLED = 'true' }
+        Invoke-Step @('uv', 'run', 'pytest', '-m', 'e2e')
     }
     'lint' {
         Invoke-Step @('uv', 'run', 'ruff', 'check', '.')

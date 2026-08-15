@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-024 and the audit chain.
+**Last updated:** after T-023. **M4 is complete.**
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,11 +11,11 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | M1, M2, M3 complete · **M4 in progress** (T-018…T-022 done, T-024 pulled forward) · specs 06–08 outstanding |
-| **Tickets** | 21 done · 32 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 1392 passing (1286 in `make test`; 103 in `make test-integration`; 3 in `make bench`) |
+| **Milestone** | **M1–M4 complete** · M5 next · specs 06–07 outstanding |
+| **Tickets** | 22 done · 31 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 1496 passing (1378 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 3 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
-| **CI** | green — lint/types/tests, **NFR-1 benchmark**, integration against real Postgres, core purity, compose health |
+| **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
 | **Specs** | 8 written — `08-audit-chain` added with the audit work; `06`–`07` outstanding |
 | **ADRs** | 28 |
 
@@ -52,7 +52,9 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-021 | `pool.py` — zero-network `reserve()`, single-flight top-up, graceful `RELEASE`, crash bound proven by killing a real process (ADR-025) | `e34b698` |
 | T-022 | `emitter.py` — buffered emit, **deny-on-full** back-pressure, retry rather than silent loss, OTEL span (ADR-026) | `cd722c6` |
 | T-024 | `specs/05-policy.md` + `policy.py` — Cedar engine, 32-case corpus, `NoDecision` fails closed, decimals unscaled (ADR-027, ADR-028). **Pulled ahead of T-023** so enforcement never turns on around a stub | `b653ad4` |
-| — | `specs/08-audit-chain.md` + `db/audit.py` + `verify_audit_chain.py` — tamper, deletion, reordering and **head truncation** detected; the append lock proven load-bearing | — |
+| — | `specs/08-audit-chain.md` + `db/audit.py` + `verify_audit_chain.py` — tamper, deletion, reordering and **head truncation** detected; the append lock proven load-bearing | `753b3f7` |
+| — | `demo/tools.py` — four stub upstreams, deterministic ids (a `hash()` bug caught by running it three times) | `f1ed115` |
+| **T-023** | **The end-to-end thin slice.** `pipeline.py` wires all ten steps; `/readyz` reports `enforcing: true`. Found **TM-27** — the token's intent binding was enforced nowhere on the live path | — |
 
 ### Next
 
@@ -105,7 +107,7 @@ Real debt, not speculation. Each has a home.
 | 8 | **`ACQUIRE` does not clamp by `max_fraction`.** Spec 04 §4.1's clamp is mathematically incompatible with T-013's own acceptance test, applied to a fixed caller-`requested` amount (ADR-015, measured) | No single-PEP-crash blast-radius bound beyond `ttl` — a PEP can be granted more than a quarter of the pool in one `ACQUIRE` | T-015 (adaptive lease sizing, deferred) — that's where the formula actually applies |
 | ~~9~~ | ~~**CI ran none of the 45 integration tests.**~~ Closed while integrating M3: `make test` and the CI workflow both excluded the `integration` marker, so every ledger race test ran only by hand | Three tickets of ledger correctness — `FOR UPDATE` serialization, the 50-concurrent-acquire bound, the ADR-017 dedup race — were gated by nothing and would have rotted silently | Closed: `integration` CI job + `make test-integration` |
 | ~~13~~ | ~~**`test_inv1_attenuation_never_widens` is intermittently flaky**~~ — closed. **Two** unrelated flakes, and the recorded cause was wrong twice. INV-1 is *not* violated: zero violations across ~15,000 contexts in two brute-force campaigns. The real cause is `biscuit-python`'s authorizer defaulting to `max_time = 1 ms` of **wall clock** — measured at 2 of 42,014 authorize calls under suite load, both inside `verify()`. The harness read that as a denial, so the parent "denied" what the child allowed. Fault injection proved it: 10 of 10 timeouts injected on a parent check reproduce the false `child authorized what the parent did not`, 9 of them with `FlakyStrategyDefinition` on top. The second flake was `test_strategies.py::test_zero_ceilings_occur`, a shape audit sampling the nine-kind union — 3 misses in 60 campaigns | The printed counterexample was **spurious**, and INV-1 stands. But this was a *product* bug on the PEP hot path, not only a test bug: a loaded PEP would have denied legitimate requests for want of scheduling, and 1 ms is the whole of NFR-1's decision budget | Closed: ADR-021 (explicit Datalog limits, harness re-raises, INV-1 draws its scenario as one composite value), ADR-022 (`caveats_of_kind`), TM-25 |
-| 11 | **The PEP enforces nothing.** T-018 built the gateway; it forwards every request, token or not. `/readyz` reports `enforcing: false` and `TestEnforcementIsNotWiredYet` pins it | A component named *policy enforcement point* that looks like protection and is not. Deliberate and visible, but it is the single most misleading state in the repo | **T-023.** Steps 1–4 and 7 are built (T-020, T-007, T-019, T-021); what is missing is a `RevocationOracle` and a `PolicyEngine`. An empty revocation set is honest — nothing can revoke yet — but an allow-all policy engine would report that policy was evaluated when none exists. **This estimate has moved twice** (T-019 → T-020 → T-021 → T-023); each earlier guess predated reading `decide()`'s signature, and the journal says so |
+| ~~11~~ | ~~**The PEP enforces nothing.**~~ — **closed in T-023.** `/readyz` reports `enforcing: true`, and the flag is derived from the wiring rather than declared, so an app built without a pipeline still reports `false` | Was the single most misleading state in the repo | Closed. The estimate moved four times (T-019 → T-020 → T-021 → T-023); three were guesses written before reading `decide()`'s signature, and the fourth was the decision to build T-024 first (ADR-027) |
 | 12 | **No HTTP trailer support, and none available.** Measured across httpx, Starlette and uvicorn: no layer exposes trailers (ADR-020) | One T-018 acceptance criterion consciously unmet. Costs nothing for the demo; trailers are rare on HTTP/1.1 | Only reopens if T-041 (MCP, deferred) needs them — and the fix would be in the ASGI server, not here |
 | 10 | **`tests/integration/test_budget_schema.py` duplicates `conftest.py`'s fixtures.** T-012 predates the shared conftest; noted in its header and left alone | Two copies of the container and migration fixtures drift apart | Same cleanup as §4.3 |
 

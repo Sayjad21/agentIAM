@@ -1,14 +1,15 @@
 """The PEP gateway: an ASGI app that reverse-proxies to an upstream — T-018.
 
-> **This gateway does not enforce anything yet.** T-018 is the transport; the decision
-> pipeline is T-019 and the scope extractor is T-020. Until those land, every request is
-> forwarded, token or no token. `/readyz` reports `enforcing: false` so the gap is visible
-> at runtime rather than only in this docstring, and
-> `tests/unit/test_pep_app.py::TestEnforcementIsNotWiredYet` fails the moment it changes —
-> which is the intended way to notice that it did.
+> **Enforcement is on when a `pipeline` is supplied, and off when it is not.** Built without
+> one, this is the T-018 transport: every request is forwarded, token or no token, and
+> `/readyz` reports `enforcing: false` so the gap is visible at runtime rather than only in a
+> docstring. Built with one (T-023), every proxied request runs the ten steps first and a
+> refusal never reaches the upstream.
 >
-> A component called a *policy enforcement point* that forwards everything is worse than
-> no gateway, because it looks like protection.
+> The flag is derived from the wiring rather than declared, because a constant saying
+> `enforcing: true` next to a gateway that forwards everything is precisely the failure
+> `STATUS.md` gap 11 recorded — a component called a *policy enforcement point* that looks
+> like protection and is not.
 
 Three things about the forwarding path were settled by measurement rather than by reading
 (see `headers.py` and `config.py` for the numbers):
@@ -44,15 +45,15 @@ from prometheus_client import generate_latest as render_metrics
 from agentiam_core.errors import ReasonCode
 from agentiam_pep.config import PepSettings
 from agentiam_pep.headers import filter_request_headers, filter_response_headers
+from agentiam_pep.pipeline import Authorized, Refused
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from agentiam_pep.pipeline import Pipeline
+
 #: Where proxied traffic enters. `PLAN.md` §8: `ANY /proxy/{upstream_path}`.
 PROXY_PREFIX: Final = "/proxy"
-
-#: Flipped by T-019 when the decision pipeline is wired in. Reported on `/readyz`.
-ENFORCING: Final = False
 
 
 def _build_metrics(registry: CollectorRegistry) -> tuple[Counter, Histogram]:
@@ -80,25 +81,28 @@ def create_app(
     *,
     settings: PepSettings,
     upstream_client: httpx.AsyncClient | None = None,
+    pipeline: Pipeline | None = None,
 ) -> FastAPI:
     """Build the gateway.
 
     Args:
         settings: Upstream address, timeouts, pool limits.
         upstream_client: The client used for upstream calls. Injected by tests so the
-            upstream can be an in-process ASGI app; built from `settings` otherwise. Also
-            the seam T-021 uses to attach a lease pool.
+            upstream can be an in-process ASGI app; built from `settings` otherwise.
+        pipeline: The ten steps (T-023). Supplied means the gateway enforces; omitted means
+            it is the T-018 transport and says so on `/readyz`.
 
     Returns:
         A FastAPI application.
     """
     client = upstream_client or settings.build_client()
+    enforcing = pipeline is not None
     registry = CollectorRegistry()
     requests_total, upstream_latency = _build_metrics(registry)
 
     app = FastAPI(
         title="AgentIAM PEP",
-        summary="Policy enforcement point. Transport only until T-019.",
+        summary="Policy enforcement point.",
         docs_url=None,
         redoc_url=None,
     )
@@ -122,7 +126,7 @@ def create_app(
         return JSONResponse(
             {
                 "status": "ready",
-                "enforcing": ENFORCING,
+                "enforcing": enforcing,
                 "checks": {
                     "upstream_client": client is not None,
                     "upstream_base_url": settings.upstream_base_url,
@@ -144,7 +148,25 @@ def create_app(
         response_model=None,
     )
     async def proxy(upstream_path: str, request: Request) -> StreamingResponse | JSONResponse:
-        """Forward one request upstream and stream the answer back."""
+        """Authorize, then forward one request upstream and stream the answer back."""
+        authorized: Authorized | None = None
+        if pipeline is not None:
+            # Read the body only when some route maps a `body.` argument; otherwise the
+            # stream is left untouched and the proxy hop stays constant-memory (ADR-023).
+            # Measured: `json()` then `stream()` replays fine, the reverse raises.
+            request_body = await request.body() if _reads_body(request) else None
+            outcome = await pipeline.authorize(
+                method=request.method,
+                path="/" + upstream_path,
+                query_string=request.url.query,
+                headers=list(request.headers.items()),
+                body=request_body,
+            )
+            if isinstance(outcome, Refused):
+                requests_total.labels(request.method, str(outcome.status)).inc()
+                return JSONResponse(outcome.body(), status_code=outcome.status)
+            authorized = outcome
+
         target = httpx.URL(path="/" + upstream_path, query=request.url.query.encode() or None)
         upstream_request = client.build_request(
             request.method,
@@ -175,6 +197,12 @@ def create_app(
             finally:
                 await upstream_response.aclose()
 
+        if authorized is not None and pipeline is not None:
+            # Step 9. The reserved amount is settled as-is: reading the upstream's own
+            # reported charge would mean buffering its body, and a tool that over-reports is
+            # clamped by the ledger anyway (spec 04 §4.4's G2).
+            pipeline.settle(authorized)
+
         response = StreamingResponse(body(), status_code=upstream_response.status_code)
         # Assigned after construction rather than passed in, because Starlette's `headers=`
         # takes a mapping and `Set-Cookie` legitimately repeats — a mapping keeps only the
@@ -190,6 +218,19 @@ def create_app(
     return app
 
 
+def _reads_body(request: Request) -> bool:
+    """Whether extraction needs this request's body.
+
+    Only methods that carry one, and only when it is JSON — a form upload through a route
+    whose caveats do not constrain its body is a legitimate request that must keep streaming
+    (spec 10 §6).
+    """
+    if request.method in {"GET", "HEAD", "DELETE", "OPTIONS"}:
+        return False
+    content_type = request.headers.get("content-type", "")
+    return "json" in content_type.lower()
+
+
 def _gateway_error(status: int, detail: str) -> JSONResponse:
     """Fail closed with a reason code from the closed set (rule 5, `PLAN.md` §6.9)."""
     return JSONResponse(
@@ -198,4 +239,4 @@ def _gateway_error(status: int, detail: str) -> JSONResponse:
     )
 
 
-__all__ = ["ENFORCING", "PROXY_PREFIX", "create_app"]
+__all__ = ["PROXY_PREFIX", "create_app"]

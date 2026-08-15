@@ -270,6 +270,16 @@ def decide(
         return _deny(ReasonCode.CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED, f"revocation: {exc}")
 
     # --- step 4: the token's own authority ---------------------------------
+    #
+    # The authority block carries six checks (spec 01 §5), and biscuit's own authorizer would
+    # enforce every one of them — but `verify()` deliberately never calls `authorize()`, it
+    # extracts facts (see its module docstring). So whatever this function does not
+    # re-implement is enforced *nowhere on the path the PEP actually runs*.
+    #
+    # Found by wiring T-023: a request whose `request_intent` did not match the token's was
+    # allowed here while biscuit denied it. The other five are covered — scope below, the
+    # validity window and the chain's depth in `verify()`, the mandate's budget ceiling by the
+    # ledger that issues the lease — and intent was covered by nothing (TM-27).
     if context.operation not in token.scopes:
         # Never in the mandate at all — distinct from granted and then attenuated away,
         # which the caveat loop below reports. The operator's fix differs: widen the
@@ -277,6 +287,23 @@ def decide(
         return _deny(
             ReasonCode.SCOPE_NOT_GRANTED,
             f"scope {context.operation!r} is not in the mandate's grant",
+        )
+
+    if context.request_intent != token.intent_hash:
+        # INV-7 and TM-10: the token is bound to one approved task, and this is what makes
+        # "which task authorized this?" answerable. An injected instruction that redirects an
+        # agent to a different task cannot carry the matching hash.
+        return _deny(
+            ReasonCode.INTENT_MISMATCH,
+            "the request's intent does not match the intent this token is bound to",
+        )
+
+    if context.current_depth > token.max_depth:
+        # `verify()` checks the *chain's* depth from its block count. This checks the depth
+        # the verifier reports for this call, which is a separate fact and could disagree.
+        return _deny(
+            ReasonCode.DEPTH_EXCEEDED,
+            f"depth {context.current_depth} exceeds the mandate's limit of {token.max_depth}",
         )
 
     caveat_decision = _evaluate_caveats(caveats, context)

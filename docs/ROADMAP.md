@@ -199,11 +199,11 @@ against a real injected violation · sibling budget test passing under both miti
 | — | Stub tool servers: invoice, vendor, payment, email | PEP routes to each correctly |
 | — | Stub tool servers: invoice, vendor, payment, email | Next |
 | T-024 | Cedar engine + `PolicyEngine` protocol | **Done, pulled forward from M5** (ADR-027) so T-023 never wires enforcement around an allow-all policy stub. 32-case corpus; `NoDecision` fails closed; money crosses into policy as a Cedar decimal at the same 4 places as `NUMERIC(20,4)` |
-| **T-023** | **End-to-end thin slice** | **The critical checkpoint.** Root token → PEP → stub tool → budget spent → denied on exhaustion → decision in the audit ledger |
+| **T-023** | **End-to-end thin slice** | **Done — M4's exit gate is green.** 12 e2e tests against real Postgres: root token → PEP → stub tool → budget spent → denied on exhaustion → decision in the audit ledger, chain verifying. Found **TM-27** — the token's intent binding was enforced nowhere on the live path, because `verify()` extracts facts rather than authorizing and `decide()` had never re-implemented that check. A fifth CI job now runs the `e2e` marker, which nothing did |
 
-**Exit gate:** the T-023 chain works end to end, denials included.
+**Exit gate:** ✅ the T-023 chain works end to end, denials included.
 **Record a screencast here** — this is the first demoable state, and having it on video de-risks
-everything downstream.
+everything downstream. *Still outstanding: the screencast itself.*
 
 > Do not start M5 until T-023 is genuinely green. If it does not work, nothing after it matters.
 

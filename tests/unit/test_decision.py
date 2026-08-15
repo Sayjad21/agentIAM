@@ -712,3 +712,41 @@ class TestAllowedProperty:
         decision = run(caveats=(RequiresApproval(scopes=frozenset({"invoice:read"})),))
         assert decision.outcome is Outcome.ESCALATE
         assert not decision.allowed
+
+
+class TestTokenAuthorityIsActuallyEnforced:
+    """TM-27 — what `verify()` does not check, this function must, or nothing does.
+
+    The authority block carries six checks (spec 01 §5) and biscuit's authorizer would enforce
+    all six. `verify()` never calls `authorize()`; it extracts facts. So any check this
+    function does not re-implement is enforced **nowhere on the path the PEP runs**.
+
+    Found while wiring T-023: a mismatched `request_intent` was allowed here while biscuit
+    denied the same request. These tests exist so the gap cannot reopen quietly.
+    """
+
+    def test_a_mismatched_intent_is_denied(self) -> None:
+        decision = run(context=ctx(intent="f" * 64))
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.INTENT_MISMATCH
+
+    def test_the_matching_intent_is_allowed(self) -> None:
+        assert run().outcome is Outcome.ALLOW
+
+    def test_a_depth_past_the_mandate_limit_is_denied(self) -> None:
+        """`verify()` checks the chain's depth; this checks the depth reported for the call."""
+        decision = run(context=ctx(depth=99))
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.DEPTH_EXCEEDED
+
+    def test_intent_is_checked_before_the_caveats(self) -> None:
+        """Spec 09 §3: the first failing step wins, and a wrong task outranks a narrow scope.
+
+        Reported the other way round, an operator would widen a caveat to fix a request that
+        was never for this task at all.
+        """
+        decision = run(
+            context=ctx(intent="f" * 64),
+            caveats=(ScopeSubset(scopes=frozenset()),),
+        )
+        assert decision.reason_code is ReasonCode.INTENT_MISMATCH

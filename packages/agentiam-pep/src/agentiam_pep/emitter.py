@@ -134,6 +134,10 @@ class DecisionEmitter:
         self._closed = False
         self._pending: list[DecisionRecord] | None = None
         self._attempts = 0
+        # `flush()` and the drain task both call `_write_batch`, and without this they
+        # race on the pending batch: one finishes it, the other finds it gone. Found by
+        # wiring T-023, where a background drain runs alongside an explicit flush.
+        self._writing = asyncio.Lock()
         self.dropped = 0
         self.failed_batches = 0
         self.lost_records = 0
@@ -239,6 +243,9 @@ class DecisionEmitter:
     async def _write_batch(self) -> None:
         """Write one batch, retrying a failed one before giving up on it.
 
+        Serialized: only one writer touches `_pending` at a time, so the drain task and
+        an explicit `flush()` cannot both claim the same batch.
+
         A failed batch is **retried, not discarded** — up to `max_retries`. Discarding it
         would lose exactly the records this module refuses requests to protect, which would
         make the deny policy an argument the code did not honour.
@@ -252,6 +259,10 @@ class DecisionEmitter:
         accept. After that the records are dropped and counted in `lost_records`, because a
         single bad record must not wedge the pipeline forever.
         """
+        async with self._writing:
+            await self._write_batch_locked()
+
+    async def _write_batch_locked(self) -> None:
         if self._pending is None:
             batch: list[DecisionRecord] = []
             while len(batch) < self._settings.batch_max:

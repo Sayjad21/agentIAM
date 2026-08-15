@@ -90,6 +90,34 @@ jobs:
       - name: Integration tests
         run: uv run pytest -m integration -v
 
+  e2e:
+    name: End-to-end thin slice
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync workspace
+        run: uv sync
+
+      # `quality` excludes the `e2e` marker and so does every other job, so without this the
+      # slice would run only when someone remembered to. That has happened twice in this
+      # project already — the 45 integration tests nothing ran, and `make bench` pointing at
+      # an empty directory — and both times it was found by accident.
+      #
+      # This is M4's exit gate: root token -> PEP -> stub tool -> budget spent -> denied on
+      # exhaustion -> decision in the audit ledger. If it goes red, nothing after it matters.
+      - name: End-to-end slice
+        run: uv run pytest -m e2e -v
+
   purity:
     name: agentiam-core is I/O-free
     runs-on: ubuntu-latest

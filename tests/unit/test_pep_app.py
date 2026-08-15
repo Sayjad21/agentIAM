@@ -11,9 +11,10 @@ streaming is tested over a socket or not at all.
 
 **T-018 does not enforce anything.** The decision pipeline is T-019 and the scope
 extractor is T-020; until they land this gateway forwards whatever it is given. That is a
-deliberate, temporary state and `TestEnforcementIsNotWiredYet` exists to keep it from
-becoming a quiet one — a policy enforcement point that enforces nothing is worse than no
-gateway at all, because it looks like protection.
+deliberate state that T-023 ended: an app built with a pipeline enforces, one built
+without is the transport and reports `enforcing: false`. `TestEnforcementIsOptOut` pins
+the second half, because a gateway that forwards everything while claiming to enforce is
+worse than no gateway at all — it looks like protection.
 """
 
 from __future__ import annotations
@@ -352,19 +353,44 @@ class TestOperationalEndpoints:
         assert (await client.get("/healthz")).json().get("path") is None
 
 
-class TestEnforcementIsNotWiredYet:
-    """T-018 proxies; it does not decide. Pinned so T-019 has to change it on purpose.
+class TestEnforcementIsOptOut:
+    """Was `TestEnforcementIsNotWiredYet` until T-023 wired it — and retired on purpose.
 
-    A gateway that forwards everything while being called a *policy enforcement point* is
-    worse than no gateway: it looks like protection. These tests fail the moment
-    enforcement lands, which is the intended way to find out that it did.
+    The old class was a tripwire: it failed the moment enforcement landed, which is how the
+    change was meant to be noticed. What it guarded is still worth pinning, though. An app
+    built **without** a pipeline is the T-018 transport, and it has to keep saying so: a
+    gateway that forwards everything while reporting `enforcing: true` is exactly the failure
+    `STATUS.md` gap 11 recorded.
+
+    That enforcement actually works when a pipeline *is* supplied is
+    `tests/unit/test_pep_pipeline.py` and the e2e slice; here we only pin the flag's honesty.
     """
 
-    async def test_a_request_with_no_token_is_still_proxied(
+    async def test_without_a_pipeline_requests_are_still_proxied(
         self, client: httpx.AsyncClient
     ) -> None:
         assert (await client.get("/proxy/x")).status_code == 200
 
-    async def test_the_app_says_so_on_readyz(self, client: httpx.AsyncClient) -> None:
+    async def test_without_a_pipeline_readyz_says_it_is_not_enforcing(
+        self, client: httpx.AsyncClient
+    ) -> None:
         """Visible at runtime, not only in a docstring nobody reads in production."""
         assert (await client.get("/readyz")).json()["enforcing"] is False
+
+    async def test_the_flag_is_derived_from_the_wiring_not_declared(self) -> None:
+        """A constant would let the flag and the behaviour drift apart, which is the bug.
+
+        Built with a pipeline the app reports `enforcing: true`; the object here is a stand-in
+        because this test is about where the flag comes from, not about deciding anything.
+        """
+        from agentiam_pep.app import create_app
+        from agentiam_pep.config import PepSettings
+
+        app = create_app(
+            settings=PepSettings(upstream_base_url="http://upstream"),
+            upstream_client=httpx.AsyncClient(base_url="http://upstream"),
+            pipeline=object(),  # type: ignore[arg-type]
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://pep") as c:
+            assert (await c.get("/readyz")).json()["enforcing"] is True

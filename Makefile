@@ -32,6 +32,9 @@ test-unit: ## Run unit and property tests only
 test-integration: ## Run tests that need Docker (testcontainers spins its own Postgres)
 	$(UV) run pytest -m integration
 
+test-e2e: ## Run the end-to-end slice (needs Docker; testcontainers spins its own Postgres)
+	$(UV) run pytest -m e2e
+
 lint: ## Check formatting and lint rules
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
