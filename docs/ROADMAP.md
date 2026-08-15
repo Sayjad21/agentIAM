@@ -197,6 +197,8 @@ against a real injected violation · sibling budget test passing under both miti
 | T-022 | Buffered async decision-record emitter + OTEL span | Back-pressure policy is deny-on-full-buffer, and that path is tested |
 | — | Audit hash chain, `/audit/custody` endpoint, `scripts/verify_audit_chain.py` | Chain verification detects single-record tampering (NFR-6) |
 | — | Stub tool servers: invoice, vendor, payment, email | PEP routes to each correctly |
+| — | Stub tool servers: invoice, vendor, payment, email | Next |
+| T-024 | Cedar engine + `PolicyEngine` protocol | **Done, pulled forward from M5** (ADR-027) so T-023 never wires enforcement around an allow-all policy stub. 32-case corpus; `NoDecision` fails closed; money crosses into policy as a Cedar decimal at the same 4 places as `NUMERIC(20,4)` |
 | **T-023** | **End-to-end thin slice** | **The critical checkpoint.** Root token → PEP → stub tool → budget spent → denied on exhaustion → decision in the audit ledger |
 
 **Exit gate:** the T-023 chain works end to end, denials included.

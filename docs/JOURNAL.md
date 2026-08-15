@@ -1510,16 +1510,87 @@ since an all-allow corpus would pass against a broken engine.
 ---
 
 
+### M4 · The audit chain, and the failure a hash chain cannot see
+
+*The credit limit and chain of custody for AI agents.* The second half of that sentence had no
+implementation until now — `chain_hash()` existed from T-005, with nothing calling it.
+
+Not a numbered ticket; `PLAN.md` §9 lists it as an unnumbered M4 item. Spec 08 was written first
+anyway, because chain of custody is a contract the pitch makes and NFR-6 is stated as a testable
+claim.
+
+#### Appending is a read-modify-write, and that is the whole problem
+
+Computing a link means reading the current head hash and writing a record derived from it. Two
+concurrent appends that both read head *h* both claim `prev_hash = h`, and one loses its `seq` to
+a primary-key collision.
+
+The surviving evidence is a chain with fewer records than were submitted — and **nothing in a
+hash chain detects a record that was never written.** The chain verifies perfectly. That is a
+worse outcome than a detected break.
+
+So appends serialize on a single-row `audit_chain_head`, locked `FOR UPDATE`, the same shape
+spec 04 §4.1 uses for the budget pool. A single row rather than `SELECT max(seq) FOR UPDATE`,
+because an empty table has no row to lock: the first two concurrent appends would both find
+nothing and both insert `seq = 1`. The lock has to exist before the first record does.
+
+Shown to be load-bearing, per the T-013 precedent: a test drops the `FOR UPDATE`, widens the
+window with a sleep, and asserts that fewer records survive than were submitted. It also asserts
+that *some* writers failed — otherwise the window was too narrow and the test would be proving
+nothing.
+
+#### Head truncation
+
+Deleting the newest records leaves a chain that verifies perfectly from genesis to whatever is
+now the head. No hash detects it, because every remaining link is genuine.
+
+This is inherent to a hash chain with no external anchor, and it is why `audit_chain_head` stores
+`last_seq` rather than the verifier computing `max(seq)`. The head is the independent witness:
+a head claiming five records when three are present is the only evidence the other two existed.
+`verify_chain()` compares them and reports truncation by name.
+
+Stated in spec 08 §7 as a limitation with its bound rather than left for a judge to find. The
+residual — a database superuser can rewrite both the chain and the head — is operational, not
+cryptographic, and external anchoring is future work.
+
+#### What verification reports
+
+NFR-6 asks for tamper detection. It would be satisfiable, and useless, by returning a boolean.
+`verify_chain()` names the **first** inconsistent seq, because everything after a break is
+untrustworthy by construction and an operator holding a broken chain needs somewhere to look.
+
+Four shapes are detected and each has a test: an altered record, a mid-chain deletion, a
+reordered `prev_hash`, and head truncation.
+
+The CLI keeps *"the chain is broken"* and *"I could not look at the chain"* as different exit
+codes. Collapsing them would hide a database outage behind a tamper alert, which is a bad night
+for whoever is on call.
+
+#### The seam to T-022
+
+`LedgerAuditSink` is the `RecordSink` the emitter has been writing to a list in tests. It lives
+in the control plane rather than the PEP because it owns a database session, and the PEP's
+contract is that its hot path never touches one — the emitter's drain task is off that path,
+which is exactly what makes that placement legal.
+
+A failed write raises, deliberately. ADR-026 claims a broken audit path stops authorization
+rather than silently losing records; a sink that swallowed its own errors would make that claim
+false again. There is an end-to-end test for it: a sink that fails once, and the record still
+arrives.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
 | Tickets complete | 21 of 53 in scope (61 defined, 8 deferred) |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1347, all passing (1260 plus 84 integration, plus 3 benchmarks) |
+| Tests | 1392, all passing (1286 plus 103 integration, plus 3 benchmarks) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
 | ADRs | 28 |
-| Specs written | 7 (01-05, 09, 10); 06-08 outstanding |
+| Specs written | 8 (01-05, 08, 09, 10); 06-07 outstanding |
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |
 | Threats found by measurement | 8 (TM-19 through TM-26) |

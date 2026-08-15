@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-024.
+**Last updated:** after T-024 and the audit chain.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -13,10 +13,10 @@ Keep this current at every milestone boundary — a stale status page is worse t
 |---|---|
 | **Milestone** | M1, M2, M3 complete · **M4 in progress** (T-018…T-022 done, T-024 pulled forward) · specs 06–08 outstanding |
 | **Tickets** | 21 done · 32 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 1347 passing (1260 in `make test`; 84 in `make test-integration`; 3 in `make bench`) |
+| **Tests** | 1392 passing (1286 in `make test`; 103 in `make test-integration`; 3 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — lint/types/tests, **NFR-1 benchmark**, integration against real Postgres, core purity, compose health |
-| **Specs** | 7 written — `05-policy` added by T-024; `06`–`08` outstanding |
+| **Specs** | 8 written — `08-audit-chain` added with the audit work; `06`–`07` outstanding |
 | **ADRs** | 28 |
 
 ---
@@ -51,7 +51,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-020 | `specs/10-scope-extraction.md` + `extractor.py` — route mapping, JSONPath-lite args, declared numeric types, **ambiguity refusal (TM-26)** | `acf6010` |
 | T-021 | `pool.py` — zero-network `reserve()`, single-flight top-up, graceful `RELEASE`, crash bound proven by killing a real process (ADR-025) | `e34b698` |
 | T-022 | `emitter.py` — buffered emit, **deny-on-full** back-pressure, retry rather than silent loss, OTEL span (ADR-026) | `cd722c6` |
-| T-024 | `specs/05-policy.md` + `policy.py` — Cedar engine, 32-case corpus, `NoDecision` fails closed, decimals unscaled (ADR-027, ADR-028). **Pulled ahead of T-023** so enforcement never turns on around a stub | — |
+| T-024 | `specs/05-policy.md` + `policy.py` — Cedar engine, 32-case corpus, `NoDecision` fails closed, decimals unscaled (ADR-027, ADR-028). **Pulled ahead of T-023** so enforcement never turns on around a stub | `b653ad4` |
+| — | `specs/08-audit-chain.md` + `db/audit.py` + `verify_audit_chain.py` — tamper, deletion, reordering and **head truncation** detected; the append lock proven load-bearing | — |
 
 ### Next
 

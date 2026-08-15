@@ -12,7 +12,18 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Numeric, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -191,3 +202,66 @@ class ReconciliationAnomalyRow(Base):
     reported_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     lease_state: Mapped[str] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AuditChainHeadRow(Base):
+    """The single row every append locks — spec 08 §4.
+
+    A one-row table rather than `SELECT max(seq) FOR UPDATE`, because an empty table has no
+    row to lock: the first two concurrent appends would both find nothing and both insert
+    `seq = 1`. The lock has to exist before the first record does.
+
+    `last_seq` is also the independent witness against head truncation (spec 08 §5). Deleting
+    the newest records leaves a chain that verifies perfectly; a head row disagreeing with
+    `max(seq)` is the only evidence that they were ever there.
+    """
+
+    __tablename__ = "audit_chain_head"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    last_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    last_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_audit_chain_head_singleton"),
+        CheckConstraint("last_seq >= 0", name="ck_audit_chain_head_seq_nonneg"),
+    )
+
+
+class AuditRecordRow(Base):
+    """One link of the decision chain — spec 08 §3, NFR-6, TM-12.
+
+    `record` carries the canonical `DecisionRecord` body, which holds `arg_digest` and never
+    argument values — the model's own validator enforces that (NFR-5, TM-13), so this table
+    cannot become a PII store by accident.
+
+    `created_at` is the ledger's clock and is deliberately distinct from the record's own
+    `timestamp`, which is the PEP's. They differ by the emitter's batching window (up to
+    500 ms, spec 04 §17.2); conflating them would make a batched write look like a delayed
+    decision.
+
+    `decision_id` is unique so a retried batch — T-022 retries failed writes rather than
+    dropping them — appends nothing the second time.
+    """
+
+    __tablename__ = "audit_records"
+
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), nullable=False, unique=True
+    )
+    record: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    record_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("seq > 0", name="ck_audit_records_seq_positive"),
+        # Only the genesis record may have no predecessor. Without this a later record with a
+        # NULL `prev_hash` would verify as a fresh genesis and hide everything before it.
+        CheckConstraint(
+            "(seq = 1 AND prev_hash IS NULL) OR (seq > 1 AND prev_hash IS NOT NULL)",
+            name="ck_audit_records_genesis_only_seq_one",
+        ),
+        Index("ix_audit_records_decision", "decision_id"),
+    )
