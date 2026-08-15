@@ -1433,3 +1433,59 @@ It denies immediately. A grace window is a second staleness limit with a friendl
 turns the failure mode into *policy silently out of date* rather than *policy refused*. The
 operator's fix is identical either way, and `max_staleness` is already the knob; setting it to
 600 s **is** the grace window, stated once instead of twice.
+
+---
+
+## ADR-030 — The operator activation gate blocks deployment of bundles that fail the 51-case corpus
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_pep.activation`, `agentiam_core.policy_testing`, T-026
+
+**Context:** We need to ensure that a newly pushed policy bundle is not hot-reloaded into the cache if it breaks existing critical workflows (T-026). The decision is to enforce this constraint actively within the activation pipeline, executing a defined test corpus (51 cases derived from the demo workflows) against the new bundle *before* allowing it to replace the active cache. 
+
+**Decision:** The activation gate fully executes the policy corpus in-memory using the `cedarpy` engine on the new bundle. If *any* test fails, the bundle is rejected with an HTTP 409 and is never hot-reloaded. 
+
+**Rationale:** Failsafe deployments. An operator error in Cedar authoring shouldn't cause an outage. Catching errors in the activation gate avoids a scenario where a faulty bundle drops critical traffic.
+
+---
+
+## ADR-031 — The Control Plane hosts the Cedar Authoring UI and shares the corpus from `agentiam-core`
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_controlplane.console`, `agentiam_core.corpus`, T-027
+
+**Context:** The operator needs an interface to edit Cedar policies, run tests against them, and see the exact diff of what will change before they activate the bundle (T-027). The corpus was initially located in `agentiam-pep` for the activation gate.
+
+**Decision:** We moved the 51-case corpus from `agentiam-pep` to `agentiam_core.corpus` so that both the Control Plane (for authoring diffs/tests) and the PEP (for the activation gate) share a single source of truth for the tests. We built the Admin Console in `agentiam-controlplane` using FastAPI, Jinja2, HTMX, and Tailwind for a rich, dynamic authoring experience.
+
+**Rationale:** Moving the corpus to `agentiam-core` prevents duplicating the test suite and risking divergence between what the author sees as "passing" and what the PEP enforces at activation. The stack choices (Jinja+HTMX) align with PLAN.md §4.3 to keep the deployment simple (no frontend build step) while enabling live updates.
+
+---
+
+## ADR-032 — The NL->Policy LLM client uses `httpx` to strictly guarantee no external API egress
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_controlplane.nl_compiler.ollama_client`, pyproject.toml, T-028
+
+**Context:** T-028 requires a deterministic, local LLM client for the natural language compiler with a strict requirement: **never an external API**. 
+
+**Decision:** We implemented `OllamaClient` wrapping `httpx.AsyncClient` with the base URL hardcoded to `http://127.0.0.1:11434`. We explicitly rejected using the official `ollama` Python package because raw `httpx` gives us absolute control to guarantee the client cannot be configured to hit a non-localhost egress. The client hardcodes `temperature=0` and `seed=42` for determinism, and utilizes the Ollama `format` parameter to constrain output generation to a JSON schema.
+
+**Rationale:** Security and predictability. By hardcoding the URL and relying on an internal `httpx` client, we physically prevent external egress and satisfy the demo determinism requirements perfectly. It maps all HTTP errors to a generic `OllamaError` to easily trigger the T-031 fallback template logic without leaking connection details.
+
+---
+
+## ADR-033 — The NL->Policy Compiler auto-generates test cases via JSON Schema and evaluates off-path
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_controlplane.nl_compiler.compiler`, T-029
+
+**Context:** The LLM needs to output both the Cedar source code and candidate test requests (T-029).
+
+**Decision:** We use Pydantic models (`CompilerTestCase` and `CompilerOutput`) to define the structure and extract a JSON schema from it. We pass this schema to Ollama's `format` parameter. We also established a separate evaluation script (`evaluate_compiler.py`) with a curated 30-case dataset (`dataset.json`) to benchmark the success rate using the `cedarpy` engine.
+
+**Rationale:** Pydantic is already in the dependency tree and handles JSON schema generation flawlessly. Using a structured output ensures the Control Plane can directly parse the candidate test cases and surface them to the user. The standalone evaluation script keeps the heavy GPU requirement out of the automated CI pipeline.

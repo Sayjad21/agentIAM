@@ -199,7 +199,9 @@ Do not reopen these without reading the ADR.
    input; consumers must still treat the output as untrusted.
 6. **T-026**: Added operator activation gate (`activation.py`) and 51-case corpus to `agentiam-pep` to ensure a bundle is fully evaluated before hot-reload caching.
 7. **T-027**: Added `agentiam-controlplane` Admin Console UI for Cedar Authoring. Features live testing, corpus evaluation, and diffing via FastAPI, Jinja2, and HTMX. The corpus was moved to `agentiam-core` to be shared between PEP and Control Plane.
-8. **A task copies its context at creation, not at first await** — but an awaited bare coroutine
+8. **T-028**: Created `ollama_client.py` as a strictly local, deterministic, and schema-constrained LLM client for the NL->Policy compiler. Uses `httpx.Timeout` and `temperature=0` to fulfill demo determinism requirements and `format` JSON constraints for generating policies.
+9. **T-029**: Built `compiler.py` to translate natural language to Cedar and auto-generate tests using Pydantic models. Wrote `evaluate_compiler.py` and a 30-case dataset in `dataset.json` to benchmark success rate on GPU-enabled environments.
+10. **A task copies its context at creation, not at first await** — but an awaited bare coroutine
    shares the caller's.
 9. **Alembic's `command.upgrade`/`downgrade` call `asyncio.run()` internally**, so they raise
    inside a running loop. The integration fixtures are deliberately *sync* for this reason.

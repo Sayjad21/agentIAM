@@ -11,8 +11,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026 done) · specs 06–07 outstanding |
-| **Tickets** | 24 done · 29 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 started (T-028, T-029 done) · specs 06–07 outstanding |
+| **Tickets** | 28 done · 25 remaining · 8 deferred · **61 defined, 53 in scope** |
 | **Tests** | 1552 passing (1434 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 3 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
@@ -58,6 +58,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-025 | `bundles.py` + `policy_cache.py` — Ed25519 signatures over canonical JSON, rollback refused on a monotonic serial, staleness, hot reload (ADR-029) | — |
 | T-026 | `activation.py` + 51-case corpus — operator activation gate for policy bundles, rejecting bundles that fail the test corpus (ADR-030) | — |
 | T-027 | `agentiam-controlplane` Admin Console UI — Cedar authoring UI with live testing and diffing via Jinja+HTMX + premium styling | — |
+| T-028 | `ollama_client.py` — Strictly local, deterministic `httpx`-based Ollama client with schema-constrained generation for the NL compiler | — |
+| T-029 | `compiler.py` + auto-generated tests — compiles natural language into Cedar with test cases and evaluated against a 30-case corpus | — |
 
 ### Next
 

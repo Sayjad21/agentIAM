@@ -1,0 +1,212 @@
+[
+  {
+    "nl": "Admins can do anything.",
+    "expected_tests": [
+      {"principal_id": "admin", "action": "system:reboot", "resource_type": "System", "expected": true},
+      {"principal_id": "user", "action": "system:reboot", "resource_type": "System", "expected": false}
+    ]
+  },
+  {
+    "nl": "Users can read their own documents.",
+    "expected_tests": [
+      {"principal_id": "alice", "action": "document:read", "resource_type": "Document", "expected": true},
+      {"principal_id": "bob", "action": "document:read", "resource_type": "Document", "expected": false}
+    ]
+  },
+  {
+    "nl": "Managers can approve expenses.",
+    "expected_tests": [
+      {"principal_id": "manager1", "action": "expense:approve", "resource_type": "Expense", "expected": true},
+      {"principal_id": "worker1", "action": "expense:approve", "resource_type": "Expense", "expected": false}
+    ]
+  },
+  {
+    "nl": "Anyone can read public announcements.",
+    "expected_tests": [
+      {"principal_id": "guest", "action": "announcement:read", "resource_type": "Announcement", "expected": true},
+      {"principal_id": "user1", "action": "announcement:read", "resource_type": "Announcement", "expected": true}
+    ]
+  },
+  {
+    "nl": "Contractors can only access the staging environment.",
+    "expected_tests": [
+      {"principal_id": "contractor", "action": "env:access", "resource_type": "Environment", "expected": true},
+      {"principal_id": "contractor", "action": "env:access", "resource_type": "Production", "expected": false}
+    ]
+  },
+  {
+    "nl": "HR can view employee records.",
+    "expected_tests": [
+      {"principal_id": "hr_rep", "action": "record:view", "resource_type": "EmployeeRecord", "expected": true},
+      {"principal_id": "engineer", "action": "record:view", "resource_type": "EmployeeRecord", "expected": false}
+    ]
+  },
+  {
+    "nl": "Billing admins can refund payments.",
+    "expected_tests": [
+      {"principal_id": "billing_admin", "action": "payment:refund", "resource_type": "Payment", "expected": true},
+      {"principal_id": "sales", "action": "payment:refund", "resource_type": "Payment", "expected": false}
+    ]
+  },
+  {
+    "nl": "Only the creator of a post can edit it.",
+    "expected_tests": [
+      {"principal_id": "creator", "action": "post:edit", "resource_type": "Post", "expected": true},
+      {"principal_id": "reader", "action": "post:edit", "resource_type": "Post", "expected": false}
+    ]
+  },
+  {
+    "nl": "Security team can view audit logs.",
+    "expected_tests": [
+      {"principal_id": "security", "action": "audit:view", "resource_type": "AuditLog", "expected": true},
+      {"principal_id": "dev", "action": "audit:view", "resource_type": "AuditLog", "expected": false}
+    ]
+  },
+  {
+    "nl": "Support agents can reset passwords for regular users but not admins.",
+    "expected_tests": [
+      {"principal_id": "support", "action": "user:reset_password", "resource_type": "User", "expected": true},
+      {"principal_id": "support", "action": "admin:reset_password", "resource_type": "Admin", "expected": false}
+    ]
+  },
+  {
+    "nl": "Users in the 'engineering' group can deploy to staging.",
+    "expected_tests": [
+      {"principal_id": "engineer", "action": "deploy:staging", "resource_type": "Environment", "expected": true},
+      {"principal_id": "marketing", "action": "deploy:staging", "resource_type": "Environment", "expected": false}
+    ]
+  },
+  {
+    "nl": "Only owners can delete repositories.",
+    "expected_tests": [
+      {"principal_id": "owner", "action": "repo:delete", "resource_type": "Repository", "expected": true},
+      {"principal_id": "contributor", "action": "repo:delete", "resource_type": "Repository", "expected": false}
+    ]
+  },
+  {
+    "nl": "Any authenticated user can create a comment.",
+    "expected_tests": [
+      {"principal_id": "user", "action": "comment:create", "resource_type": "Comment", "expected": true},
+      {"principal_id": "anonymous", "action": "comment:create", "resource_type": "Comment", "expected": false}
+    ]
+  },
+  {
+    "nl": "System services can read secrets.",
+    "expected_tests": [
+      {"principal_id": "service", "action": "secret:read", "resource_type": "Secret", "expected": true},
+      {"principal_id": "user", "action": "secret:read", "resource_type": "Secret", "expected": false}
+    ]
+  },
+  {
+    "nl": "Project managers can update project timelines.",
+    "expected_tests": [
+      {"principal_id": "pm", "action": "timeline:update", "resource_type": "Project", "expected": true},
+      {"principal_id": "developer", "action": "timeline:update", "resource_type": "Project", "expected": false}
+    ]
+  },
+  {
+    "nl": "QA engineers can transition issues to 'testing'.",
+    "expected_tests": [
+      {"principal_id": "qa", "action": "issue:transition_testing", "resource_type": "Issue", "expected": true},
+      {"principal_id": "pm", "action": "issue:transition_testing", "resource_type": "Issue", "expected": false}
+    ]
+  },
+  {
+    "nl": "Compliance officers can freeze accounts.",
+    "expected_tests": [
+      {"principal_id": "compliance", "action": "account:freeze", "resource_type": "Account", "expected": true},
+      {"principal_id": "support", "action": "account:freeze", "resource_type": "Account", "expected": false}
+    ]
+  },
+  {
+    "nl": "Data scientists can query the data warehouse.",
+    "expected_tests": [
+      {"principal_id": "data_scientist", "action": "warehouse:query", "resource_type": "Warehouse", "expected": true},
+      {"principal_id": "intern", "action": "warehouse:query", "resource_type": "Warehouse", "expected": false}
+    ]
+  },
+  {
+    "nl": "Only the CFO can approve expenses over $10000.",
+    "expected_tests": [
+      {"principal_id": "cfo", "action": "expense:approve_large", "resource_type": "Expense", "expected": true},
+      {"principal_id": "vp", "action": "expense:approve_large", "resource_type": "Expense", "expected": false}
+    ]
+  },
+  {
+    "nl": "Users can view their own profile.",
+    "expected_tests": [
+      {"principal_id": "user1", "action": "profile:view", "resource_type": "Profile", "expected": true},
+      {"principal_id": "user2", "action": "profile:view", "resource_type": "Profile", "expected": false}
+    ]
+  },
+  {
+    "nl": "Designers can upload assets to the design folder.",
+    "expected_tests": [
+      {"principal_id": "designer", "action": "folder:upload", "resource_type": "DesignFolder", "expected": true},
+      {"principal_id": "writer", "action": "folder:upload", "resource_type": "DesignFolder", "expected": false}
+    ]
+  },
+  {
+    "nl": "IT admins can provision new laptops.",
+    "expected_tests": [
+      {"principal_id": "it_admin", "action": "laptop:provision", "resource_type": "Hardware", "expected": true},
+      {"principal_id": "hr", "action": "laptop:provision", "resource_type": "Hardware", "expected": false}
+    ]
+  },
+  {
+    "nl": "Anyone can view the company directory.",
+    "expected_tests": [
+      {"principal_id": "employee", "action": "directory:view", "resource_type": "Directory", "expected": true},
+      {"principal_id": "contractor", "action": "directory:view", "resource_type": "Directory", "expected": true}
+    ]
+  },
+  {
+    "nl": "Legal team can approve vendor contracts.",
+    "expected_tests": [
+      {"principal_id": "legal", "action": "contract:approve", "resource_type": "Contract", "expected": true},
+      {"principal_id": "procurement", "action": "contract:approve", "resource_type": "Contract", "expected": false}
+    ]
+  },
+  {
+    "nl": "Sales reps can view their own pipeline.",
+    "expected_tests": [
+      {"principal_id": "sales1", "action": "pipeline:view", "resource_type": "Pipeline", "expected": true},
+      {"principal_id": "sales2", "action": "pipeline:view", "resource_type": "Pipeline", "expected": false}
+    ]
+  },
+  {
+    "nl": "Marketing can publish blogs but cannot delete them.",
+    "expected_tests": [
+      {"principal_id": "marketing", "action": "blog:publish", "resource_type": "Blog", "expected": true},
+      {"principal_id": "marketing", "action": "blog:delete", "resource_type": "Blog", "expected": false}
+    ]
+  },
+  {
+    "nl": "Operations can restart services during the maintenance window.",
+    "expected_tests": [
+      {"principal_id": "ops", "action": "service:restart", "resource_type": "Service", "expected": true},
+      {"principal_id": "dev", "action": "service:restart", "resource_type": "Service", "expected": false}
+    ]
+  },
+  {
+    "nl": "Finance can view payroll data.",
+    "expected_tests": [
+      {"principal_id": "finance", "action": "payroll:view", "resource_type": "Payroll", "expected": true},
+      {"principal_id": "hr", "action": "payroll:view", "resource_type": "Payroll", "expected": false}
+    ]
+  },
+  {
+    "nl": "Only superadmins can change the root policy.",
+    "expected_tests": [
+      {"principal_id": "superadmin", "action": "policy:change", "resource_type": "Policy", "expected": true},
+      {"principal_id": "admin", "action": "policy:change", "resource_type": "Policy", "expected": false}
+    ]
+  },
+  {
+    "nl": "Auditors have read-only access to all resources.",
+    "expected_tests": [
+      {"principal_id": "auditor", "action": "resource:read", "resource_type": "Any", "expected": true},
+      {"principal_id": "auditor", "action": "resource:write", "resource_type": "Any", "expected": false}
+    ]
+  }
+]
