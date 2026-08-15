@@ -36,4 +36,23 @@ class LeaseNotActiveError(ControlPlaneError):
     reason_code = ReasonCode.LEASE_NOT_ACTIVE
 
 
-__all__ = ["ControlPlaneError", "LeaseNotActiveError", "LeaseUnavailableError"]
+class AllocationError(ControlPlaneError):
+    """A proportional split would hand out more than the parent has — spec 04 §13, INV-5.
+
+    The *static* half of INV-5. Where `LeaseUnavailableError` means the pool had nothing
+    left to lease right now, this means the division itself does not add up: the parent
+    cannot promise its children more than `total - committed - leased - allocated`.
+
+    Checked under the parent's row lock and raised before any child row is created, so a
+    refused split leaves nothing behind.
+    """
+
+    reason_code = ReasonCode.BUDGET_EXHAUSTED_MANDATE
+
+
+__all__ = [
+    "AllocationError",
+    "ControlPlaneError",
+    "LeaseNotActiveError",
+    "LeaseUnavailableError",
+]

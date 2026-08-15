@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -102,6 +103,36 @@ async def sql(engine: AsyncEngine, statement: str, **params: object) -> None:
     factory = make_session_factory(engine)
     async with factory() as s, s.begin():
         await s.execute(text(statement), params)
+
+
+@pytest.fixture
+async def unconstrained_budgets(migrated_engine: AsyncEngine) -> AsyncIterator[None]:
+    """Drop the pool `CHECK`, and put both it and the data back afterwards.
+
+    Some violations cannot be injected while the constraint stands — measured, a plain
+    `UPDATE` breaking the pool invariant is refused outright. Dropping it is the honest way
+    to simulate a half-applied migration or a hand-repaired row.
+
+    The repair matters as much as the drop. A test that leaves rows the schema forbids
+    makes the *migration* fail on the way down: `0004_budget_split.downgrade` re-creates
+    the pre-split `CHECK`, and Postgres rightly refuses to add a constraint some existing
+    row violates. That surfaced as five failures and eight teardown errors across this
+    module when T-017 landed — none of them in the code under test.
+    """
+    await sql(migrated_engine, "ALTER TABLE budgets DROP CONSTRAINT ck_budgets_invariant")
+    try:
+        yield
+    finally:
+        await sql(
+            migrated_engine,
+            "UPDATE budgets SET committed = 0, leased = 0, allocated = 0",
+        )
+        await sql(
+            migrated_engine,
+            "ALTER TABLE budgets ADD CONSTRAINT ck_budgets_invariant CHECK ("
+            "committed >= 0 AND leased >= 0 AND allocated >= 0 "
+            "AND committed + leased + allocated <= total)",
+        )
 
 
 class TestCleanLedger:
@@ -275,11 +306,10 @@ class TestPoolViolation:
             )
 
     async def test_a_pool_violation_is_detected_once_the_constraint_is_gone(
-        self, migrated_engine: AsyncEngine
+        self, migrated_engine: AsyncEngine, unconstrained_budgets: None
     ) -> None:
         """A half-applied migration, or a row repaired by hand on a bad night."""
         _, budget_id = await seed_budget(migrated_engine, total=Decimal("100.0000"))
-        await sql(migrated_engine, "ALTER TABLE budgets DROP CONSTRAINT ck_budgets_invariant")
         await sql(
             migrated_engine,
             "UPDATE budgets SET committed = 150 WHERE id = :i",
@@ -292,10 +322,11 @@ class TestPoolViolation:
         assert violation.actual == Decimal("150.0000")
         assert violation.expected == Decimal("100.0000")
 
-    async def test_a_negative_balance_is_detected(self, migrated_engine: AsyncEngine) -> None:
+    async def test_a_negative_balance_is_detected(
+        self, migrated_engine: AsyncEngine, unconstrained_budgets: None
+    ) -> None:
         """`leased` going negative is the TM-21 signature (ADR-009)."""
         _, budget_id = await seed_budget(migrated_engine)
-        await sql(migrated_engine, "ALTER TABLE budgets DROP CONSTRAINT ck_budgets_invariant")
         await sql(
             migrated_engine,
             "UPDATE budgets SET leased = -5 WHERE id = :i",
@@ -324,11 +355,10 @@ class TestReportingQuality:
         assert {v.budget_id for v in report.violations} == {corrupted}
 
     async def test_every_violation_on_one_budget_is_reported(
-        self, migrated_engine: AsyncEngine
+        self, migrated_engine: AsyncEngine, unconstrained_budgets: None
     ) -> None:
         """Not just the first: a partial diagnosis sends the operator down one hole."""
         _, budget_id = await busy_ledger(migrated_engine)
-        await sql(migrated_engine, "ALTER TABLE budgets DROP CONSTRAINT ck_budgets_invariant")
         await sql(
             migrated_engine,
             "UPDATE budgets SET committed = 9999, leased = 8888 WHERE id = :i",

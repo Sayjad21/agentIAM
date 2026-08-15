@@ -1,22 +1,28 @@
 """The ledger's invariant checker — T-016, `PLAN.md` §9.
 
-Three things must always be true of every budget row, and they are not equally defended.
+Four things must always be true of every budget row, and they are not equally defended.
 
 | Invariant | Enforced by |
 |---|---|
-| `committed + leased <= total` | a `CHECK` constraint (T-012) **and** this checker |
+| `committed + leased + allocated <= total` | a `CHECK` (T-012, T-017) **and** this checker |
 | `committed == Σ settled reservations` | this checker only |
 | `leased == Σ outstanding of *active* leases` | this checker only |
+| `allocated == Σ child allocations' totals` | this checker only |
 
 Measured while writing this (T-016 probe): a plain `UPDATE` breaking the first is refused
 by Postgres with an `IntegrityError`, while one breaking the second is accepted without
-complaint — the `CHECK` compares three columns of a single row and cannot see a sum over
-two other tables. So the pool invariant is belt-and-braces here, and the two *books*
-invariants are the reason the tool exists. That is exactly the split ADR-010 describes:
-idempotency protects the books, not the pool, and nothing protected the books.
+complaint — the `CHECK` compares columns of a single row and cannot see a sum over other
+tables, or over other rows of its own. So the pool invariant is belt-and-braces here, and
+the three *books* invariants are the reason the tool exists. That is exactly the split
+ADR-010 describes: idempotency protects the books, not the pool, and nothing protected the
+books.
 
-**Everything is read in one statement.** Not a style choice. The three quantities are
-compared against each other, so they have to come from one snapshot; read them in three
+The fourth arrived with T-017's proportional split, and has the same shape as the other
+two: `allocated` records what a pool row has carved out into child rows, and only a sum
+over `budgets` itself can confirm the two agree.
+
+**Everything is read in one statement.** Not a style choice. The quantities are compared
+against each other, so they have to come from one snapshot; read them in separate
 statements and an `ACQUIRE` landing between two of them reports a violation that was never
 real. A checker that cries wolf gets muted, which ends in the same place as one that never
 fires — `tests/integration/test_invariant_checker.py` sweeps under concurrent load to keep
@@ -53,6 +59,7 @@ class InvariantKind(StrEnum):
     POOL = "pool"
     COMMITTED_VS_RESERVATIONS = "committed_vs_reservations"
     LEASED_VS_ACTIVE_LEASES = "leased_vs_active_leases"
+    ALLOCATED_VS_CHILDREN = "allocated_vs_children"
     NEGATIVE_BALANCE = "negative_balance"
 
     @property
@@ -62,14 +69,17 @@ class InvariantKind(StrEnum):
 
 
 _DESCRIPTIONS: Final[dict[InvariantKind, str]] = {
-    InvariantKind.POOL: "committed + leased exceeds total",
+    InvariantKind.POOL: "committed + leased + allocated exceeds total",
     InvariantKind.COMMITTED_VS_RESERVATIONS: (
         "committed disagrees with the sum of settled reservations"
     ),
     InvariantKind.LEASED_VS_ACTIVE_LEASES: (
         "leased disagrees with the outstanding total of active leases"
     ),
-    InvariantKind.NEGATIVE_BALANCE: "committed or leased is negative",
+    InvariantKind.ALLOCATED_VS_CHILDREN: (
+        "allocated disagrees with the total of this budget's child allocations"
+    ),
+    InvariantKind.NEGATIVE_BALANCE: "committed, leased or allocated is negative",
 }
 
 
@@ -145,8 +155,10 @@ _SWEEP: Final = text(
         b.total                             AS total,
         b.committed                         AS committed,
         b.leased                            AS leased,
+        b.allocated                         AS allocated,
         COALESCE(settled.amount, 0)         AS settled_reservations,
-        COALESCE(active.outstanding, 0)     AS active_outstanding
+        COALESCE(active.outstanding, 0)     AS active_outstanding,
+        COALESCE(children.allocated, 0)     AS child_totals
     FROM budgets b
     LEFT JOIN (
         SELECT l.budget_id, SUM(r.amount) AS amount
@@ -160,6 +172,12 @@ _SWEEP: Final = text(
         WHERE l.state = :active_state
         GROUP BY l.budget_id
     ) active ON active.budget_id = b.id
+    LEFT JOIN (
+        SELECT c.parent_budget_id, SUM(c.total) AS allocated
+        FROM budgets c
+        WHERE c.parent_budget_id IS NOT NULL
+        GROUP BY c.parent_budget_id
+    ) children ON children.parent_budget_id = b.id
     """
 )
 
@@ -178,6 +196,8 @@ def _violations_for(row: object) -> list[Violation]:
     leased: Decimal = row.leased  # type: ignore[attr-defined]
     settled: Decimal = row.settled_reservations  # type: ignore[attr-defined]
     outstanding: Decimal = row.active_outstanding  # type: ignore[attr-defined]
+    allocated: Decimal = row.allocated  # type: ignore[attr-defined]
+    child_totals: Decimal = row.child_totals  # type: ignore[attr-defined]
 
     def violation(kind: InvariantKind, expected: Decimal, actual: Decimal) -> Violation:
         return Violation(
@@ -191,19 +211,22 @@ def _violations_for(row: object) -> list[Violation]:
 
     found: list[Violation] = []
 
-    if committed < 0 or leased < 0:
+    if committed < 0 or leased < 0 or allocated < 0:
         # Reported against whichever went negative; `leased < 0` is the TM-21 signature.
-        negative = leased if leased < 0 else committed
+        negative = next(v for v in (leased, committed, allocated) if v < 0)
         found.append(violation(InvariantKind.NEGATIVE_BALANCE, Decimal(0), negative))
 
-    if committed + leased > total:
-        found.append(violation(InvariantKind.POOL, total, committed + leased))
+    if committed + leased + allocated > total:
+        found.append(violation(InvariantKind.POOL, total, committed + leased + allocated))
 
     if committed != settled:
         found.append(violation(InvariantKind.COMMITTED_VS_RESERVATIONS, settled, committed))
 
     if leased != outstanding:
         found.append(violation(InvariantKind.LEASED_VS_ACTIVE_LEASES, outstanding, leased))
+
+    if allocated != child_totals:
+        found.append(violation(InvariantKind.ALLOCATED_VS_CHILDREN, child_totals, allocated))
 
     return found
 

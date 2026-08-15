@@ -24,21 +24,53 @@ MONEY = Numeric(20, 4, asdecimal=True)
 
 
 class BudgetRow(Base):
-    """One ledger row per `(mandate_id, dimension)` — spec 04 §2.1.
+    """A budget row — spec 04 §2.1 and §13.
+
+    Two kinds, distinguished by `parent_budget_id`:
+
+    * **Pool** (`parent_budget_id IS NULL`) — one per `(mandate_id, dimension)`, drawn
+      from by every sibling under that mandate. The shared-pool mitigation for INV-5, and
+      the default.
+    * **Allocation** (`parent_budget_id` set) — one child agent's explicit slice of a
+      pool, created by `split_budget`. The proportional-split mitigation.
+
+    `allocated` is how much of this row's `total` has been carved out into child rows. It
+    joins the pool invariant because budget handed to a child is spoken for: without it, a
+    parent could allocate its whole pool and then lease the same money out again.
 
     `mandate_id` carries no foreign key: no `mandates` SQL table exists yet (T-005 built
-    `Mandate` as a pure Pydantic model with no persistence). See ADR-014.
+    `Mandate` as a pure Pydantic model with no persistence). See ADR-014. `parent_budget_id`
+    does get one — `budgets` is a real table.
     """
 
     __tablename__ = "budgets"
     __table_args__ = (
-        UniqueConstraint("mandate_id", "dimension", name="uq_budgets_mandate_dimension"),
+        # T-012's guarantee, now scoped to pool rows. It has to become conditional rather
+        # than disappear: allocation rows share their parent's `(mandate_id, dimension)`
+        # by design, and an unconditional constraint refuses the whole feature — measured
+        # before this change, a plain `UniqueViolationError`.
+        Index(
+            "uq_budgets_pool",
+            "mandate_id",
+            "dimension",
+            unique=True,
+            postgresql_where=text("parent_budget_id IS NULL"),
+        ),
+        UniqueConstraint("parent_budget_id", "agent_id", "dimension", name="uq_budgets_allocation"),
         # The pool invariant (spec 04 §2.1), enforced by the schema and not only by
         # application code: a bug that violates it must fail the transaction rather than
         # corrupt the pool.
         CheckConstraint(
-            "committed >= 0 AND leased >= 0 AND committed + leased <= total",
+            "committed >= 0 AND leased >= 0 AND allocated >= 0 "
+            "AND committed + leased + allocated <= total",
             name="ck_budgets_invariant",
+        ),
+        # A row is a pool or an allocation, never half of each. One with a parent but no
+        # agent belongs to nobody; one with an agent but no parent is a pool wearing a
+        # name tag. Either would be skipped by the invariant checker's per-kind queries.
+        CheckConstraint(
+            "(parent_budget_id IS NULL) = (agent_id IS NULL)",
+            name="ck_budgets_split_shape",
         ),
     )
 
@@ -50,7 +82,17 @@ class BudgetRow(Base):
     total: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     committed: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal("0"))
     leased: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal("0"))
+    allocated: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal("0"))
+    parent_budget_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("budgets.id"), nullable=True
+    )
+    agent_id: Mapped[str | None] = mapped_column(nullable=True)
     version: Mapped[int] = mapped_column(nullable=False, default=0)
+
+    @property
+    def available(self) -> Decimal:
+        """What is left to lease or allocate: `total - committed - leased - allocated`."""
+        return self.total - self.committed - self.leased - self.allocated
 
 
 _LEASE_STATES_SQL = ", ".join(f"'{state.value}'" for state in LeaseState)

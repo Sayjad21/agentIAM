@@ -692,3 +692,67 @@ refused connection surfaces as a bare `ConnectionRefusedError` because the failu
 the dialect and SQLAlchemy never wraps it. The script crashed on the exact condition its
 docstring claimed it survived. The unit suite now points it at a dead port; removing `OSError`
 from the except clause fails three tests.
+
+---
+
+## ADR-019 — Proportional split adds an `allocated` column, not a second meaning for `leased`
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_controlplane.db.models`, `db.ledger.split_budget`, `db.invariants`,
+`docs/specs/04-lease-protocol.md` §13, §15, T-017, INV-5
+
+**Context:** spec 04 §13 says a proportional split gives each child "its own budget row." Two
+things had to be settled before that could be built, and neither was answerable from the spec
+text.
+
+**Measured first.** A second row for the same `(mandate_id, dimension)` is refused —
+`uq_budgets_mandate_dimension`, an ordinary `UniqueViolationError`. So the feature is not
+additive; it changes a constraint T-012 established.
+
+**Decision 1 — the pool uniqueness becomes partial, not absent.** `uq_budgets_pool` is a unique
+index on `(mandate_id, dimension) WHERE parent_budget_id IS NULL`. Allocation rows share their
+parent's pair by design, so an unconditional constraint refuses the whole feature; dropping it
+outright would also allow two pool rows for one mandate, which is the thing T-012 was protecting
+against. A second constraint, `uq_budgets_allocation` on `(parent_budget_id, agent_id,
+dimension)`, keeps one allocation per child — splitting twice for the same agent is a bug, not a
+top-up.
+
+`ck_budgets_split_shape` requires `parent_budget_id` and `agent_id` to be set together or not at
+all. A row with a parent and no agent belongs to nobody; a row with an agent and no parent is a
+pool wearing a name tag. Either would be skipped by the checker's per-kind queries rather than
+reported, which is the worst outcome available.
+
+**Decision 2 — `allocated` is its own column.** Budget promised to a child is spoken for, so it
+has to enter the pool invariant:
+
+    committed + leased + allocated <= total
+
+The tempting alternative — increment `leased` when allocating, since the money is equally
+unavailable either way — is wrong, and specifically wrong in a way that only shows up one ticket
+later. T-016's checker asserts `leased == Σ outstanding of active leases`. Overloading `leased`
+with allocations breaks that check on the first split, and the natural "fix" would be to weaken
+the check, which is rule 9 in reverse. Two meanings, two columns.
+
+**Consequences.** The checker gains a fourth invariant, `allocated == Σ child totals`, with the
+same shape as the other two books invariants: no `CHECK` can express a sum over other rows, so
+only the checker can see it drift.
+
+`acquire()` gains `agent_id: str | None = None`. `None` means the pool row, which is spec 04
+§13's default and keeps every T-013 and T-014 call site working unchanged. It is not optional
+politeness: before T-017 the lookup was `scalar_one()` on `(mandate_id, dimension)`, and once a
+split exists that raises `MultipleResultsFound`.
+
+**The downgrade destroys data, and says so.** Below revision 0004 an allocation row cannot be
+represented, so its leases, settled reservations and anomalies go with it. Merging children back
+into their parent is not a safer alternative — it would have to invent an answer for a child's
+already-`committed` spend. The deletes run in foreign-key order because the obvious single
+`DELETE FROM budgets` fails on `leases_budget_id_fkey` as soon as a split has been spent
+against; measured, as a teardown error the first time the tests ran.
+
+**A spec correction, not a deviation.** §13 and §15 both recorded the three-sibling outcome as
+"granted 100 / 50 / 0". Measured, a probe returned `50 / 100 / 0`: which caller gets the full
+amount depends on which transaction takes the row lock first. Stated as a sequence it reads like
+a guarantee, and a test written from it would assert the scheduler and flake. The spec now states
+what is actually guaranteed — the grants sum to exactly what the pool had — and the tests assert
+that.

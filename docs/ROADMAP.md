@@ -172,10 +172,10 @@ them, not M3, so M3 starts now and the specs land against the milestone that nee
 | T-013 | ACQUIRE / RELEASE / REAP + 50-concurrent-acquire test | **Done.** `FOR UPDATE` and the skew margin each removed to prove they are load-bearing; spec 04's `max_fraction` clamp found incompatible with this test (ADR-015) |
 | T-014 | RESERVE / COMMIT / refund, idempotent | **Done.** Decimal exact to 4 places; replayed commits are no-ops; spec 04 §4.4's statement order found to be a TOCTOU race (ADR-017) |
 | T-016 | `scripts/run_invariant_checker.py` | **Done.** Detects an injected violation of each of its four invariants; measured at 3–5 ms over 500 budgets against a 1 s bar; swept under concurrent load to prove it does not cry wolf |
-| **T-017** | Sibling budgets: proportional split + shared pool (INV-5) | 3-sibling concurrent test holds `Σ spend ≤ mandate` |
+| T-017 | Sibling budgets: proportional split + shared pool (INV-5) | **Done.** Three PEP instances, three separate engines; grants sum to exactly the pool. Spec 04's stated `100 / 50 / 0` corrected — that is lock order, not a guarantee (ADR-019) |
 
-**Exit gate:** all lease operations working · stateful hypothesis test P-10 green · invariant
-checker proven to catch a real violation · sibling budget test passing.
+**Exit gate — met.** All lease operations working · P-10 green · invariant checker proven
+against a real injected violation · sibling budget test passing under both mitigations.
 
 > The `integration` marker is excluded from `make test` because it needs Docker, so these tests
 > run under `make test-integration` and in their own CI job. That job was added while picking

@@ -439,13 +439,39 @@ crash: it is what makes the stranded-budget limitation quantifiable rather than 
 
 Two modes, both implemented (T-017), resolving INV-5.
 
-**Shared pool — the default.** Children reference the same `budget_id` and draw from one pool.
-Enforced dynamically by leases. Measured: three children each requesting 100 against a total of
-150 receive 100, 50, and 0 — the pool refuses rather than over-issuing.
+**Shared pool — the default.** Children reference the same pool row and draw from it. A pool
+row is one with `parent_budget_id IS NULL`, one per `(mandate_id, dimension)`. Enforced
+dynamically by leases and `SELECT ... FOR UPDATE`.
+
+Measured: three children each requesting 100 against a total of 150 are granted amounts summing
+to exactly 150 — the pool refuses rather than over-issuing. **The individual grants are not
+`100 / 50 / 0` in any fixed order**; earlier drafts of this section and of §15 stated them that
+way, which reads like a guarantee and is not one. Which caller gets the full 100 depends on
+which transaction takes the row lock first. What is guaranteed, and what T-017's tests assert,
+is `Σ granted = min(Σ requested, available)` and never more.
 
 **Proportional split.** The parent divides the budget explicitly at mint time; each child gets
 its own budget row. Enforced statically. Predictable, and wasteful when one child needs more
 than its share.
+
+An allocation row carries `parent_budget_id` and `agent_id` — both, or neither, enforced by
+`ck_budgets_split_shape`. It shares its parent's `(mandate_id, dimension)`, so the uniqueness
+guarantee on that pair is **partial**, scoped to pool rows.
+
+The parent tracks what it has given away in `allocated`, and that column joins the pool
+invariant:
+
+    committed + leased + allocated <= total
+
+Budget promised to a child is spoken for. Without the third term a parent could allocate its
+whole pool and then lease the same money out again. `allocated` is a separate column rather than
+an increment of `leased` because `leased` has a second meaning the invariant checker relies on —
+it must equal the outstanding total of *active leases* — and overloading it would break that
+check the moment a split happened.
+
+`SPLIT` runs the whole division under the parent's row lock in one transaction: sum, compare
+against `total - committed - leased - allocated`, create every child row, raise `allocated`. A
+split that does not fit is refused before any row is created.
 
 Shared pool is the default because it is what real workflows want. Both are offered because the
 distinction — that classic capability systems do not address quantitative resources shared
@@ -484,7 +510,7 @@ protocol model against these scenarios; T-013 and T-016 turn them into real test
 | G3 removed (accept late commits) | `leased` negative, 55/400 |
 | G4 removed (replay) | pool safe; `committed` overstated 3× |
 | Skew margin removed | budget re-issued while a lagging PEP still holds it |
-| Three siblings, shared pool of 150, each requesting 100 | granted 100 / 50 / 0 |
+| Three siblings, shared pool of 150, each requesting 100 | grants sum to exactly 150; the split between them is whichever order the row lock serializes |
 | Crash with 60 of 100 outstanding, then reap | available 40 → 100 |
 
 **The value of this table is the failures, not the pass.** A guard whose removal changes nothing
@@ -505,7 +531,7 @@ their name suggests (§5.1).
 | — | commit exceeding `outstanding` is clamped (G2) | T-014 |
 | — | commit against a reaped lease is rejected and recorded (G3, §11) | T-014 |
 | — | invariant checker detects a deliberately corrupted budget row | T-016 |
-| — | three siblings, concurrent, `Σ ≤ mandate` (INV-5) | T-017 |
+| — | three siblings, concurrent, three PEP instances, `Σ ≤ mandate` (INV-5) | T-017 |
 | CH-3 | SIGKILL one PEP of three; its lease strands ≤ TTL then reclaims | T-052 |
 
 P-10's `RuleBasedStateMachine` rules MUST include: acquire, reserve, commit, refund, release,

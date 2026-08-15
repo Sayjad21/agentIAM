@@ -27,6 +27,7 @@ identical, only the order of two independent reads changed. See ADR-016.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -39,7 +40,11 @@ from agentiam_controlplane.db.models import (
     ReconciliationAnomalyRow,
     ReservationRow,
 )
-from agentiam_controlplane.errors import LeaseNotActiveError, LeaseUnavailableError
+from agentiam_controlplane.errors import (
+    AllocationError,
+    LeaseNotActiveError,
+    LeaseUnavailableError,
+)
 from agentiam_core.models import LeaseState
 
 #: Clock-skew allowance (spec 04 §9). A PEP must stop using a lease at `expires_at - S`;
@@ -47,6 +52,78 @@ from agentiam_core.models import LeaseState
 #: views from ever overlapping. Fixed here until a later ticket needs it to be configurable
 #: per deployment (spec 04 §12 lists it as a tunable, with this value as the default).
 SKEW_ALLOWANCE = timedelta(seconds=5)
+
+
+async def split_budget(
+    session: AsyncSession,
+    *,
+    parent_budget_id: uuid.UUID,
+    dimension: str,
+    allocations: Mapping[str, Decimal],
+) -> dict[str, uuid.UUID]:
+    """Carve a pool into per-child allocations — spec 04 §13, the static half of INV-5.
+
+    The whole division happens under the parent's row lock, in one transaction: the sum is
+    checked against what the parent actually has left, then every child row is created and
+    the parent's `allocated` is raised by the same total. Splitting in two steps would let
+    a concurrent `ACQUIRE` slip between the check and the writes and lease out budget this
+    call has already promised away.
+
+    Args:
+        session: A fresh session.
+        parent_budget_id: The pool row being divided.
+        dimension: The dimension being divided. Recorded on each child row.
+        allocations: `{agent_id: amount}`. Every amount must be positive.
+
+    Returns:
+        `{agent_id: budget_id}` for the rows created.
+
+    Raises:
+        ValueError: No allocations given, or one is not positive. Both are programming
+            errors: a child with no budget is expressed by a `BudgetCeiling` caveat of
+            zero, not by a ledger row of zero.
+        AllocationError: The split exceeds what the parent can promise. Nothing is
+            created — the check runs before any insert, inside the lock.
+    """
+    if not allocations:
+        raise ValueError("split_budget() needs at least one allocation")
+    for agent_id, amount in allocations.items():
+        if amount <= 0:
+            raise ValueError(f"allocation for {agent_id!r} must be positive, got {amount}")
+
+    requested = sum(allocations.values(), Decimal(0))
+
+    async with session.begin():
+        parent = (
+            await session.execute(
+                select(BudgetRow).where(BudgetRow.id == parent_budget_id).with_for_update()
+            )
+        ).scalar_one()
+
+        if requested > parent.available:
+            raise AllocationError(
+                f"cannot allocate {requested} from budget {parent_budget_id}: "
+                f"only {parent.available} of {parent.total} is unspoken for "
+                f"(committed {parent.committed}, leased {parent.leased}, "
+                f"already allocated {parent.allocated})"
+            )
+
+        created: dict[str, uuid.UUID] = {}
+        for agent_id, amount in allocations.items():
+            child = BudgetRow(
+                mandate_id=parent.mandate_id,
+                dimension=dimension,
+                total=amount,
+                parent_budget_id=parent.id,
+                agent_id=agent_id,
+            )
+            session.add(child)
+            await session.flush()
+            created[agent_id] = child.id
+
+        parent.allocated += requested
+
+    return created
 
 
 async def acquire(
@@ -58,24 +135,54 @@ async def acquire(
     pep_id: str,
     ttl: timedelta,
     now: datetime,
+    agent_id: str | None = None,
 ) -> LeaseRow:
     """`ACQUIRE` — spec 04 §4.1.
 
+    Args:
+        session: A fresh session; concurrent acquires must not share one.
+        mandate_id: Which mandate's budget to draw from.
+        dimension: Which budget dimension.
+        requested: How much the caller wants. The grant is `min(requested, available)`.
+        pep_id: Which PEP instance is asking.
+        ttl: How long the lease lives.
+        now: The caller's instant; `expires_at` is `now + ttl`.
+        agent_id: Draw from this agent's **allocation** instead of the shared pool. `None`
+            — the default and spec 04 §13's default mode — means the pool row itself, so
+            every sibling competes for one balance.
+
+    Returns:
+        The new lease.
+
     Raises:
-        LeaseUnavailableError: `grant <= 0` — the pool has nothing left to give.
+        LeaseUnavailableError: `grant <= 0` — nothing left to give.
     """
     async with session.begin():
+        # A split gives one mandate several rows for the same dimension, so this lookup has
+        # to say *which*. Before T-017 it was `scalar_one()` on `(mandate_id, dimension)`;
+        # unqualified, that now raises `MultipleResultsFound` the moment a split exists.
+        row_filter = (
+            BudgetRow.agent_id == agent_id
+            if agent_id is not None
+            else BudgetRow.parent_budget_id.is_(None)
+        )
         result = await session.execute(
             select(BudgetRow)
-            .where(BudgetRow.mandate_id == mandate_id, BudgetRow.dimension == dimension)
+            .where(
+                BudgetRow.mandate_id == mandate_id,
+                BudgetRow.dimension == dimension,
+                row_filter,
+            )
             .with_for_update()
         )
         budget = result.scalar_one()
-        available = budget.total - budget.committed - budget.leased
+        available = budget.available
         grant = min(requested, available)
         if grant <= 0:
+            held_by = f" allocation {agent_id!r}" if agent_id is not None else " pool"
             raise LeaseUnavailableError(
-                f"no budget available for mandate {mandate_id} dimension {dimension!r}"
+                f"no budget available in the{held_by} for mandate {mandate_id} "
+                f"dimension {dimension!r}"
             )
         budget.leased += grant
         lease = LeaseRow(

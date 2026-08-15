@@ -644,122 +644,6 @@ the literal spec order and silently reintroducing the crash — and it was verif
 repo verifies things: literal order restored, test failed with the exact error, lock-first
 restored, suite green.
 
-### T-016 · The invariant checker
-
-The tool that runs on screen during Beat 4 while three sub-agents spend concurrently against a
-ceiling a judge just set. `ROADMAP.md` states the bar without flinching: *a checker never tested
-against a real violation is decoration*.
-
-#### Is it doing anything the database isn't?
-
-`PLAN.md` names two invariants, and the first — `committed + leased <= total` — has been a
-database `CHECK` since T-012. Re-asserting in Python what the schema enforces is usually waste,
-so the first thing was to find out whether the checker had a job at all.
-
-| Injection | Result |
-|---|---|
-| `UPDATE budgets SET committed = total + 1` | **Refused** — `IntegrityError` |
-| `UPDATE budgets SET committed = committed + 10` | **Accepted.** `Σ reservations` still 40, `committed` now 50 |
-
-There is the job. A `CHECK` compares three columns of one row; it cannot see a sum across
-`reservations` and `leases`. The books invariants have no schema backing whatsoever, and the
-second `UPDATE` is what a double-applied commit or a hand-repaired row actually looks like on a
-bad night. ADR-010 said it a milestone earlier — idempotency protects the books, not the pool —
-and it turned out nothing at all was protecting the books.
-
-So the checker asserts four things rather than two. The third is not in `PLAN.md`: `leased` must
-equal the outstanding total of *active* leases, derived by reading every write path in
-`ledger.py`. It is the invariant a missed decrement in `_retire` breaks, which is the ADR-009 and
-TM-21 failure shape. The fourth separates a negative `leased` from a generic pool overflow,
-because negative `leased` is the specific thing model-checking produced back in T-004 and it
-deserves its own name in the alert.
-
-#### The failure mode that isn't "misses a violation"
-
-Everything is read in **one** SQL statement, and that is a correctness requirement rather than a
-performance one. The three quantities are compared against each other, so they have to come from
-one snapshot. Read them in three statements and an `ACQUIRE` landing between two of them reports
-a violation that never existed — and a checker that cries wolf gets muted, which ends in exactly
-the same place as a checker that never fires. The integration suite sweeps 25 times against four
-concurrent workers to keep that honest.
-
-Measured: 3–5 ms for a sweep over 500 budgets, against an acceptance bar of *detect within one
-second*. About 200× headroom.
-
-#### Found by running it, not by testing it
-
-The loop swallows errors so a chaos run can continue through CH-1 (Postgres down) — and swallowed
-only `SQLAlchemyError`. Running the CLI as a real process against a dead port showed a bare
-`ConnectionRefusedError` escaping and killing it: the failure happens below the dialect, so
-SQLAlchemy never wraps it. The script crashed on precisely the condition its own docstring
-claimed it survived.
-
-Worth dwelling on, because the unit tests were green. They tested the rendering, the exit codes,
-and the sweep against a real ledger; none of them started the process and pointed it at nothing.
-Three tests now do, and removing `OSError` from the except clause fails all three.
-
-The same run also surfaced that the script had invented `AGENTIAM_DATABASE_URL` while Alembic
-and `.env.example` use `DATABASE_URL` — a second name for one thing, found by trying to use it
-rather than by reading it.
-
-### T-016 · The invariant checker
-
-The tool that runs on screen during Beat 4 while three sub-agents spend concurrently against a
-ceiling a judge just set. `ROADMAP.md` states the bar without flinching: *a checker never tested
-against a real violation is decoration*.
-
-#### Is it doing anything the database isn't?
-
-`PLAN.md` names two invariants, and the first — `committed + leased <= total` — has been a
-database `CHECK` since T-012. Re-asserting in Python what the schema enforces is usually waste,
-so the first thing was to find out whether the checker had a job at all.
-
-| Injection | Result |
-|---|---|
-| `UPDATE budgets SET committed = total + 1` | **Refused** — `IntegrityError` |
-| `UPDATE budgets SET committed = committed + 10` | **Accepted.** `Σ reservations` still 40, `committed` now 50 |
-
-There is the job. A `CHECK` compares three columns of one row; it cannot see a sum across
-`reservations` and `leases`. The books invariants have no schema backing whatsoever, and the
-second `UPDATE` is what a double-applied commit or a hand-repaired row actually looks like on a
-bad night. ADR-010 said it a milestone earlier — idempotency protects the books, not the pool —
-and it turned out nothing at all was protecting the books.
-
-So the checker asserts four things rather than two. The third is not in `PLAN.md`: `leased` must
-equal the outstanding total of *active* leases, derived by reading every write path in
-`ledger.py`. It is the invariant a missed decrement in `_retire` breaks, which is the ADR-009 and
-TM-21 failure shape. The fourth separates a negative `leased` from a generic pool overflow,
-because negative `leased` is the specific thing model-checking produced back in T-004 and it
-deserves its own name in the alert.
-
-#### The failure mode that isn't "misses a violation"
-
-Everything is read in **one** SQL statement, and that is a correctness requirement rather than a
-performance one. The three quantities are compared against each other, so they have to come from
-one snapshot. Read them in three statements and an `ACQUIRE` landing between two of them reports
-a violation that never existed — and a checker that cries wolf gets muted, which ends in exactly
-the same place as a checker that never fires. The integration suite sweeps 25 times against four
-concurrent workers to keep that honest.
-
-Measured: 3–5 ms for a sweep over 500 budgets, against an acceptance bar of *detect within one
-second*. About 200× headroom.
-
-#### Found by running it, not by testing it
-
-The loop swallows errors so a chaos run can continue through CH-1 (Postgres down) — and swallowed
-only `SQLAlchemyError`. Running the CLI as a real process against a dead port showed a bare
-`ConnectionRefusedError` escaping and killing it: the failure happens below the dialect, so
-SQLAlchemy never wraps it. The script crashed on precisely the condition its own docstring
-claimed it survived.
-
-Worth dwelling on, because the unit tests were green. They tested the rendering, the exit codes,
-and the sweep against a real ledger; none of them started the process and pointed it at nothing.
-Three tests now do, and removing `OSError` from the except clause fails all three.
-
-The same run also surfaced that the script had invented `AGENTIAM_DATABASE_URL` while Alembic
-and `.env.example` use `DATABASE_URL` — a second name for one thing, found by trying to use it
-rather than by reading it.
-
 ### Found while integrating M3: none of it ran in CI
 
 Picking the work back up, the whole suite passed — 788 tests. It also **deselected 45**, which is
@@ -787,17 +671,148 @@ need it, so it stays out of the authoritative Makefile.
 
 ---
 
+### T-016 · The invariant checker
+
+The tool that runs on screen during Beat 4 while three sub-agents spend concurrently against a
+ceiling a judge just set. `ROADMAP.md` states the bar without flinching: *a checker never tested
+against a real violation is decoration*.
+
+#### Is it doing anything the database isn't?
+
+`PLAN.md` names two invariants, and the first — `committed + leased <= total` — has been a
+database `CHECK` since T-012. Re-asserting in Python what the schema enforces is usually waste,
+so the first thing was to find out whether the checker had a job at all.
+
+| Injection | Result |
+|---|---|
+| `UPDATE budgets SET committed = total + 1` | **Refused** — `IntegrityError` |
+| `UPDATE budgets SET committed = committed + 10` | **Accepted.** `Σ reservations` still 40, `committed` now 50 |
+
+There is the job. A `CHECK` compares three columns of one row; it cannot see a sum across
+`reservations` and `leases`. The books invariants have no schema backing whatsoever, and the
+second `UPDATE` is what a double-applied commit or a hand-repaired row actually looks like on a
+bad night. ADR-010 said it a milestone earlier — idempotency protects the books, not the pool —
+and it turned out nothing at all was protecting the books.
+
+So the checker asserts four things rather than two. The third is not in `PLAN.md`: `leased` must
+equal the outstanding total of *active* leases, derived by reading every write path in
+`ledger.py`. It is the invariant a missed decrement in `_retire` breaks, which is the ADR-009 and
+TM-21 failure shape. The fourth separates a negative `leased` from a generic pool overflow,
+because negative `leased` is the specific thing model-checking produced back in T-004 and it
+deserves its own name in the alert.
+
+#### The failure mode that isn't "misses a violation"
+
+Everything is read in **one** SQL statement, and that is a correctness requirement rather than a
+performance one. The three quantities are compared against each other, so they have to come from
+one snapshot. Read them in three statements and an `ACQUIRE` landing between two of them reports
+a violation that never existed — and a checker that cries wolf gets muted, which ends in exactly
+the same place as a checker that never fires. The integration suite sweeps 25 times against four
+concurrent workers to keep that honest.
+
+Measured: 3–5 ms for a sweep over 500 budgets, against an acceptance bar of *detect within one
+second*. About 200× headroom.
+
+#### Found by running it, not by testing it
+
+The loop swallows errors so a chaos run can continue through CH-1 (Postgres down) — and swallowed
+only `SQLAlchemyError`. Running the CLI as a real process against a dead port showed a bare
+`ConnectionRefusedError` escaping and killing it: the failure happens below the dialect, so
+SQLAlchemy never wraps it. The script crashed on precisely the condition its own docstring
+claimed it survived.
+
+Worth dwelling on, because the unit tests were green. They tested the rendering, the exit codes,
+and the sweep against a real ledger; none of them started the process and pointed it at nothing.
+Three tests now do, and removing `OSError` from the except clause fails all three.
+
+The same run also surfaced that the script had invented `AGENTIAM_DATABASE_URL` while Alembic
+and `.env.example` use `DATABASE_URL` — a second name for one thing, found by trying to use it
+rather than by reading it.
+
+### T-017 · Sibling budgets, and the end of M3
+
+INV-5 is the one invariant the token format deliberately does not carry, and the reason the
+ledger exists at all. A parent hands the same ৳50,000 ceiling to three children. Every token is
+individually valid and correctly authorized. Together they can spend ৳150,000, and no amount of
+static inspection prevents it, because nothing about any single token is wrong.
+
+`PLAN.md` §6.3 calls the two-mitigation answer a publishable observation — most capability-token
+literature does not address quantitative resources shared across siblings. Both mitigations ship
+here.
+
+#### The dynamic half already worked
+
+Probed before writing anything: three separate PEP instances, each with its own engine, each
+asking for ৳100 against a pool of ৳150. Grants came back `50 / 100 / 0`, summing to exactly 150.
+`SELECT ... FOR UPDATE` was already doing the job T-013 built it for.
+
+Which produced the first finding, and it is about the spec rather than the code. Spec 04 §13 and
+§15 both recorded that outcome as **"granted 100 / 50 / 0"**. The probe returned `50 / 100 / 0`.
+Neither is wrong — which caller gets the full amount depends on which transaction takes the row
+lock first — but stated as a sequence it reads like a guarantee, and a test written faithfully
+from the spec would have asserted the scheduler and flaked in CI at some unhelpful hour. The spec
+now states what is actually guaranteed: the grants sum to exactly what the pool had.
+
+#### The static half needed a schema change
+
+"Each child gets its own budget row" turns out not to be additive. Measured: a second row for the
+same `(mandate_id, dimension)` is refused outright by `uq_budgets_mandate_dimension`. So T-017
+changes a constraint T-012 established — the pool uniqueness becomes **partial**, scoped to rows
+with no parent, and a second constraint keeps one allocation per child.
+
+The design question worth recording is where the allocated money lives. Budget promised to a
+child is unavailable to the parent, exactly as leased budget is, so the tempting move is to
+increment `leased` and add no column at all.
+
+That is wrong, and wrong in a way that only surfaces a ticket later. T-016's checker asserts
+`leased == Σ outstanding of active leases`. Overloading `leased` with allocations breaks that on
+the very first split — and the natural next step would be to relax the assertion, which is rule 9
+running backwards. Two meanings, two columns: `allocated` joins the pool invariant as its own
+term, and the checker gains a fourth thing to verify (ADR-019).
+
+#### Two bugs found by the test fixtures, not by the tests
+
+Neither was in the code under test, and both were mine.
+
+**The downgrade could not delete what it had created.** `DELETE FROM budgets WHERE
+parent_budget_id IS NOT NULL` fails on `leases_budget_id_fkey` the moment a split has been spent
+against. It surfaced as a teardown error, because the integration fixture actually runs
+`downgrade` after every test — a detail that earns its keep here. The deletes now run in
+foreign-key order, and the docstring says plainly that going below this revision destroys real
+spend records, because it does and there is no version that does not.
+
+**A test that corrupts the schema has to put it back.** T-016's tests drop `ck_budgets_invariant`
+to inject a pool violation the constraint would otherwise refuse, and left the rows dirty,
+relying on teardown dropping the table. That was fine until 0004's downgrade started *re-creating*
+that constraint on the way down — at which point Postgres correctly refused to add a constraint
+some existing row violated, and five tests failed with eight cascading teardown errors, none of
+them anywhere near the code being changed.
+
+The migration was right and the tests were wrong. They now go through a fixture that repairs the
+rows and restores the constraint in a `finally`.
+
+That is the third time in this project a red result turned out to be the test rather than the
+implementation. It is worth having a rule about by now: read the failure before touching the
+code, and check whether the thing that broke is the thing under test.
+
+#### M3 exit gate
+
+All lease operations working · P-10 green · the invariant checker proven against a real violation
+· the three-sibling test passing under both mitigations, with three PEP instances. 932 tests.
+
+---
+
 ---
 
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 14 of 53 in scope (61 defined, 8 deferred) |
-| Milestones | M1 and M2 complete, M3 in progress (specs 05-09 outstanding) |
-| Tests | 898, all passing (835 plus 63 integration) |
+| Tickets complete | 15 of 53 in scope (61 defined, 8 deferred) |
+| Milestones | M1, M2, M3 complete (specs 05-09 outstanding) |
+| Tests | 932, all passing (850 plus 82 integration) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 18 |
+| ADRs | 19 |
 | Specs written | 4 of 9 |
-| Design errors caught before implementation | 9 |
+| Design errors caught before implementation | 10 |
 | Threats found by measurement | 6 (TM-19 through TM-24) |

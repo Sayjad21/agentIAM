@@ -112,10 +112,17 @@ class TestInvariantKind:
             assert kind.description
             assert kind.description != kind.value
 
-    def test_the_kinds_are_the_three_the_ticket_names_plus_negatives(self) -> None:
+    def test_the_kinds_are_the_ones_the_tickets_name_plus_negatives(self) -> None:
+        """Closed set. `allocated_vs_children` joined it with T-017's proportional split.
+
+        Pinned rather than left open because the console filters on these values and a
+        kind added without a matching filter is invisible on screen — which for this tool
+        is the same as not detecting it.
+        """
         assert {k.value for k in InvariantKind} == {
             "pool",
             "committed_vs_reservations",
             "leased_vs_active_leases",
+            "allocated_vs_children",
             "negative_balance",
         }
