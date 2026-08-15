@@ -45,8 +45,11 @@ typecheck: ## Run mypy in strict mode
 
 check: lint typecheck test ## Everything CI runs
 
+# By marker rather than by directory: `tests/perf/` is empty, so pointing the target at
+# it collected nothing and NFR-1 was measured nowhere. Marked tests live next to the
+# code they measure.
 bench: ## Run benchmarks (PLAN.md §13.1, NFR-1)
-	$(UV) run pytest tests/perf --benchmark-only
+	$(UV) run pytest -m perf --benchmark-only
 
 cov: ## Run tests with a coverage report
 	$(UV) run pytest --cov --cov-report=term-missing --cov-report=html

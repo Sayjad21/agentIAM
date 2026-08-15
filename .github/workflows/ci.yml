@@ -46,6 +46,13 @@ jobs:
           -m "not integration and not e2e and not chaos and not perf"
           --cov --cov-report=term-missing --cov-report=xml
 
+      # NFR-1 is a headline number (p99 < 1 ms for the pure decision) and `PLAN.md`
+      # §17 R-2 makes it a trigger: over 2 ms by M8 means porting the module to Rust.
+      # The `quality` job excludes the `perf` marker, so without this step the
+      # benchmark that measures it would run nowhere.
+      - name: Benchmarks (NFR-1)
+        run: uv run pytest -m perf --benchmark-only
+
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4

@@ -891,17 +891,101 @@ because it looks like protection. So the gap is stated where it can be seen at r
 pins the current behaviour so that T-019 has to change it deliberately. The tests fail the moment
 enforcement lands, which is the intended way to find out that it did.
 
+### T-019 · The decision pipeline
+
+The ticket that turns the gateway into an enforcement point, and where NFR-1 gets its number.
+
+Spec `09-decision-record.md` was written first, as the rule requires. Its substantive
+contribution is not the record's shape — `DecisionRecord` has existed since T-005 — but the
+**precedence contract**: which cause to name when several are true at once.
+
+#### Ordering is the whole design
+
+`PLAN.md` §3.2 principle 4 says *every deny is explainable — a decision record names the exact
+caveat, policy statement, or budget that caused it*. That is only meaningful once the pipeline
+agrees in advance which of several simultaneous failures to report.
+
+Spec 09 §3 settles it: **the first failing step wins, in step order**. The alternative — evaluate
+everything, report the most severe — sounds more informative and is worse. It lets a revoked
+token be reported as `SCOPE_NOT_GRANTED`, and the operator spends an afternoon adjusting scopes
+on a credential that was killed hours ago.
+
+Three sub-rules earn their place:
+
+* **Deny beats escalate** (INV-8). The caveat list is scanned to the end even after an escalation
+  is found, because approval cannot grant authority the token does not have. Escalating a
+  request a later caveat forbids asks a human a question with only one correct answer.
+* **Chain order decides.** Root-first, so the reported cause is the broader restriction.
+* **Drift never denies.** A heuristic over natural language that can deny is one that can deny a
+  legitimate payment at three in the morning. It escalates or it flags.
+
+The fail-closed rule has one deliberate exception, and it is the same reasoning inverted: an
+*unavailable* drift oracle does not deny, because failing closed on an advisory heuristic would
+let its outage stop every payment in the system.
+
+#### NFR-1, measured
+
+**Mean 5.2 µs, median 4.7 µs, p99 well inside the 1 ms budget** over ~20,000 rounds with warm
+oracles. That is roughly 200× headroom against `PLAN.md` §17 R-2's trigger (*p99 over 2 ms by M8
+means porting this module to Rust*), so that risk can be considered closed rather than pending.
+
+The benchmark asserts on p99 rather than printing it. `pytest-benchmark` reports a table nobody
+reads in CI; computing the percentile from `benchmark.stats.stats.data` and asserting on it makes
+the number a gate.
+
+#### The benchmark ran nowhere
+
+Which turned out to matter, because `make bench` pointed at `tests/perf/` — an empty directory —
+so it collected nothing, and CI mentioned `perf` only in an exclusion list. NFR-1 would have been
+measured by a test that never executed.
+
+Exactly the shape of the integration-test gap found while picking M3 back up, and fixed the same
+way: `bench` now selects by marker rather than directory, and the quality job runs it. Marked
+tests live next to the code they measure.
+
+#### A skipped test is not a test
+
+The `ANCESTOR_REVOKED` case was written against a root token, which has exactly one revocation id
+— so it skipped, quietly, while spec 09 §7 claimed the code was reachable. It now builds a real
+attenuated chain. INV-10 (no resurrection) is the invariant behind it, and it deserved better
+than a green tick on a skip.
+
+#### Found while finishing: INV-1's property test is flaky
+
+Not caused by this ticket, and worth more attention than it has had.
+
+Chasing an intermittent `make check` failure — seen three times across T-011, T-018 and T-019 and
+each time dismissed as unreproducible — a loop over the property suite reproduced it on the tenth
+attempt:
+
+    FlakyStrategyDefinition: Inconsistent data generation! Data generation behaved
+    differently between test cases. Is your data generation depending on external state?
+
+The external state is entropy. `attenuate()` mints with a fresh ephemeral key on every call — a
+fact already written down in this project's own notes — so when hypothesis replays a choice
+sequence to shrink a failure, it does so against a *different child token*. The test cannot
+shrink reliably, and its falsifying examples cannot be taken at face value.
+
+That matters more than an ordinary flake. INV-1 is the central security property, and P-01 is the
+project's headline answer to *how do you prove this?*. The example it printed —
+`child authorized what the parent did not` — has **not** been shown to be spurious. It is
+recorded as `STATUS.md` gap 13 and is the next thing to fix, ahead of new features.
+
+The lesson is about the three earlier dismissals rather than the bug: "did not reproduce" was
+recorded honestly each time, and never followed up. An intermittent failure in the one test that
+carries the security claim deserved a loop the first time.
+
 ---
 
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 16 of 53 in scope (61 defined, 8 deferred) |
+| Tickets complete | 17 of 53 in scope (61 defined, 8 deferred) |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1010, all passing (928 plus 82 integration) |
+| Tests | 1072, all passing (989 plus 82 integration, plus the NFR-1 benchmark) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
 | ADRs | 20 |
-| Specs written | 4 of 9 |
+| Specs written | 5 of 9 |
 | Design errors caught before implementation | 12 |
 | Threats found by measurement | 6 (TM-19 through TM-24) |

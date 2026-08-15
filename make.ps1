@@ -97,7 +97,7 @@ switch ($Target) {
         & $PSCommandPath 'typecheck'
         & $PSCommandPath 'test'
     }
-    'bench'     { Invoke-Step @('uv', 'run', 'pytest', 'tests/perf', '--benchmark-only') }
+    'bench'     { Invoke-Step @('uv', 'run', 'pytest', '-m', 'perf', '--benchmark-only') }
     'cov' {
         Invoke-Step @('uv', 'run', 'pytest', '--cov',
                       '--cov-report=term-missing', '--cov-report=html')
