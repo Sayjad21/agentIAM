@@ -6,6 +6,9 @@ requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
     "agentiam-core",
+    # Cedar's official Rust engine via PyO3. cp312 wheels exist for win_amd64 and
+    # manylinux x86_64, so neither the dev host nor CI builds from source.
+    "cedarpy>=4.8",
     "fastapi>=0.115",
     "httpx>=0.28",
     # API only, deliberately. Without an SDK installed the tracer is a no-op, so T-022 can

@@ -929,6 +929,15 @@ let its outage stop every payment in the system.
 oracles. That is roughly 200× headroom against `PLAN.md` §17 R-2's trigger (*p99 over 2 ms by M8
 means porting this module to Rust*), so that risk can be considered closed rather than pending.
 
+> **Corrected at T-024.** The measurement is accurate; the conclusion drawn from it was not.
+> `decide()` was benchmarked with a *fake* policy engine, because no real one existed — step 5
+> was a dictionary lookup. Cedar costs about **80 µs**, so the real decision is nearer 85 µs and
+> the headroom is about **12×, not 200×**. R-2 is comfortable, not closed. Spec 05 §6 carries
+> the numbers.
+>
+> Worth noting how the error happened: every number in the paragraph was true. What was wrong
+> was treating a benchmark of four real steps and one stub as a benchmark of the pipeline.
+
 The benchmark asserts on p99 rather than printing it. `pytest-benchmark` reports a table nobody
 reads in CI; computing the percentile from `benchmark.stats.stats.data` and asserting on it makes
 the number a gate.
@@ -1410,16 +1419,107 @@ the wakeups cost more than the writes they combine.
 ---
 
 
+### T-024 · Cedar, and the benchmark that was measuring a stub
+
+Taken out of order. T-023 is the end-to-end slice and the point where `/readyz` stops saying
+`enforcing: false`, and after T-022 four of `decide()`'s five inputs were real. The fifth had no
+implementation.
+
+An empty revocation set is honest — nothing can revoke until T-038, so nothing is revoked. An
+allow-all policy engine is not: it reports that policy was evaluated when no policy exists, which
+is precisely the complaint `STATUS.md` gap 11 was opened to record. T-024's only dependency was
+T-019, already done, so nothing was blocking it; the M5 grouping in `PLAN.md` §9 is milestone
+tidiness, not a dependency. It moves ahead (ADR-027).
+
+#### The measurement that changed a claim
+
+T-019 recorded `decide()` at 5.2 µs and concluded *"about 200× headroom… R-2 can be considered
+closed rather than pending."*
+
+Every number in that sentence was right. The conclusion was wrong, because the benchmark ran
+against a **fake** policy engine — step 5 was a dictionary lookup, since no real engine existed.
+Cedar costs about 80 µs. The real decision is nearer 85 µs and the headroom is about **12×**.
+
+R-2 (*p99 over 2 ms by M8 triggers a Rust port*) is comfortable, not closed. The T-019 entry now
+says so. The failure mode is worth naming: benchmarking four real steps and one stub, then
+describing the result as a benchmark of the pipeline. Nothing was measured incorrectly; the
+scope of what had been measured was mis-stated.
+
+#### Parsing once is not an optimisation
+
+| Arrangement | Per authorize |
+|---|---|
+| Source string re-parsed every call | 167.7 µs |
+| `PolicySet.from_str` once | **80.1 µs** |
+| Policy set *and* entities pre-parsed | 61.7 µs |
+
+The naive spelling spends 17% of NFR-1's budget re-parsing a bundle that changes hourly at most.
+
+The third row is unreachable, and checking why was worth the ten minutes: `PLAN.md` §6.5 puts
+`depth`, `task_id` and `role` on the principal entity, and those change per request. Moving them
+into `context` to pre-parse a static entity set measured **78.5 µs against 83.0** — under 5%. So
+the plan's entity model stands, on evidence rather than deference. Cedar's own model treats
+entities as the durable graph and context as the request; 5% is not a reason to make
+`principal.depth` unavailable to a policy author who reasonably expects it to be there.
+
+#### Three decision values, and the obvious spelling is wrong
+
+`cedarpy.Decision` has `Allow`, `Deny`, and **`NoDecision`** — the last returned when the policy
+set fails to parse, with the errors in `diagnostics.errors`.
+
+```python
+if response.decision == Decision.Deny:   # NoDecision falls through as "not denied"
+```
+
+A corrupt bundle would stop the policy layer enforcing, silently, while everything still looked
+green. The engine writes `allowed = decision is Decision.Allow` instead, so an unrecognised
+outcome — including a fourth member some future Cedar release adds — fails closed. Bundles are
+additionally rejected at *load*, which makes `NoDecision` unreachable in production rather than
+merely handled.
+
+Mutation-checked: flipping it back to `!= Deny` turns two tests red.
+
+#### Money keeps its precision and its readability
+
+The token layer scales money by 10⁴ because biscuit's Datalog compares integers. Copying that
+into Cedar would make T-029's NL compiler emit `context.amount <= 1000000000` for *"no payments
+over ৳100,000"*, and make a human reviewing a bundle do arithmetic to check it.
+
+Measured: Cedar's `decimal` extension holds **exactly four decimal places** — `0.0001` accepted,
+`0.00001` rejected. That is `NUMERIC(20,4)`, the same precision as everything else in this
+system. So money crosses into policy with no scale conversion anywhere, and a policy reads:
+
+```
+context.amount.lessThanOrEqual(decimal("500000.0"))
+```
+
+The catch is method syntax: Cedar's `<=` accepts only `long`, `datetime` and `duration`, so
+comparing a decimal with an operator is a type error. And a bare float in the request context is
+rejected outright as `NoDecision` — correct for a system whose rule 6 says money never touches a
+float, and already mapped to a denial.
+
+#### The corpus
+
+Thirty-two request/expectation pairs against one bundle shaped like an organization's actual
+rules rather than a syntax demo: unconditional permits, role guards, amount and depth ceilings,
+resource attributes, and `forbid` beating `permit` in both directions. Each row carries a *why*
+column, because a corpus nobody can explain is a corpus nobody maintains when a policy changes.
+Two meta-tests guard it — that it still has ≥30 rows, and that it still contains both outcomes,
+since an all-allow corpus would pass against a broken engine.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 20 of 53 in scope (61 defined, 8 deferred) |
+| Tickets complete | 21 of 53 in scope (61 defined, 8 deferred) |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1288, all passing (1202 plus 84 integration, plus 2 benchmarks) |
+| Tests | 1347, all passing (1260 plus 84 integration, plus 3 benchmarks) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 26 |
-| Specs written | 6 (01-04, 09, 10); 05-08 outstanding |
+| ADRs | 28 |
+| Specs written | 7 (01-05, 09, 10); 06-08 outstanding |
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |
 | Threats found by measurement | 8 (TM-19 through TM-26) |

@@ -1241,3 +1241,120 @@ benchmarks at 6.3 µs mean.
 `is_valid=False`. `current_trace_id()` returns `None` there rather than handing back a
 correlation handle that correlates every decision to every other one — `DecisionRecord.trace_id`
 must come from the request (a `traceparent` header, or one the PEP generates), not from the span.
+
+---
+
+## ADR-027 — T-024 runs before T-023, so enforcement never turns on around a stub
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `PLAN.md` §9 M4/M5 ordering, `STATUS.md` gap 11, T-023, T-024
+
+**Context:** T-023 is the end-to-end thin slice and the point where `/readyz` stops reporting
+`enforcing: false`. `decide()` takes five inputs. After T-022, four were real — extraction,
+verification, caveats, budget — and the fifth, `PolicyEngine`, had no implementation until
+T-024 brought Cedar.
+
+Three ways to reach a working slice were on the table:
+
+1. Ship an allow-all `PolicyEngine` and have `/readyz` report *which* steps are live rather
+   than a boolean.
+2. Build T-024 first, so all five inputs are real when the slice lands.
+3. A `PolicyEngine` that denies everything until configured.
+
+An empty revocation set is honest — nothing can revoke until T-038, so nothing is revoked. An
+allow-all policy engine is a different thing: it reports that policy was evaluated when no
+policy exists, and it is the exact shape of complaint `STATUS.md` gap 11 was opened to record
+(*"a component named policy enforcement point that looks like protection and is not"*).
+
+**Decision:** T-024 moves ahead of T-023. Its only dependency is T-019, which was already
+done, so nothing blocked it — the ordering in `PLAN.md` §9 reflects milestone grouping (policy
+is M5) rather than a dependency.
+
+This costs nothing but a ticket's delay to the first demoable state, and the project has no
+deadline pressure. It buys a slice with no stub in it, no `/readyz` contract change made under
+pressure, and no ADR excusing a fail-open default in a security component.
+
+ADR-002 already established that sequencing may change while scope does not; this is that.
+
+**Consequences.** M4's exit gate lands one ticket later. `STATUS.md` gap 11 has now moved four
+times (T-019 → T-020 → T-021 → T-023), which is three times too many — the difference is that
+the earlier moves were estimates written before reading `decide()`'s signature, and this one is
+a decision with the code in front of it.
+
+---
+
+## ADR-028 — Cedar in the hot path: parsed once, decimals not scaled, and anything but Allow is a denial
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_pep.policy`, spec 05, NFR-1, T-025, T-029, T-053
+
+**Context:** T-024 puts a general-purpose policy engine in a path with a 1 ms budget. Four
+things about `cedarpy` had to be measured before spec 05 could commit to anything, and three of
+them changed the design.
+
+**1. The policy set is parsed once, at construction.** Measured, per authorize:
+
+| Arrangement | Cost |
+|---|---|
+| Source string re-parsed every call | 167.7 µs |
+| `PolicySet.from_str` once | **80.1 µs** |
+| Policy set *and* entities pre-parsed | 61.7 µs |
+
+The naive spelling costs 17% of NFR-1's entire budget for nothing. The third row is not
+reachable: `PLAN.md` §6.5 puts `depth`, `task_id` and `role` on the principal entity and those
+change per request. Moving them into `context` to win it back measured **78.5 µs against 83.0**
+— under 5% — so the plan's entity model stands. Cedar treats entities as the durable graph and
+context as the request; the idiomatic placement is also the specified one, and 5% is not a
+reason to make `principal.depth` unavailable to a policy author who expects it.
+
+**2. `Decision` has three members, and the third is a trap.** `Allow`, `Deny`, and
+`NoDecision` — the last returned when the policy set fails to parse, with the errors in
+`diagnostics.errors`. So:
+
+```python
+if response.decision == Decision.Deny:   # WRONG: NoDecision falls through as "not denied"
+```
+
+The engine writes `allowed = decision is Decision.Allow`, so an unrecognised outcome — including
+a fourth member added by a future Cedar release — fails closed. A bundle that does not parse is
+additionally rejected at **load**, which makes `NoDecision` unreachable in production rather
+than merely handled. Verified by mutation: flipping the check to `!= Deny` turns two tests red.
+
+**3. Money crosses into policy as a Cedar decimal, unscaled.** The token layer scales money by
+10⁴ because biscuit's Datalog compares integers. Doing the same in Cedar would make the NL
+compiler (T-029) emit `context.amount <= 1000000000` for *"no payments over ৳100,000"*, and make
+a human reviewing a bundle do the arithmetic.
+
+Measured: Cedar's `decimal` extension holds **exactly four decimal places** — `0.0001` is
+accepted, `0.00001` is rejected — which is the same precision as `NUMERIC(20,4)` and
+`BUDGET_SCALE`. Money therefore crosses into policy with no scale conversion at all, and a
+policy reads:
+
+```
+context.amount.lessThanOrEqual(decimal("500000.0"))
+```
+
+The cost is method syntax rather than `<=`, because Cedar's comparison operators accept only
+`long`, `datetime` and `duration` — measured, `<=` against a decimal is a type error. T-029's
+templates must emit the method form.
+
+A bare float in the request context is rejected outright as `NoDecision`, which is the correct
+outcome for a system whose rule 6 says money never touches a float, and which the engine already
+maps to a denial.
+
+**4. Deny by default, confirmed rather than assumed.** An empty policy set returns `Deny` with
+no reasons, and Cedar reports the deciding policy id in `diagnostics.reasons` — so
+`PLAN.md` §3.2 principle 4 (*every deny names its cause*) is satisfiable. An engine that could
+only answer allow/deny would have failed spec 05 §3.
+
+**Consequences.** The decision costs about **85 µs** instead of ~5 µs, so NFR-1's headroom is
+about 12×, not the 200× T-019 recorded. That entry has been corrected: it benchmarked four real
+steps and one stub, which is not a benchmark of the pipeline. R-2 (*p99 over 2 ms by M8 triggers
+a Rust port*) is **comfortable, not closed**, and T-053 should re-measure with a realistic
+bundle — the one variable this ADR cannot bound is how large a policy set an operator writes.
+
+`cedarpy` is a new direct dependency, deliberated per `ENGINEERING-RULES`: it is the official
+Cedar engine via PyO3, `PLAN.md` §4 already names Cedar as the policy language, and cp312 wheels
+exist for `win_amd64` and manylinux x86_64 so neither the dev host nor CI builds from source.
