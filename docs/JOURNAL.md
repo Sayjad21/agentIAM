@@ -802,17 +802,106 @@ All lease operations working · P-10 green · the invariant checker proven again
 
 ---
 
+## M4 — PEP and the first end-to-end slice
+
+`ROADMAP.md` Part 2 flags this as the hardest stretch in the project, and T-023 as the moment
+everything first works together. M4 opens with the plumbing.
+
+### T-018 · PEP skeleton and reverse proxy
+
+Five acceptance criteria: transparent proxying of GET/POST/streaming, header and trailer
+handling, an upstream timeout and retry policy, `httpx` connection pooling, and
+`/healthz` `/readyz` `/metrics`. Each was measured against the running stack before anything
+was designed, which turned out to matter for four of the five.
+
+#### One criterion cannot be met on this stack
+
+There is no trailer support anywhere between the socket and the handler. `httpx.Response`
+exposes no attribute for them, `starlette.responses` contains no trailer-related name, and
+uvicorn's httptools implementation never mentions the word. The PEP therefore cannot read
+trailers from an upstream, and could not emit them if it had them.
+
+That is ADR-020, and the honest framing matters: this is not a gap more work would close, it is
+absent from every layer underneath. The `Trailer` *header* is dropped as hop-by-hop — announcing
+trailers that will not be forwarded is worse than saying nothing — and the criterion is recorded
+as consciously unmet rather than quietly four-fifths satisfied.
+
+#### The proxy bug that fails loudly, and the three that fail quietly
+
+Forwarding response headers verbatim is the default mistake. Measured against a real uvicorn
+pair, it breaks in two quite different ways.
+
+Quietly: the upstream's `date` and `server` arrive alongside the proxy's own, so the client gets
+**two of each**.
+
+Loudly, and this is the one that settled the design: a compressed upstream read with httpx's
+*decoding* iterator, with `content-encoding` and `content-length` forwarded, produces
+
+    RemoteProtocolError: peer closed connection without sending complete message body
+    (received 0 bytes, expected 52)
+
+The headers described 52 gzipped bytes; the proxy sent 920 decoded ones. Reading with
+`aiter_raw()` instead — bytes untouched, `content-encoding` still true — makes it correct. So
+the PEP forwards raw and strips `content-length`, and the rule has a measurement behind it
+rather than a citation.
+
+`Set-Cookie` forced a smaller decision: response headers are carried as a list of pairs and
+assigned to `raw_headers` after construction, because Starlette's `headers=` takes a mapping and
+a mapping keeps only the last of a repeated header. Collapsing two cookies into one is the kind
+of bug that surfaces as "users get logged out sometimes".
+
+#### Retries multiply the timeout
+
+`httpx`'s transport-level `retries` covers connection establishment only — which is what makes
+it safe, since nothing has been sent yet and nothing is replayed. It also means `retries=2` with
+a 2 s connect timeout takes **6.56 s** to give up on a refused port, measured. A setting that
+reads as "two seconds" is six and a half.
+
+`PepSettings.worst_case_connect_s` exists to make that arithmetic visible instead of emergent,
+and a test asserts the default stays under five seconds. NFR-1 budgets the in-process decision
+at p99 < 1 ms; a gateway that holds a request for six seconds on a dead upstream has spent that
+budget several hundred times over.
+
+#### A test that could not have failed
+
+The streaming test was written through `httpx.ASGITransport`, like every other test in the file,
+and it passed. Then it kept passing when the proxy was changed to read the entire body into
+memory before sending any of it.
+
+`ASGITransport` coalesces a response body into a single chunk even when the app genuinely
+streams — measured against the upstream directly, with no proxy involved: one chunk. So a
+chunk-count assertion made through it cannot distinguish a streaming proxy from a buffering one,
+and the test was asserting nothing.
+
+It now binds a real port. Over a socket the same upstream delivers three chunks about 250 ms
+apart, and switching the proxy back to a buffering read fails both that test and the compressed-
+body one. Two guards, both demonstrated.
+
+The general shape is worth keeping: a test double fast enough to use everywhere is usually
+eliding something, and the thing it elides is often the property under test.
+
+#### Enforcing nothing, loudly
+
+T-018 forwards every request, token or not. The decision pipeline is T-019 and the extractor is
+T-020.
+
+A component called a *policy enforcement point* that enforces nothing is worse than no gateway,
+because it looks like protection. So the gap is stated where it can be seen at runtime —
+`/readyz` reports `enforcing: false` — and a test class named `TestEnforcementIsNotWiredYet`
+pins the current behaviour so that T-019 has to change it deliberately. The tests fail the moment
+enforcement lands, which is the intended way to find out that it did.
+
 ---
 
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 15 of 53 in scope (61 defined, 8 deferred) |
-| Milestones | M1, M2, M3 complete (specs 05-09 outstanding) |
-| Tests | 932, all passing (850 plus 82 integration) |
+| Tickets complete | 16 of 53 in scope (61 defined, 8 deferred) |
+| Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
+| Tests | 1010, all passing (928 plus 82 integration) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 19 |
+| ADRs | 20 |
 | Specs written | 4 of 9 |
-| Design errors caught before implementation | 10 |
+| Design errors caught before implementation | 12 |
 | Threats found by measurement | 6 (TM-19 through TM-24) |

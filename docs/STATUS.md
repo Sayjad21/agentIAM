@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-017 — M3 complete.
+**Last updated:** after T-018.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1, M2, M3 complete** · specs 05–09 outstanding · M4 next |
-| **Tickets** | 15 done · 38 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 932 passing (850 in `make test`; 82 in `make test-integration`, need Docker) |
+| **Milestone** | M1, M2, M3 complete · **M4 in progress** (T-018 done) · specs 05–09 outstanding |
+| **Tickets** | 16 done · 37 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 1010 passing (928 in `make test`; 82 in `make test-integration`, need Docker) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — lint/types/tests, **integration against real Postgres**, core purity, compose health |
 | **Specs** | 4 of 9 written |
-| **ADRs** | 19 |
+| **ADRs** | 20 |
 
 ---
 
@@ -44,13 +44,15 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-014 | `RESERVE`/`COMMIT` (`agentiam_pep.lease`, pure) + `LEDGER_COMMIT` (`reservations`, `reconciliation_anomalies`), G2/G3/G4 guards proven load-bearing, TM-21 closed, P-10/P-12 extended | `ca5b83a` |
 | — | CI job for the 45 integration tests nothing was running; `make.ps1 help` fixed | `4bff392` |
 | T-016 | `db/invariants.py` + `scripts/run_invariant_checker.py` — four invariants, one statement, 3–5 ms over 500 budgets | `ecbd448` |
-| T-017 | Sibling budgets: shared pool + proportional split (`allocated`, migration 0004), INV-5 under 3 PEP instances | — |
+| T-017 | Sibling budgets: shared pool + proportional split (`allocated`, migration 0004), INV-5 under 3 PEP instances | `0b4d10b` |
+| T-018 | PEP gateway: ASGI app, streaming reverse proxy, header hygiene, timeout budget, `/healthz` `/readyz` `/metrics` | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-018…T-023** | PEP, decision pipeline, lease pool, **end-to-end thin slice** | M4 |
+| **T-019** | Decision pipeline (pure, in core) — 10 steps, 40+ scenarios, NFR-1 measured | M4 |
+| T-020…T-023 | Scope extractor, lease pool, decision emitter, **end-to-end thin slice** | M4 |
 | T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
 | T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
 | T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7 |
@@ -96,6 +98,8 @@ Real debt, not speculation. Each has a home.
 | 7 | **`budgets.mandate_id` carries no foreign key.** No `mandates` SQL table exists yet — T-005 built `Mandate` as a pure Pydantic model, no persistence (ADR-014) | A budget row can reference a mandate id that was never issued; nothing in the schema catches it | Whichever ticket first persists mandates (issuance service, `PLAN.md` §8 — not yet its own ticket) |
 | 8 | **`ACQUIRE` does not clamp by `max_fraction`.** Spec 04 §4.1's clamp is mathematically incompatible with T-013's own acceptance test, applied to a fixed caller-`requested` amount (ADR-015, measured) | No single-PEP-crash blast-radius bound beyond `ttl` — a PEP can be granted more than a quarter of the pool in one `ACQUIRE` | T-015 (adaptive lease sizing, deferred) — that's where the formula actually applies |
 | ~~9~~ | ~~**CI ran none of the 45 integration tests.**~~ Closed while integrating M3: `make test` and the CI workflow both excluded the `integration` marker, so every ledger race test ran only by hand | Three tickets of ledger correctness — `FOR UPDATE` serialization, the 50-concurrent-acquire bound, the ADR-017 dedup race — were gated by nothing and would have rotted silently | Closed: `integration` CI job + `make test-integration` |
+| 11 | **The PEP enforces nothing.** T-018 built the gateway; it forwards every request, token or not. `/readyz` reports `enforcing: false` and `TestEnforcementIsNotWiredYet` pins it | A component named *policy enforcement point* that looks like protection and is not. Deliberate and visible, but it is the single most misleading state in the repo until T-019 lands | T-019 (decision pipeline), T-020 (extractor) |
+| 12 | **No HTTP trailer support, and none available.** Measured across httpx, Starlette and uvicorn: no layer exposes trailers (ADR-020) | One T-018 acceptance criterion consciously unmet. Costs nothing for the demo; trailers are rare on HTTP/1.1 | Only reopens if T-041 (MCP, deferred) needs them — and the fix would be in the ASGI server, not here |
 | 10 | **`tests/integration/test_budget_schema.py` duplicates `conftest.py`'s fixtures.** T-012 predates the shared conftest; noted in its header and left alone | Two copies of the container and migration fixtures drift apart | Same cleanup as §4.3 |
 
 ---

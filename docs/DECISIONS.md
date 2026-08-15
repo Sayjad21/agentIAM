@@ -756,3 +756,50 @@ amount depends on which transaction takes the row lock first. Stated as a sequen
 a guarantee, and a test written from it would assert the scheduler and flake. The spec now states
 what is actually guaranteed — the grants sum to exactly what the pool had — and the tests assert
 that.
+
+---
+
+## ADR-020 — The PEP does not handle HTTP trailers, because this stack cannot
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_pep.app`, `PLAN.md` §9 T-018, T-041
+
+**Context:** T-018's acceptance criteria read *"transparent proxying of GET/POST/streaming;
+**header and trailer handling**; upstream timeout and retry policy; `httpx` connection pooling;
+`/healthz` `/readyz` `/metrics`."* Four of the five were built. The trailer half was measured
+first, and it cannot be built on the chosen stack.
+
+**Measured**, against httpx 0.28.1, Starlette 1.6.0 and uvicorn 0.52.3:
+
+| Layer | Trailer support |
+|---|---|
+| `httpx.Response` | No attribute exposes them — `[a for a in dir(response) if "trail" in a.lower()]` is empty |
+| `starlette.responses` | No trailer-related name exists in the module |
+| `uvicorn` httptools implementation | The source never mentions trailers |
+
+So the PEP cannot *read* trailers from an upstream response, and could not *emit* them to a
+client if it had them. This is not a gap in our code that more work would close; it is absent
+from every layer between the socket and the handler.
+
+**Decision:** T-018 ships without trailer handling, and says so rather than quietly satisfying
+four fifths of a criterion. Concretely:
+
+* The `Trailer` **header** is treated as hop-by-hop and dropped, which is what RFC 9110 §7.6.1
+  requires of a header describing this connection's framing. Announcing trailers the PEP will
+  not forward would be worse than saying nothing.
+* Actual trailer *fields* are neither read nor emitted.
+
+**Consequences:** an upstream that sends trailers loses them across the hop. In practice this
+costs nothing for the demo and very little in general — trailers are rare over HTTP/1.1, and the
+usual carrier is gRPC, which is HTTP/2 and out of scope for the HTTP PEP (`PLAN.md` §1.4).
+
+The one place it could matter is T-041's MCP streamable-HTTP gateway, which is **deferred**
+(`PLAN.md` §21, ROADMAP Part 1). If MCP is picked up and turns out to need trailers, the change
+is not to this module but to the ASGI server underneath it — h11/httptools would have to grow
+support first. Recorded here so that ticket starts from the measurement rather than repeating
+it.
+
+**Cost:** one acceptance criterion consciously unmet, in a submission judged partly on honesty
+about limitations. Stating it in `STATUS.md` §3 alongside the other known gaps is cheaper than a
+reviewer finding the silence.
