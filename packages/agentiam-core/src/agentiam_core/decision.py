@@ -332,14 +332,16 @@ def decide(
     # --- step 6: drift -----------------------------------------------------
     # Deliberately *not* fail-closed (spec 09 §5). Drift is advisory, and an outage of an
     # advisory heuristic must not stop every payment in the system.
+    from agentiam_core.models import DriftMode
+    
     score: Decimal | None = None
-    if drift is not None:
+    if drift is not None and context.drift_mode != DriftMode.OFF:
         try:
             score = drift.score_for(context)
         except OracleUnavailable:
             score = None
 
-    if score is not None and score > DRIFT_ESCALATION_THRESHOLD:
+    if score is not None and score > DRIFT_ESCALATION_THRESHOLD and context.drift_mode == DriftMode.STRICT:
         return Decision(
             Outcome.ESCALATE,
             ReasonCode.DRIFT_ESCALATION,

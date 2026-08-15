@@ -61,6 +61,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-028 | `ollama_client.py` — Strictly local, deterministic `httpx`-based Ollama client with schema-constrained generation for the NL compiler | — |
 | T-029 | `compiler.py` + auto-generated tests — compiles natural language into Cedar with test cases and evaluated against a 30-case corpus | — |
 | T-030 | Verify-before-deploy loop — Integrated compiler into Admin Console UI with ambiguity handling and dual gating (auto-tests + corpus) | — |
+| T-032 | `specs/06-drift-detection.md` + `drift.py` — Stateless Intent Binding via headers (`AgentIAM-Task-Intent`), Semantic drift oracle using local Ollama | — |
+| T-036 | Drift modes wiring (`off`, `log_only`, `strict`) — Extractor configuration parsing, pipeline context integration, drift score evaluation | — |
 
 ### Next
 

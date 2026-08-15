@@ -2,8 +2,8 @@
 
 Hand-off snapshot for resuming work in a fresh session. Gitignored.
 
-**State:** **M1-M4 complete.** T-024, T-025, T-026 were pulled forward from M5. CI green on five jobs.
-**Next ticket:** **T-032** — Drift rule-based v0. Deps: T-030, done.
+**State:** **M1-M4 complete.** T-024, T-025, T-026 were pulled forward from M5. CI green on five jobs. T-027, T-028, T-029, T-030, T-032, and T-036 are complete.
+**Next ticket:** **T-033** — ML dataset groundwork (or T-038 Revocation/T-043 Keycloak). Deps: T-032, done.
 
 Read `CLAUDE.md` first for the rules and the environment. This file is only *where things
 currently stand*.
@@ -198,12 +198,12 @@ Do not reopen these without reading the ADR.
 5. **`block_source()` is not a faithful round trip** (TM-24). Mint-time validation stops the
    input; consumers must still treat the output as untrusted.
 6. **State:**
-   - **Current Milestone:** M6 (Verification) — T-030 (Verify-before-deploy loop) complete.
-   - **Next Up:** T-032 (Drift rule-based v0).
+   - **Current Milestone:** M6 (Verification) / M5 (Drift).
+   - **Next Up:** T-033 (Dataset) or T-038 (Revocation).
    - **Core Reliability:** The critical `test_one_authorize_stays_inside_the_budget` NFR-1 benchmark executes in ~100us per request.
-   - **Tests:** 1673 total tests passing (100% statement coverage on core).
+   - **Tests:** 1680 total tests passing (100% statement coverage on core).
    - **Control Plane:** Features an Admin Console UI with natural language Authoring, ambiguity handling, and dual test gating (auto-tests + 51-case corpus).
-   - **Model Client:** Uses `httpx`-based `ollama_client.py` bound strictly to localhost:11434, utilizing Pydantic JSON schemas to constrain outputs.
+   - **Model Client:** Uses `httpx`-based `ollama_client.py` bound strictly to localhost:11434. Drift oracle implemented with strict fail-open semantics.
 7. **A task copies its context at creation, not at first await** — but an awaited bare coroutine
    shares the caller's.
 9. **Alembic's `command.upgrade`/`downgrade` call `asyncio.run()` internally**, so they raise

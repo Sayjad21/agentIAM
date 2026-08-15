@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
 
@@ -40,6 +41,7 @@ async def test_compile_nl_to_policy_validates_and_parses() -> None:
 
     # Verify Pydantic parsing
     assert isinstance(output, CompilerOutput)
+    assert output.cedar_source is not None
     assert 'permit(principal == User::"admin", action, resource);' in output.cedar_source
     assert len(output.tests) == 2
 
@@ -62,7 +64,7 @@ async def test_compile_nl_to_policy_validates_and_parses() -> None:
 @pytest.mark.asyncio
 async def test_compile_nl_to_policy_handles_ambiguity() -> None:
     """Ensure the compiler surfaces a clarifying question when the input is ambiguous."""
-    mock_response = {
+    mock_response: dict[str, Any] = {
         "clarifying_question": "Who is 'someone' and what resource are they acting on?",
         "cedar_source": None,
         "tests": [],

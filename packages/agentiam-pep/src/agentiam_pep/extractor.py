@@ -32,6 +32,7 @@ from starlette.routing import compile_path
 
 from agentiam_core.errors import ReasonCode
 from agentiam_core.hashing import hash_object
+from agentiam_core.models import DriftMode
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -151,6 +152,7 @@ class RouteRule:
     tool: str
     sources: tuple[tuple[str, Source], ...]
     regex: re.Pattern[str]
+    drift_mode: DriftMode = DriftMode.STRICT
 
     @property
     def needs_body(self) -> bool:
@@ -172,6 +174,7 @@ class Extraction:
     tool: str
     args: dict[str, ArgValue]
     arg_digest: str
+    drift_mode: DriftMode = DriftMode.STRICT
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +251,12 @@ class RouteTable:
         path = raw.get("path", "")
         scope = raw.get("scope", "")
         tool = raw.get("tool", "")
+        raw_drift = raw.get("drift_mode", "strict")
+        try:
+            drift_mode = DriftMode(raw_drift)
+        except ValueError as exc:
+            raise ValueError(f"{where}.drift_mode must be one of off, log_only, strict") from exc
+            
         for field, value in (("method", method), ("path", path), ("scope", scope), ("tool", tool)):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{where}.{field} must be a non-empty string")
@@ -290,6 +299,7 @@ class RouteTable:
             tool=tool,
             sources=tuple(sources),
             regex=regex,
+            drift_mode=drift_mode,
         )
 
 
@@ -533,4 +543,5 @@ def extract(
         tool=rule.tool,
         args=args,
         arg_digest=hash_object(args),
+        drift_mode=rule.drift_mode,
     )

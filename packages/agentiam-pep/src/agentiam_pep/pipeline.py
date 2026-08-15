@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
-from agentiam_core.decision import decide
+from agentiam_core.decision import decide, DriftOracle
 from agentiam_core.errors import ReasonCode, TokenError
 from agentiam_core.models import BudgetDimension, Outcome, RequestContext
 from agentiam_core.tokens import verify
@@ -153,6 +153,7 @@ class Pipeline:
         settings: PipelineSettings,
         now: Callable[[], datetime],
         caveats_for: Callable[[VerifiedToken], Sequence[Caveat]] | None = None,
+        drift_oracle: DriftOracle | None = None,
     ) -> None:
         """Assemble the five oracles and the two adapters the steps need."""
         self._routes = routes
@@ -165,6 +166,7 @@ class Pipeline:
         self._settings = settings
         self._now = now
         self._caveats_for = caveats_for or (lambda _token: ())
+        self._drift_oracle = drift_oracle
 
     async def authorize(
         self,
@@ -208,7 +210,7 @@ class Pipeline:
             reason = exc.reason_code or ReasonCode.MALFORMED_REQUEST
             return self._refuse(reason, str(exc), decision_id, trace_id)
 
-        # --- steps 3-7 -------------------------------------------------------------
+        # --- steps 3-7: decide -----------------------------------------------------
         context = self._context_for(extraction, token, header_map)
         decision = decide(
             token,
@@ -217,6 +219,7 @@ class Pipeline:
             revocation=self._revocation,  # type: ignore[arg-type]
             policy=self._policy.bound(self._principal_for(token)),
             budget=self._pool,
+            drift=self._drift_oracle,
         )
 
         reservation: Reservation | None = None
@@ -311,16 +314,27 @@ class Pipeline:
             # The extractor scales declared-numeric args by 10^4 (spec 10 §4.3); the ledger
             # and the caveat language use the same scale, so this converts back once, here.
             requested[BudgetDimension.SPEND_BDT] = Decimal(amount) / 10**4
+            
+        task_intent_text = headers.get("agentiam-task-intent") or headers.get("AgentIAM-Task-Intent")
+        action_intent_text = headers.get("agentiam-action-intent") or headers.get("AgentIAM-Action-Intent")
+        
+        if task_intent_text is not None:
+            from agentiam_core.hashing import hash_object
+            request_intent = hash_object(task_intent_text)
+        else:
+            request_intent = headers.get(INTENT_HEADER, token.intent_hash)
+            
         return RequestContext(
             operation=extraction.scope,
             requested=requested,
             current_depth=token.depth,
-            # Absent means the caller asserted no intent, so the token's own is used and
-            # INTENT_MISMATCH cannot fire. Binding intent properly is T-032.
-            request_intent=headers.get(INTENT_HEADER, token.intent_hash),
+            request_intent=request_intent,
             now=self._now(),
             tool=extraction.tool or None,
             args=dict(extraction.args),
+            task_intent_text=task_intent_text,
+            action_intent_text=action_intent_text,
+            drift_mode=extraction.drift_mode,
         )
 
     def _refuse(

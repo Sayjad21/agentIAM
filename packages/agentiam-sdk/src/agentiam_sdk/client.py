@@ -56,7 +56,7 @@ class AgentIAM:
     reach back through it to the parent's authority.
     """
 
-    __slots__ = ("_clock", "_identity", "_key_set")
+    __slots__ = ("_clock", "_identity", "_key_set", "_task_intent")
 
     def __init__(
         self,
@@ -66,6 +66,7 @@ class AgentIAM:
         role: str = "root",
         agent_id: str | None = None,
         known_caveats: Sequence[Caveat] = (),
+        task_intent: str | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         """Verify `token` and hold it as this agent's identity.
@@ -83,6 +84,8 @@ class AgentIAM:
                 these when a token is handed over along with the restrictions that were
                 placed on it; omitting them makes the folded authority an upper bound
                 rather than an exact one, never the reverse.
+            task_intent: The original English description of the task this token authorizes.
+                Used by the PEP for drift scoring.
             clock: Source of the current instant. Injected so tests are reproducible.
 
         Raises:
@@ -91,6 +94,7 @@ class AgentIAM:
         """
         self._key_set = key_set
         self._clock = clock or _utc_now
+        self._task_intent = task_intent
         verified = verify(token, key_set, now=self._clock())
         self._identity = AgentIdentity(
             token=token,
@@ -99,6 +103,22 @@ class AgentIAM:
             role=role,
             known_caveats=tuple(known_caveats),
         )
+
+    def headers(self, action_intent: str | None = None) -> dict[str, str]:
+        """HTTP headers required to authenticate a request using this identity.
+        
+        Includes the token itself and the stateless intent strings for drift detection.
+        
+        Args:
+            action_intent: Optional plain English description of the specific action being
+                attempted right now. Required for accurate semantic drift scoring.
+        """
+        h = {"Authorization": f"Bearer {self.token}"}
+        if self._task_intent:
+            h["AgentIAM-Task-Intent"] = self._task_intent
+        if action_intent:
+            h["AgentIAM-Action-Intent"] = action_intent
+        return h
 
     @property
     def identity(self) -> AgentIdentity:
@@ -212,6 +232,7 @@ class AgentIAM:
             role=role,
             agent_id=child_agent_id,
             known_caveats=(*parent.known_caveats, *proposed),
+            task_intent=self._task_intent,
             clock=self._clock,
         )
 

@@ -79,7 +79,10 @@ async def main() -> None:
         try:
             output = await compile_nl_to_policy(nl)
 
-            if evaluate_policy(output.cedar_source, case["expected_tests"]):
+            if output.cedar_source is None:
+                logger.warning("Case %d FAILED (ambiguous or no source)", i + 1)
+                failed += 1
+            elif evaluate_policy(output.cedar_source, case["expected_tests"]):
                 logger.info("Case %d PASSED", i + 1)
                 passed += 1
             else:

@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from decimal import Decimal
-from enum import StrEnum, unique
+from enum import Enum, StrEnum, unique
 from typing import Annotated, Final, Literal, Self
 from uuid import UUID
 
@@ -517,6 +517,13 @@ def caveat_kind_of(caveat: object) -> CaveatKind:
 # ---------------------------------------------------------------------------
 
 
+class DriftMode(str, Enum):
+    """How drift scoring affects the decision (T-036)."""
+    OFF = "off"
+    LOG_ONLY = "log_only"
+    STRICT = "strict"
+
+
 class RequestContext(BaseModel):
     """Facts the verifier supplies about the call in progress (spec 01 §7).
 
@@ -536,6 +543,9 @@ class RequestContext(BaseModel):
     now: datetime
     tool: str | None = None
     args: dict[str, Decimal | int | str] = Field(default_factory=dict)
+    task_intent_text: str | None = None
+    action_intent_text: str | None = None
+    drift_mode: DriftMode = DriftMode.STRICT
 
     @field_validator("requested", "args", mode="before")
     @classmethod

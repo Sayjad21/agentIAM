@@ -1503,3 +1503,17 @@ operator's fix is identical either way, and `max_staleness` is already the knob;
 **Decision:** We require **both** the auto-generated test suite AND the 51-case master corpus to pass before a generated policy can be activated in the Control Plane.
 
 **Rationale:** The master corpus prevents regression of the global invariants (like NFR-1 limits and immutable rules). The auto-generated tests prove that the LLM's own internal logic about the specific prompt holds true. By gating deployment on *both*, we combine global invariant safety with localized intent safety.
+
+---
+
+## ADR-035 — Stateless Intent Binding for Drift Detection
+
+**Date:** 2026-08-16
+**Status:** accepted
+**Affects:** `agentiam_pep`, `agentiam_sdk`
+
+**Context:** Drift v0 requires scoring the semantic divergence between the English task intent and the requested action intent. However, the PEP operates without network lookups, so it only sees the cryptographic `intent_hash` embedded in the token's authority block.
+
+**Decision:** The SDK will transmit the plain English task intent via the `AgentIAM-Task-Intent` HTTP header, alongside the `AgentIAM-Action-Intent`. The PEP will hash the task intent using `agentiam_core.hashing.hash_object` and assert it matches the token's `intent_hash`.
+
+**Rationale:** This solves the stateless verification problem for drift. The PEP avoids querying the control plane for the original task string. If the hashes match, the PEP knows the provided English text is authentic and can use it in the Drift Oracle to query semantic embeddings.

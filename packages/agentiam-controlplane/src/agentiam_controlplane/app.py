@@ -251,24 +251,24 @@ def create_app() -> FastAPI:
         summary = summarize(candidate_results)
 
         diffs = []
-        for res in candidate_results:
-            current_verdict = eval_current(res.case)
+        for test_res in candidate_results:
+            current_verdict = eval_current(test_res.case)
             if current_verdict is None:
                 changed = True
             else:
-                changed = current_verdict.allowed != res.actual
+                changed = current_verdict.allowed != test_res.actual
 
             diffs.append(
                 {
-                    "case": res.case,
-                    "passed": res.passed,
-                    "candidate_allowed": res.actual,
+                    "case": test_res.case,
+                    "passed": test_res.passed,
+                    "candidate_allowed": test_res.actual,
                     "current_allowed": current_verdict.allowed if current_verdict else None,
                     "changed": changed,
                 }
             )
 
-        corpus_passed = summary.failures == 0
+        corpus_passed = len(summary.failures) == 0
 
         return templates.TemplateResponse(
             request=request,

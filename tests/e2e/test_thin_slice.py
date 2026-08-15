@@ -228,6 +228,7 @@ async def slice_(migrated_engine: AsyncEngine) -> AsyncIterator[Slice]:
             task_id=token.task_id,
         )
 
+    from agentiam_pep.drift import RuleBasedDriftOracle
     pipeline = Pipeline(
         routes=RouteTable.from_config(ROUTES),
         key_set=KEY_SET,
@@ -238,6 +239,7 @@ async def slice_(migrated_engine: AsyncEngine) -> AsyncIterator[Slice]:
         revocation=revocation,
         settings=PipelineSettings(pep_id="pep-e2e"),
         now=lambda: NOW,
+        drift_oracle=RuleBasedDriftOracle(),
     )
 
     tools_client = httpx.AsyncClient(
