@@ -6,6 +6,10 @@ requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
     "agentiam-core",
+    # Ed25519 for policy-bundle signatures (T-025). Rule 1 forbids writing crypto,
+    # so this is not optional; PyCA is the conventional, audited choice and ships
+    # cp312 wheels for win_amd64 and manylinux x86_64.
+    "cryptography>=44",
     # Cedar's official Rust engine via PyO3. cp312 wheels exist for win_amd64 and
     # manylinux x86_64, so neither the dev host nor CI builds from source.
     "cedarpy>=4.8",

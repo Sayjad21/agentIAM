@@ -1663,15 +1663,97 @@ slice would never wire enforcement around a stub.
 ---
 
 
+### T-025 · Signed bundles, and the attack a signature cannot see
+
+M5's first ticket. Its dependency, T-024, was already done because it was pulled forward.
+
+#### The rollback attack is the interesting requirement
+
+`PLAN.md` asks for *"an older signed bundle rejected because bundle version must increase
+monotonically"*, and the reason that is a separate requirement from signature verification is
+easy to miss: **an old bundle is correctly signed.** Verification has nothing to object to. An
+attacker who captures a legitimately-published bundle and replays it — restoring a permission
+that has since been removed — presents a perfect signature.
+
+So the defence cannot be cryptographic. It has to be a monotonic counter the cache remembers.
+
+That forced a small design split. `version` is a human label (`"2026-08-15.3"`) and is what
+lands in `DecisionRecord.policy_version`. `serial` is the integer rollback compares. Two fields
+for what looks like one concept, because **string labels do not order**: `"v10" < "v9"`
+lexicographically, and a rollback defence that depends on how an operator names things is not a
+defence. There is a test asserting that inequality, so the reason survives the next reader.
+
+#### The library raises, and the API keeps that
+
+**Measured:** `Ed25519PublicKey.verify` raises `InvalidSignature`; it does not return `False`.
+
+`verify_bundle` does the same, deliberately. A boolean API invites `if verify(...)` being
+written where `if not verify(...)` was meant, and the failure mode of that typo is *accepting
+every bundle* — a total, silent loss of the property, from a one-character mistake that reads
+fine. Raising removes the possibility.
+
+Four tamper shapes were checked and all four raise: a flipped signature bit, an altered payload,
+an empty signature, and a signature from a different key.
+
+#### What gets signed is the part a library cannot decide
+
+Rule 1 says never write your own crypto, and this ticket writes none. What it does decide is
+*what the signature covers* — and getting that wrong is how a signature ends up covering
+something other than what is enforced.
+
+It covers the bundle's **canonical JSON**, the same canonicalization the audit chain uses, so
+two encodings of one bundle produce one signature. Signing raw wire bytes instead would mean
+re-serializing a bundle in transit invalidates it, and the first person to hit that concludes
+the signing is broken.
+
+Every field is covered except the signature itself, with a parametrized test per field.
+`serial` most of all: leaving it outside the signature would let a rollback be presented under
+a valid signature, which is precisely the attack above.
+
+#### The one place this system does not fail closed
+
+A rejected bundle leaves the **previous** one serving (`PLAN.md` §11 EC-P01) rather than
+emptying the cache. Everything else here fails closed, and this does not.
+
+The reason is that the alternative is worse. A forged bundle is evidence of an attack in
+progress; responding by discarding the last known good policy would let an attacker disable the
+policy layer *by sending garbage* — much cheaper than forging a signature. Keeping the previous
+bundle means the attacker achieves nothing, and the staleness clock keeps running underneath, so
+if the real bundle never arrives the PEP fails closed on age anyway.
+
+There is a test named for that argument rather than for the mechanism, because the mechanism is
+one `if` and the argument is the whole reason it is written that way.
+
+#### Hot reload is one rebind
+
+Verify and parse first, then replace a single reference. In-flight requests finish against the
+engine they started with, which is the correct outcome rather than a compromise: a decision made
+under bundle *n* was made under bundle *n*, and the record says so. There is a test that takes a
+bound engine, swaps the bundle underneath it, and asserts the old one still answers the old way.
+
+Nothing to lock on the read path — an attribute rebind is atomic under the GIL — and nothing can
+observe a half-loaded bundle, because everything that can fail has failed before the swap.
+
+#### Answering Q2 rather than deferring it
+
+Spec 05 §9 Q2 asked whether `stale` should deny immediately or serve a grace window. It denies
+immediately: a grace window is a second staleness limit with a friendlier name, and it turns the
+failure mode into *policy silently out of date* rather than *policy refused*. The operator's fix
+is identical either way, and `max_staleness` is already the knob — setting it to 600 s **is** the
+grace window, stated once instead of twice.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 22 of 53 in scope (61 defined, 8 deferred) — **M4 complete** |
+| Tickets complete | 23 of 53 in scope (61 defined, 8 deferred) — **M4 complete**, M5 started |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1496, all passing (1378 plus 103 integration, 12 e2e, plus 3 benchmarks) |
+| Tests | 1552, all passing (1434 plus 103 integration, 12 e2e, plus 3 benchmarks) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 28 |
+| ADRs | 29 |
 | Specs written | 8 (01-05, 08, 09, 10); 06-07 outstanding |
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |

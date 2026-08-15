@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import cedarpy
 
+from agentiam_core.bundles import PolicyBundle
 from agentiam_core.decision import OracleUnavailable, PolicyVerdict
 from agentiam_core.hashing import DECIMAL_PLACES
 from agentiam_core.models import BudgetDimension
@@ -60,15 +61,6 @@ class PolicyBundleError(PepError):
     Rejecting here is what keeps `Decision.NoDecision` an impossible state in production
     rather than merely a handled one (spec 05 §5).
     """
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyBundle:
-    """What the policy service publishes. Signing and staleness are T-025."""
-
-    version: str
-    cedar_source: str
-    entity_schema: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

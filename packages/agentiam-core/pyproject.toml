@@ -6,6 +6,9 @@ requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
     "biscuit-python>=0.4",
+    # Ed25519 for policy-bundle signatures (T-025). Pure computation, no I/O, so it does
+    # not breach this package's contract — and rule 1 forbids writing the signing itself.
+    "cryptography>=44",
     "pydantic>=2.9",
 ]
 

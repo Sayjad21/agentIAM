@@ -7,6 +7,10 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "agentiam-core",
     "sqlalchemy>=2.0",
+    # Ed25519 for policy-bundle signatures (T-025). Rule 1 forbids writing crypto,
+    # so this is not optional; PyCA is the conventional, audited choice and ships
+    # cp312 wheels for win_amd64 and manylinux x86_64.
+    "cryptography>=44",
     "alembic>=1.13",
     "asyncpg>=0.29",
 ]

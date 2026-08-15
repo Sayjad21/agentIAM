@@ -1358,3 +1358,78 @@ bundle — the one variable this ADR cannot bound is how large a policy set an o
 `cedarpy` is a new direct dependency, deliberated per `ENGINEERING-RULES`: it is the official
 Cedar engine via PyO3, `PLAN.md` §4 already names Cedar as the policy language, and cp312 wheels
 exist for `win_amd64` and manylinux x86_64 so neither the dev host nor CI builds from source.
+
+---
+
+## ADR-029 — Bundle signing: PyCA `cryptography`, signed over canonical JSON, rollback caught by a serial
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_core.bundles`, `agentiam_pep.policy_cache`, spec 05 §5.1–§5.4, T-025
+
+**Context:** T-025 requires a bundle's signature to be verified before use, an unsigned or
+badly-signed bundle rejected, and — the interesting one — *an older signed bundle rejected
+because bundle version must increase monotonically*. Three decisions, plus a new dependency.
+
+**1. The dependency.** `ENGINEERING-RULES` rule 1 says never write your own crypto, so a
+library is not optional; the only question is which. Nothing in the lockfile provided Ed25519:
+`biscuit-python`'s `PrivateKey`/`PublicKey` expose only `to_bytes`/`from_pem`, with no detached
+sign or verify.
+
+**PyCA `cryptography`** — conventional, audited, Rust-backed, cp312 wheels for `win_amd64` and
+manylinux x86_64 so neither the dev host nor CI builds from source. PyNaCl would have done as
+well; `cryptography` has the broader install base and also gives PEM/DER handling consistent
+with how biscuit keys are already serialized.
+
+It goes in **`agentiam-core`**, which needs justifying because that package is I/O-free by
+contract. Signing is pure computation — no clock, no network, no filesystem — and
+`test_core_purity.py`'s forbidden list does not and should not include it. The alternative was
+duplicating the bundle format in the control plane (which signs) and the PEP (which verifies),
+and two definitions of *what is signed* is exactly how a signature ends up covering something
+other than what is enforced.
+
+**Rejected:** signing the bundle *as a biscuit*, which would have added no dependency at all —
+a token carrying a `bundle_hash` fact, verified with the existing root-key machinery. It works,
+and it conflates two mechanisms for one reader's convenience. A reviewer asking *why is your
+policy bundle a token?* would be asking a fair question.
+
+**2. What is signed: the canonical JSON, not the wire bytes.** `hashing.canonical_json` — the
+same canonicalization the audit chain uses. Two encodings of one bundle must produce one
+signature, or re-serializing in transit invalidates a perfectly good bundle and the first person
+to hit it concludes the signing is broken.
+
+Every field is covered except the signature itself, and there is a parametrized test per field.
+`serial` in particular: leaving it out would let a rollback be presented under a valid signature,
+which is the whole attack §5.2 defends against.
+
+**Measured**, and it shaped the API: `Ed25519PublicKey.verify` **raises `InvalidSignature`**
+rather than returning `False`. `verify_bundle` keeps that. A boolean invites `if verify(...)`
+being written where `if not verify(...)` was meant, and the failure of that typo is *accepting
+every bundle* — a silent, total loss of the property. Four tamper shapes were checked and all
+four raise: flipped signature bit, altered payload, empty signature, wrong key.
+
+**3. Rollback: a serial, not the version label.** `version` is a human label
+(`"2026-08-15.3"`) and is what lands in `DecisionRecord.policy_version`. `serial` is a
+monotonically increasing integer, and the cache refuses any bundle whose serial does not advance
+— *even when the signature is perfectly valid*, which is the point. An attacker replaying an old
+legitimately-signed bundle to restore a removed permission presents nothing a signature check
+can object to.
+
+Two fields for what looks like one concept, because string labels do not order: `"v10" < "v9"`
+lexicographically, and a rollback defence that depends on how an operator names things is not a
+defence. There is a test asserting that inequality, so the reason survives the next reader.
+
+**Consequences, and the one place this system does not fail closed.** A rejected bundle leaves
+the *previous* one serving (`PLAN.md` §11 EC-P01) rather than emptying the cache. That is
+inconsistent with everything else here and deliberate: a forged bundle is evidence of an attack,
+and discarding the last known good policy in response would let an attacker disable the policy
+layer by sending garbage — a far cheaper attack than forging a signature. The attacker achieves
+nothing, and the staleness clock keeps running underneath, so if the real bundle never arrives
+the PEP fails closed on age anyway. Rejections are counted and exposed on `/readyz`, which is
+what EC-P01's alert reads.
+
+**Also settled:** spec 05 §9 Q2 — whether `stale` denies immediately or serves a grace window.
+It denies immediately. A grace window is a second staleness limit with a friendlier name, and it
+turns the failure mode into *policy silently out of date* rather than *policy refused*. The
+operator's fix is identical either way, and `max_staleness` is already the knob; setting it to
+600 s **is** the grace window, stated once instead of twice.

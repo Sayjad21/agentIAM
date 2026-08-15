@@ -121,12 +121,12 @@ assumed.
 ## 5. The bundle
 
 ```
-{version, cedar_source, entity_schema, signature, created_at}
+{serial, version, cedar_source, entity_schema, created_at, signature}
 ```
 
-T-024 consumes `version`, `cedar_source` and optionally `entity_schema`. Signature
-verification, staleness and hot reload are **T-025** and are out of scope here; this document
-specifies only what a loaded bundle means.
+T-024 consumed `version`, `cedar_source` and optionally `entity_schema`. Signature
+verification, staleness, rollback and hot reload are **T-025** and are specified in
+§5.1–§5.4 below.
 
 **A bundle is parsed once, at load, not per request** — see §6. A bundle whose source does not
 parse MUST be rejected at load rather than at the first request that touches it. `cedarpy`
@@ -135,6 +135,80 @@ policies` on bad source, and `PolicySet.from_str()` is the parse step itself.
 
 Rejecting at load is what keeps §4's `NoDecision` an impossible state in production rather
 than merely a handled one.
+
+### 5.1 What is signed, and how
+
+**Ed25519, detached, over the bundle's canonical JSON** — `hashing.canonical_json` from T-005,
+the same canonicalization the audit chain uses. That reuse is the point: two serializations of
+one bundle must produce one signature, or re-encoding a bundle in transit breaks it.
+
+The signed payload is every field **except** the signature itself:
+
+```
+{serial, version, cedar_source, entity_schema, created_at}
+```
+
+**Measured**, against `cryptography` 50:
+
+| | |
+|---|---|
+| Signature | 64 bytes |
+| Public key, raw | 32 bytes — 64 hex characters, which is what an operator pastes into config |
+| Determinism | Ed25519 is deterministic: the same bundle and key always produce the same signature |
+| A bad signature | **raises `InvalidSignature`**; it does not return `False` |
+
+That last row shapes the API. A library returning a boolean invites `if verify(...)` being
+written where `if not verify(...)` was meant, and the failure of that typo is *accepting every
+bundle*. Verification here raises, and the caller cannot ignore it by accident.
+
+Four tamper shapes were checked and all four raise: a flipped signature bit, an altered
+payload, an empty signature, and a signature from a different key.
+
+### 5.2 Rollback: the serial, not the label
+
+`version` is a **label** — `"2026-08-15.3"`, whatever an operator finds readable. It is what
+lands in `DecisionRecord.policy_version`, and it is *not* what rollback protection compares.
+
+`serial` is a monotonically increasing integer, and the cache **refuses any bundle whose serial
+is not greater than the one it currently holds** — even when the signature is perfectly valid.
+That is the rollback attack: an attacker who captures an old, legitimately-signed bundle replays
+it to restore a permission that has since been removed. Signature verification alone cannot see
+anything wrong with it.
+
+Two fields for what looks like one concept, deliberately. String labels do not order —
+`"bundle-10" < "bundle-9"` lexicographically — and a rollback defence that depends on how an
+operator names things is not a defence.
+
+### 5.3 Staleness, and what happens on a bad bundle
+
+| Situation | Behaviour |
+|---|---|
+| Bundle older than `max_staleness` (default 300 s) | `stale=True`, and spec 09 denies with `POLICY_BUNDLE_STALE` |
+| A new bundle fails signature verification | **Rejected; the cache keeps serving the previous bundle** and the failure is counted |
+| A new bundle has a serial ≤ the current one | Rejected the same way |
+| No bundle has ever loaded | `OracleUnavailable` → `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED` |
+
+The second row is `PLAN.md` §11's EC-P01, and it is the one that looks inconsistent. Everything
+else here fails closed; a bad bundle does not. The reason is that the alternatives are worse: a
+forged bundle is *evidence of an attack in progress*, and responding by discarding the last known
+good policy would let an attacker disable the policy layer by sending garbage. Keeping the
+previous bundle means the attacker achieves nothing, and the staleness clock keeps running
+underneath — so if the real bundle never arrives, the PEP fails closed on age anyway.
+
+**Rejection is never silent.** The cache counts rejections and `/readyz` exposes them; a bundle
+being refused repeatedly is the signal EC-P01 asks to alert on.
+
+### 5.4 Hot reload
+
+Loading a new bundle parses and verifies it **before** anything is swapped, then replaces one
+reference. In-flight requests hold the engine they started with and finish against it; the next
+request picks up the new one. There is no lock on the read path, because there is nothing to
+lock — a Python attribute rebind is atomic under the GIL, and a request that began under bundle
+*n* completing under bundle *n* is the correct outcome rather than a compromise.
+
+A bundle that fails to parse or verify never becomes the current one, so a request can never
+observe a half-loaded bundle.
+
 
 ---
 
@@ -199,5 +273,5 @@ Full OPA is deferred (`PLAN.md` §21).
 | # | Question | Owner |
 |---|---|---|
 | 1 | Whether the bundle should be validated against `entity_schema` at load, or only at activation | T-026 |
-| 2 | Whether `stale` should deny immediately or serve a grace window with a flag | T-025 |
+| ~~2~~ | ~~Whether `stale` should deny immediately or serve a grace window with a flag~~ — **resolved in T-025: deny immediately.** A grace window is a second staleness limit with a friendlier name, and it makes the failure mode *policy silently out of date* rather than *policy refused*. The operator's fix is the same either way — refresh the bundle — and `max_staleness` is already the knob for how much staleness is tolerable. Setting it to 600 s is the grace window, stated once | done |
 | 3 | Whether policy evaluation should be cached by `(scope, tool, principal, rounded amount)` — worth it only if T-053 shows step 5 dominating | T-053 |

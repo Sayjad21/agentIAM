@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-023. **M4 is complete.**
+**Last updated:** after T-025.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 next · specs 06–07 outstanding |
-| **Tickets** | 22 done · 31 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 1496 passing (1378 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 3 in `make bench`) |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025 done) · specs 06–07 outstanding |
+| **Tickets** | 23 done · 30 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 1552 passing (1434 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 3 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
 | **Specs** | 8 written — `08-audit-chain` added with the audit work; `06`–`07` outstanding |
-| **ADRs** | 28 |
+| **ADRs** | 29 |
 
 ---
 
@@ -54,7 +54,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-024 | `specs/05-policy.md` + `policy.py` — Cedar engine, 32-case corpus, `NoDecision` fails closed, decimals unscaled (ADR-027, ADR-028). **Pulled ahead of T-023** so enforcement never turns on around a stub | `b653ad4` |
 | — | `specs/08-audit-chain.md` + `db/audit.py` + `verify_audit_chain.py` — tamper, deletion, reordering and **head truncation** detected; the append lock proven load-bearing | `753b3f7` |
 | — | `demo/tools.py` — four stub upstreams, deterministic ids (a `hash()` bug caught by running it three times) | `f1ed115` |
-| **T-023** | **The end-to-end thin slice.** `pipeline.py` wires all ten steps; `/readyz` reports `enforcing: true`. Found **TM-27** — the token's intent binding was enforced nowhere on the live path | — |
+| **T-023** | **The end-to-end thin slice.** `pipeline.py` wires all ten steps; `/readyz` reports `enforcing: true`. Found **TM-27** — the token's intent binding was enforced nowhere on the live path | `90e4a44` |
+| T-025 | `bundles.py` + `policy_cache.py` — Ed25519 signatures over canonical JSON, rollback refused on a monotonic serial, staleness, hot reload (ADR-029) | — |
 
 ### Next
 
