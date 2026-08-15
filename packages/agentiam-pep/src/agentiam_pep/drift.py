@@ -5,7 +5,6 @@ import logging
 import math
 from decimal import Decimal
 from functools import lru_cache
-from typing import Any
 
 import httpx
 
@@ -22,7 +21,7 @@ _SIMILARITY_THRESHOLD = 0.3
 
 def cosine_similarity(v1: list[float], v2: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
-    dot = sum(a * b for a, b in zip(v1, v2))
+    dot = sum(a * b for a, b in zip(v1, v2, strict=True))
     norm1 = math.sqrt(sum(a * a for a in v1))
     norm2 = math.sqrt(sum(b * b for b in v2))
     if norm1 == 0 or norm2 == 0:
@@ -53,7 +52,7 @@ class RuleBasedDriftOracle(DriftOracle):
         self._model = model
         self._timeout = timeout
 
-    @lru_cache(maxsize=1024)
+    @lru_cache(maxsize=1024)  # noqa: B019
     def _compute_drift_score(self, task_intent: str, action_intent: str) -> Decimal:
         """Fetch embeddings and compute the drift score. Cached to stay within NFR-1."""
         if task_intent == action_intent:
@@ -96,14 +95,14 @@ class RuleBasedDriftOracle(DriftOracle):
         if similarity < _SIMILARITY_THRESHOLD:
             # Orthogonal intents -> High drift
             return _DRIFT_THRESHOLD + Decimal("0.1")
-            
+
         # Linear scale between SIMILARITY_THRESHOLD and 1.0 mapping to drift 0.7 -> 0.0
         # similarity=1.0 -> drift=0.0
         # similarity=0.3 -> drift=0.7
         drift_val = 1.0 - ((similarity - _SIMILARITY_THRESHOLD) / (1.0 - _SIMILARITY_THRESHOLD))
         # Ensure it tops out at 0.7 so it doesn't cross threshold unless it's strictly < 0.3
         drift_val = min(0.7, max(0.0, drift_val))
-        
+
         # Round to 3 decimal places to keep logs clean
         return Decimal(str(round(drift_val, 3)))
 
@@ -115,5 +114,5 @@ class RuleBasedDriftOracle(DriftOracle):
         """
         if not context.task_intent_text or not context.action_intent_text:
             return None
-            
+
         return self._compute_drift_score(context.task_intent_text, context.action_intent_text)

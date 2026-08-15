@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum, StrEnum, unique
+from enum import StrEnum, unique
 from typing import Annotated, Final, Literal, Self
 from uuid import UUID
 
@@ -517,8 +517,11 @@ def caveat_kind_of(caveat: object) -> CaveatKind:
 # ---------------------------------------------------------------------------
 
 
-class DriftMode(str, Enum):
+
+
+class DriftMode(StrEnum):
     """How drift scoring affects the decision (T-036)."""
+
     OFF = "off"
     LOG_ONLY = "log_only"
     STRICT = "strict"

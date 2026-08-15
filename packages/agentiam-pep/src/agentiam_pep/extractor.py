@@ -256,7 +256,7 @@ class RouteTable:
             drift_mode = DriftMode(raw_drift)
         except ValueError as exc:
             raise ValueError(f"{where}.drift_mode must be one of off, log_only, strict") from exc
-            
+
         for field, value in (("method", method), ("path", path), ("scope", scope), ("tool", tool)):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{where}.{field} must be a non-empty string")

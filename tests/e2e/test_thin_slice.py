@@ -229,6 +229,7 @@ async def slice_(migrated_engine: AsyncEngine) -> AsyncIterator[Slice]:
         )
 
     from agentiam_pep.drift import RuleBasedDriftOracle
+
     pipeline = Pipeline(
         routes=RouteTable.from_config(ROUTES),
         key_set=KEY_SET,

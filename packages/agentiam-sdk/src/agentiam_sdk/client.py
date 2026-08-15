@@ -106,9 +106,9 @@ class AgentIAM:
 
     def headers(self, action_intent: str | None = None) -> dict[str, str]:
         """HTTP headers required to authenticate a request using this identity.
-        
+
         Includes the token itself and the stateless intent strings for drift detection.
-        
+
         Args:
             action_intent: Optional plain English description of the specific action being
                 attempted right now. Required for accurate semantic drift scoring.

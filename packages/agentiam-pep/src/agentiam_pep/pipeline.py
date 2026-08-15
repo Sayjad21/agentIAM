@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
-from agentiam_core.decision import decide, DriftOracle
+from agentiam_core.decision import DriftOracle, decide
 from agentiam_core.errors import ReasonCode, TokenError
 from agentiam_core.models import BudgetDimension, Outcome, RequestContext
 from agentiam_core.tokens import verify
@@ -314,16 +314,21 @@ class Pipeline:
             # The extractor scales declared-numeric args by 10^4 (spec 10 §4.3); the ledger
             # and the caveat language use the same scale, so this converts back once, here.
             requested[BudgetDimension.SPEND_BDT] = Decimal(amount) / 10**4
-            
-        task_intent_text = headers.get("agentiam-task-intent") or headers.get("AgentIAM-Task-Intent")
-        action_intent_text = headers.get("agentiam-action-intent") or headers.get("AgentIAM-Action-Intent")
-        
+
+        task_intent_text = headers.get("agentiam-task-intent") or headers.get(
+            "AgentIAM-Task-Intent"
+        )
+        action_intent_text = headers.get("agentiam-action-intent") or headers.get(
+            "AgentIAM-Action-Intent"
+        )
+
         if task_intent_text is not None:
             from agentiam_core.hashing import hash_object
+
             request_intent = hash_object(task_intent_text)
         else:
             request_intent = headers.get(INTENT_HEADER, token.intent_hash)
-            
+
         return RequestContext(
             operation=extraction.scope,
             requested=requested,
