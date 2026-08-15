@@ -18,8 +18,15 @@ Three things about the forwarding path were settled by measurement rather than b
    `RemoteProtocolError`.
 2. `date`, `server` and `content-length` are stripped, or the client gets duplicates and a
    length describing a body that is not being sent.
-3. Bodies stream in both directions. Nothing is buffered, so a large upload or a slow
+3. Bodies stream in both directions. Nothing is buffered here, so a large upload or a slow
    event stream costs the PEP a constant amount of memory.
+
+   **Conditional as of T-020** (ADR-023): a route whose mapping reads a `body.` argument
+   must parse the body to authorize the request, so extraction buffers it — bounded by
+   `max_extract_body_bytes`, 1 MiB by default, over which the request is denied rather than
+   read. Routes with no `body.` source are unaffected. Measured: `Request.json()` then
+   `stream()` replays the body byte-identically, but the reverse order raises
+   `RuntimeError: Stream consumed`, so extraction must precede forwarding.
 
 **Trailers are not handled, and cannot be on this stack.** See ADR-020.
 """

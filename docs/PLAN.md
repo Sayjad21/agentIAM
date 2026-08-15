@@ -789,7 +789,15 @@ class DecisionRecord(BaseModel):
 ```
 
 **Reason codes** — closed enum, fixed early, never freeform strings:
-`OK`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_EXPIRED`, `TOKEN_NOT_YET_VALID`, `TOKEN_REVOKED`, `ANCESTOR_REVOKED`, `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `DEPTH_EXCEEDED`, `BUDGET_EXHAUSTED_MANDATE`, `BUDGET_EXHAUSTED_CAVEAT`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE`, `RATE_LIMITED`, `POLICY_DENIED`, `POLICY_BUNDLE_STALE`, `DRIFT_ESCALATION`, `APPROVAL_REQUIRED`, `INTENT_MISMATCH`, `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `MALFORMED_REQUEST`, `TOKEN_TOO_LARGE`, `UPSTREAM_ERROR`.
+`OK`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_EXPIRED`, `TOKEN_NOT_YET_VALID`, `TOKEN_REVOKED`, `ANCESTOR_REVOKED`, `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `DEPTH_EXCEEDED`, `BUDGET_EXHAUSTED_MANDATE`, `BUDGET_EXHAUSTED_CAVEAT`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE`, `RATE_LIMITED`, `POLICY_DENIED`, `POLICY_BUNDLE_STALE`, `DRIFT_ESCALATION`, `APPROVAL_REQUIRED`, `INTENT_MISMATCH`, `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `MALFORMED_REQUEST`, `TOKEN_TOO_LARGE`, `UPSTREAM_ERROR`, `VERIFICATION_LIMIT_EXCEEDED`.
+
+> **Superseded on one point by T-020.** `VERIFICATION_LIMIT_EXCEEDED` was added to the list
+> above; the enum was otherwise unchanged. `biscuit-python`'s Datalog engine can exhaust its
+> resource budget while `verify()` reads a token — from a pathological token (TM-14) or from
+> nothing worse than CPU starvation, since `max_time` is wall clock (TM-25). Before this the
+> failure escaped as a raw library exception carrying no code, which breaks the rule stated in
+> the next paragraph. See ADR-021 and [`specs/09-decision-record.md`](specs/09-decision-record.md)
+> §2 and §7, which now govern.
 
 Every deny path in the codebase maps to exactly one code. A CI test asserts that every code is reachable and every deny in the source cites one.
 

@@ -899,11 +899,11 @@ target exists to describe. Measured on a depth-8 chain, a full `authorize()` cos
 and 478 µs under 24-way CPU contention — against a 1 ms cap, that is under 2× headroom before
 any adversarial input.
 
-**Residual, recorded rather than fixed here:** an exceeded limit still surfaces as a raw
-`biscuit_auth.AuthorizationError` out of `verify()`, not as a typed error with a reason code.
-Nothing depends on it today — the PEP does not yet call `verify()` (gap 11) — but T-020 wires
-that path and must map it, or the project's *every deny names a reason* rule has a hole in it.
-Tracked as TM-25.
+**Residual, recorded rather than fixed here** — ~~an exceeded limit still surfaces as a raw
+`biscuit_auth.AuthorizationError` out of `verify()`, not as a typed error with a reason code~~.
+**Closed in T-020**: `verify()` now raises `VerificationLimitError`, a `TokenError` carrying
+`VERIFICATION_LIMIT_EXCEEDED`, so a caller catching `TokenError` still gets a reason code
+instead of an unexplained 500. Spec 09 §2 step 2 and §7 list it.
 
 **Cost:** this supersedes a written claim. T-019's commit message and journal entry attributed
 the flake to `attenuate()` drawing fresh entropy per call and so breaking hypothesis replay. The
@@ -972,3 +972,122 @@ file runs in 3.8 s.
 **Cost:** a coverage audit is still a sampling argument, not a proof; `caveats_of_kind` makes the
 sample dense, not exhaustive. Worth stating, because the value of these tests is precisely that
 they are believed.
+
+---
+
+## ADR-023 — Extraction buffers the body, so T-018's constant-memory claim becomes conditional
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_pep.extractor`, `agentiam_pep.app`, spec 10 §6, T-018, T-053
+
+**Context:** T-018's module docstring states: *"bodies stream in both directions. Nothing is
+buffered, so a large upload or a slow event stream costs the PEP a constant amount of memory."*
+That was true and is the reason the proxy reads with `aiter_raw()`.
+
+T-020 must read JSON arguments out of the request body to evaluate `ArgPredicate` caveats. Those
+two things cannot both be unconditionally true.
+
+**Measured**, against Starlette 1.6.0:
+
+| Order | Result |
+|---|---|
+| `json()` then `stream()` | Works. The body is replayed from Starlette's cache, byte-identical |
+| `stream()` then `json()` | `RuntimeError: Stream consumed` |
+
+So extraction is possible, it must happen **before** forwarding, and it holds the whole body in
+memory while it does.
+
+**Decision:** the guarantee becomes conditional, and is stated that way rather than quietly
+weakened.
+
+* A route with **no** `body.` source streams exactly as before. Constant memory, unchanged.
+* A route **with** a `body.` source reads at most `max_extract_body_bytes` (default 1 MiB). A
+  larger body on such a route is denied with `MALFORMED_REQUEST` rather than buffered.
+
+The cap is not optional. An unbounded read on a path an attacker chooses is TM-14 — control-plane
+denial of service — reintroduced at the gateway, and the gateway is the more exposed of the two.
+
+**Alternatives rejected:**
+
+* **Stream and extract incrementally.** A JSON field can appear at the end of the document, so a
+  streaming parser still cannot answer "what is `body.amount`" without reading to the end. It
+  buys nothing but complexity.
+* **Extract from a copy while forwarding concurrently.** The decision must precede the forward —
+  that is what a policy enforcement point *is*. Forwarding while deciding would mean the upstream
+  has already seen a request that turns out to be denied.
+* **Refuse `body.` sources entirely.** `ArgPredicate` over a payment amount is the demo's central
+  beat and the reason the caveat language has arguments at all.
+
+**Consequences:** worst-case extraction memory is `max_connections × max_extract_body_bytes` —
+100 × 1 MiB with the defaults. Recorded in spec 10 §9 and flagged for T-053's load profile,
+because a concurrency bound is not the same thing as a per-request bound and the two are easy to
+conflate.
+
+T-018's docstring is amended rather than left standing. A claim that was true when written and
+is now conditional is worse than one that was never made: a reader who checks the docstring and
+not this ADR gets the wrong answer.
+
+---
+
+## ADR-024 — An argument's type is declared in the mapping, never inferred from its text
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_pep.extractor`, spec 10 §4, spec 02 §4.6
+
+**Context:** `02-caveat-language.md` §4.6 requires numeric `arg` facts to be scaled by 10⁴ so that
+one Datalog comparison rule covers every numeric term. The extractor therefore has to decide,
+for each extracted value, whether it is a quantity.
+
+The obvious rule is to try parsing it as a number and fall back to string. It is wrong, and the
+counterexample is ordinary rather than adversarial: an `account_id` of `"0012"` parses as a
+number, extracts as `12`, and a caveat comparing it as a string stops matching the value the
+upstream will act on. The failure is silent and it fails **open**.
+
+The same ambiguity exists in the other direction. A JSON body can legitimately carry an amount as
+`25.5` or as `"25.5"` depending on the client's language, so reading the JSON type is not a
+reliable signal either. And path, query and header values are *always* text on the wire — there
+is nothing there to infer from at all.
+
+**Decision:** a source expression may carry a `:number` suffix — `query.limit:number`,
+`body.amount:number` — which declares the value is a quantity and must be scaled. Without it the
+value is a string.
+
+A `:number` source whose value will not parse as a finite decimal is a **denial**, not a fallback
+to string. A caveat that expects to compare a quantity must not silently start comparing text;
+that is the same failure as the inference rule, arriving later.
+
+Three further refusals follow from the same reasoning, all measured:
+
+| Input | Why refused |
+|---|---|
+| More than 4 decimal places | `Decimal("0.00005") * 10**4` is `0.5`. Rounding would enforce a number the caller did not request, in whichever direction the rounding mode chose. Four places is the domain everywhere else (money is `NUMERIC(20,4)`) |
+| `NaN`, `±Infinity` | Every comparison against `NaN` is false, so a `reject if` predicate over it never fires and the caveat silently passes |
+| A JSON boolean through `:number` | A boolean is not a quantity, and Python's `bool` is an `int` subclass — so without an explicit guard `true` would scale to `10000` |
+
+**Consequences:** the mapping is more verbose, and a policy author who forgets `:number` gets a
+caveat that compares text.
+
+That is safe, but only because of a property of biscuit that had to be checked rather than
+assumed. `ArgPredicate` compiles to `reject if arg(p, $x), <negated>` precisely so it is vacuous
+when the argument is absent — so if a numeric comparison against a *string* term merely failed to
+match, the reject would never fire and a mistyped argument would fail **open**. **Measured**,
+against a `reject if arg("payment.amount", $x), $x > 50000000` token:
+
+| Term supplied | Result |
+|---|---|
+| `100` (numeric, under) | allow |
+| `50000001` (numeric, over) | **deny** |
+| `"100"` (string, under) | **deny** |
+| `"50000001"` (string, over) | **deny** |
+| argument absent | allow |
+
+Both string rows deny, so the type mismatch is not silently ignored. Forgetting the annotation
+costs a false *denial*; the inference rule this ADR rejects would have cost a false
+*authorization*. That asymmetry is the whole argument, and it rests on a library behaviour now
+pinned by `test_caveats.py::TestArgTermTyping` — which also pins the vacuity of an absent
+argument, since spec 10 §2 declines to deny on that basis.
+
+It also means the mapping carries semantics, not just plumbing, which is a second reason
+`mapping_version` belongs in the decision record (spec 10 §8).

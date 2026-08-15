@@ -25,9 +25,11 @@ from agentiam_core.errors import (
     InvalidSignatureError,
     MalformedTokenError,
     ReasonCode,
+    TokenError,
     TokenExpiredError,
     TokenNotYetValidError,
     TokenTooLargeError,
+    VerificationLimitError,
 )
 from agentiam_core.models import Budget, BudgetDimension, Mandate
 from agentiam_core.tokens import (
@@ -432,5 +434,23 @@ class TestDatalogExecutionLimits:
 
         monkeypatch.setattr("agentiam_core.tokens.MAX_DATALOG_TIME", timedelta(0))
 
-        with pytest.raises(AuthorizationError, match="execution limits"):
+        with pytest.raises(VerificationLimitError, match="exceeded its limits") as caught:
             verify(token, key_set, now=MID_WINDOW)
+        assert caught.value.reason_code is ReasonCode.VERIFICATION_LIMIT_EXCEEDED
+
+    def test_a_limit_failure_carries_a_reason_code_not_a_library_exception(
+        self, root_key: KeyPair, key_set: RootKeySet, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TM-25's residual: a caller catching TokenError must still get a reason code.
+
+        Before this, an exceeded limit escaped as a raw `biscuit_auth.AuthorizationError`,
+        which no caller catches and which carries no code — so the PEP would have turned a
+        transient CPU stall into an unexplained 500 rather than a named deny.
+        """
+        token = mint_root(a_mandate(), root_key.private_key)
+        monkeypatch.setattr("agentiam_core.tokens.MAX_DATALOG_TIME", timedelta(0))
+
+        with pytest.raises(TokenError) as caught:
+            verify(token, key_set, now=MID_WINDOW)
+        assert not isinstance(caught.value, AuthorizationError)
+        assert caught.value.reason_code is ReasonCode.VERIFICATION_LIMIT_EXCEEDED

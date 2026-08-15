@@ -541,3 +541,55 @@ class TestCaveatResult:
         assert CaveatResult.allow().allowed
         assert not CaveatResult.deny(ReasonCode.TOOL_DENIED, "x").allowed
         assert not CaveatResult.escalate("x").allowed
+
+
+class TestArgTermTyping:
+    """Why spec 10 §4.1 makes the argument's type an explicit declaration.
+
+    `ArgPredicate` compiles to `reject if arg(p, $x), <negated>` so that the caveat is
+    vacuous when the argument is absent (§3.2). That shape raises an obvious worry: if a
+    numeric comparison against a *string* term simply fails to match, the reject never fires
+    and the caveat silently passes — a mistyped argument would fail open.
+
+    Measured here rather than assumed, because the answer decides whether a policy author
+    who forgets the `:number` annotation gets a false denial or a false authorization.
+    """
+
+    CEILING = 5000 * 10**4
+
+    def _authorizes(self, arg_fact: str) -> bool:
+        root = KeyPair()
+        token = (
+            BiscuitBuilder(f'reject if arg("payment.amount", $x), $x > {self.CEILING};')
+            .build(root.private_key)
+            .to_base64()
+        )
+        from biscuit_auth import Biscuit
+
+        biscuit = Biscuit.from_base64(token, root.public_key)
+        try:
+            AuthorizerBuilder(arg_fact + "\nallow if true;").build(biscuit).authorize()
+        except Exception:
+            return False
+        return True
+
+    def test_a_numeric_term_under_the_ceiling_is_allowed(self) -> None:
+        assert self._authorizes('arg("payment.amount", 100);')
+
+    def test_a_numeric_term_over_the_ceiling_is_denied(self) -> None:
+        assert not self._authorizes(f'arg("payment.amount", {self.CEILING + 1});')
+
+    def test_an_absent_argument_is_vacuous(self) -> None:
+        """Spec 02 §3.2, and what spec 10 §2 relies on when it declines to deny."""
+        assert self._authorizes("")
+
+    @pytest.mark.parametrize("value", ["100", "50000001"])
+    def test_a_string_term_denies_whatever_its_value(self, value: str) -> None:
+        """The load-bearing measurement: a mistyped argument fails **closed**.
+
+        Both a value under the ceiling and one over it are denied, so the type mismatch is
+        not silently ignored. Forgetting `:number` therefore costs a false denial, never a
+        false authorization — which is the asymmetry that makes an explicit annotation safe
+        to require (ADR-024).
+        """
+        assert not self._authorizes(f'arg("payment.amount", "{value}");')

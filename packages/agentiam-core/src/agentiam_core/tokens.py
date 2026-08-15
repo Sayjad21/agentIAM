@@ -24,6 +24,7 @@ from typing import Final
 from uuid import UUID
 
 from biscuit_auth import (
+    AuthorizationError,
     Authorizer,
     AuthorizerBuilder,
     Biscuit,
@@ -42,6 +43,7 @@ from agentiam_core.errors import (
     TokenExpiredError,
     TokenNotYetValidError,
     TokenTooLargeError,
+    VerificationLimitError,
 )
 from agentiam_core.models import Budget, BudgetDimension, Mandate
 
@@ -250,8 +252,19 @@ def _authorizer(biscuit: Biscuit) -> Authorizer:
 
 
 def _query_one(authorizer: Authorizer, predicate: str) -> object | None:
-    """Return the single term of a one-arity authority fact, or None if absent."""
-    facts = authorizer.query(Rule(f"d($x) <- {predicate}($x)"))
+    """Return the single term of a one-arity authority fact, or None if absent.
+
+    An exceeded execution limit becomes a `VerificationLimitError` rather than escaping as
+    a raw `biscuit_auth.AuthorizationError`. Letting the library's exception out would give
+    the caller no reason code, which breaks the rule that every deny names one — TM-25's
+    recorded residual, closed here.
+    """
+    try:
+        facts = authorizer.query(Rule(f"d($x) <- {predicate}($x)"))
+    except AuthorizationError as exc:
+        raise VerificationLimitError(
+            f"the Datalog engine exceeded its limits reading {predicate!r}: {exc}"
+        ) from exc
     for fact in facts:
         term: object = fact.terms[0]
         return term

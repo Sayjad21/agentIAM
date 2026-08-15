@@ -59,6 +59,7 @@ class ReasonCode(StrEnum):
     # infrastructure
     CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED = "CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED"
     UPSTREAM_ERROR = "UPSTREAM_ERROR"
+    VERIFICATION_LIMIT_EXCEEDED = "VERIFICATION_LIMIT_EXCEEDED"
 
 
 class AgentIAMError(Exception):
@@ -135,6 +136,25 @@ class DepthExceededError(TokenError):
     """The chain is deeper than the mandate's `max_depth` (INV-6, EC-T10)."""
 
     reason_code = ReasonCode.DEPTH_EXCEEDED
+
+
+class VerificationLimitError(TokenError):
+    """The Datalog engine ran out of its resource budget while reading the token.
+
+    Two causes, and the reason code deliberately does not distinguish them because the
+    caller's response is the same — fail closed:
+
+    * A pathological token engineered to be expensive (TM-14).
+    * A perfectly ordinary token verified while the process was starved of CPU (TM-25).
+      `max_time` is **wall clock, not work**, so this is reachable under nothing worse than
+      load. Measured at 2 in 42,014 authorize calls before ADR-021 raised the limits.
+
+    It exists as a `TokenError` so a caller that catches `TokenError` keeps getting a
+    reason code rather than a raw `biscuit_auth.AuthorizationError` — which is what
+    escaped before, and what TM-25 recorded as its residual.
+    """
+
+    reason_code = ReasonCode.VERIFICATION_LIMIT_EXCEEDED
 
 
 class CaveatError(AgentIAMError):

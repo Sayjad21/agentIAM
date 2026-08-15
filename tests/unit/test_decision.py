@@ -597,6 +597,9 @@ class TestReasonCodeCoverage:
         elsewhere = {
             ReasonCode.UPSTREAM_ERROR,  # T-018, post-decision (spec 09 §6)
             ReasonCode.LEASE_NOT_ACTIVE,  # T-014, the ledger (ADR-009)
+            # T-020, step 2: the Datalog engine ran out of budget reading the token.
+            # `tokens.verify` raises it; TM-25's residual, closed there rather than here.
+            ReasonCode.VERIFICATION_LIMIT_EXCEEDED,
         }
         unreachable = {ReasonCode.RATE_LIMITED}
 
@@ -693,3 +696,19 @@ class TestNfr1:
         timings = sorted(benchmark.stats.stats.data)  # type: ignore[attr-defined]
         p99 = timings[int(len(timings) * 0.99)]
         assert p99 < 0.001, f"p99 was {p99 * 1e6:.1f} us, over the 1 ms NFR-1 budget"
+
+
+class TestAllowedProperty:
+    """`Decision.allowed` is the one-line answer the PEP branches on."""
+
+    def test_allow_is_allowed(self) -> None:
+        assert run().allowed
+
+    def test_a_deny_is_not_allowed(self) -> None:
+        assert not run(policy=FakePolicy(allowed=False)).allowed
+
+    def test_an_escalation_is_not_allowed(self) -> None:
+        """INV-8: escalation is not permission — it is a question waiting for an answer."""
+        decision = run(caveats=(RequiresApproval(scopes=frozenset({"invoice:read"})),))
+        assert decision.outcome is Outcome.ESCALATE
+        assert not decision.allowed

@@ -8,7 +8,7 @@
 > stated with their bound rather than buried.
 >
 > A table claiming everything is mitigated is not a threat model, it is marketing. Seven of
-> the twenty-five entries here are not fully mitigated, and each says why.
+> the twenty-six entries here are not fully mitigated, and each says why.
 
 ---
 
@@ -102,7 +102,8 @@ T-013; TM-24 has one.
 | TM-22 | T | **Clock skew beyond the configured allowance.** If the reaper reclaims while a lagging PEP still spends, the same budget is issued twice. Measured with no skew margin: the lease was reaped and re-issued while still in use | PEPs expire early at `expires_at − S`; the reaper reclaims late at `expires_at + S`; `ttl > 2S`. **Safety depends on actual skew staying within `S`** | **partially mitigated** (§5.6) | `test_ledger.py` (reaper side, T-013); CH-7, EC-T08 (PEP side) |
 | TM-23 | T | **Agent under-reports the actual amount** to hide spend, where the PEP cannot independently determine it | Over-reporting is clamped to the lease's outstanding, so it cannot break the budget invariant. Under-reporting is flagged and audited wherever the PEP can cross-check, but is not prevented | **accepted risk** (§5.7) | A-19 |
 | TM-24 | S | **A free-text identifier that reshapes rendered Datalog.** `quote_string()` escapes correctly, so a crafted `role`, `agent_id` or `principal_id` cannot forge a fact inside a signed token. But `block_source()` renders the string back **unescaped**: measured, a role of `x"); admin(true); //` renders as block text that re-parses into a genuine second fact. Every planned consumer of block source is a display or parsing path — the console's caveat chain (T-045), the audit explorer (T-048), the Datalog-to-caveat parser both need. A bidi override additionally reorders a rendered role without changing a byte | `models.validate_label` refuses quotes, backslashes, C0/C1 controls and bidi controls in the three fields that become Datalog string facts, at the only places they enter a token: `Mandate.principal_id` and `attenuate()`'s `agent_id` and `role`. Non-ASCII is otherwise unrestricted, so a Bengali role renders as itself | mitigated | `tests/security/test_datalog_labels.py` (66 cases) |
-| TM-25 | D | **A library timeout shorter than the operation it guards.** `biscuit-python` 0.4.0's authorizer defaults to `max_time = 1 millisecond`, and it is **wall clock, not work**. A query taking microseconds raises `AuthorizationError: Reached Datalog execution limits` whenever the process loses the CPU for a millisecond, so a *legitimate* request is refused for want of scheduling — under exactly the load NFR-1's 1 ms budget exists to describe. Measured: a depth-8 chain costs 290 us to authorize quiet and 478 us under 24-way contention, under 2x headroom; and 2 of 42,014 authorize calls during a loaded test run hit the limit, both inside `verify()`. Fault injection confirmed the consequence: 10 of 10 injected timeouts on a parent check produced a false INV-1 violation report (ADR-021) | All limits set explicitly on every authorizer: `max_time=250 ms`, `max_facts=10 000`, `max_iterations=1 000`. Still bounded, so TM-14's ceiling survives; token size (8 192 b64) and depth (8) bound the input the engine can be given. The property harness re-raises the error rather than reading it as a denial | mitigated | `test_tokens.py::TestDatalogExecutionLimits` — pins the library defaults, and drives `MAX_DATALOG_TIME` to zero to prove `verify()` actually applies it |
+| TM-25 | D | **A library timeout shorter than the operation it guards.** `biscuit-python` 0.4.0's authorizer defaults to `max_time = 1 millisecond`, and it is **wall clock, not work**. A query taking microseconds raises `AuthorizationError: Reached Datalog execution limits` whenever the process loses the CPU for a millisecond, so a *legitimate* request is refused for want of scheduling — under exactly the load NFR-1's 1 ms budget exists to describe. Measured: a depth-8 chain costs 290 us to authorize quiet and 478 us under 24-way contention, under 2x headroom; and 2 of 42,014 authorize calls during a loaded test run hit the limit, both inside `verify()`. Fault injection confirmed the consequence: 10 of 10 injected timeouts on a parent check produced a false INV-1 violation report (ADR-021) | All limits set explicitly on every authorizer: `max_time=250 ms`, `max_facts=10 000`, `max_iterations=1 000`. Still bounded, so TM-14's ceiling survives; token size (8 192 b64) and depth (8) bound the input the engine can be given. The property harness re-raises the error rather than reading it as a denial | mitigated | `test_tokens.py::TestDatalogExecutionLimits` — pins the library defaults, drives `MAX_DATALOG_TIME` to zero to prove `verify()` applies it, and asserts the failure arrives as a `TokenError` carrying `VERIFICATION_LIMIT_EXCEEDED` rather than a raw library exception (T-020) |
+| TM-26 | E | **The PEP authorizes one value while the upstream acts on another.** The gateway forwards the original bytes, so two parsers read every request: ours and the upstream's. Measured for `amount=1&amount=999999` — Starlette's `dict(QueryParams)` yields `999999` (last), `parse_qsl` yields `1` (first), Go's `Form.Get` and Java's `getParameter` take the first, PHP the last. So `amount <= 5000` can be checked against `1` while the upstream executes `999999`, and nothing downstream can detect it: the token was valid, the caveat was satisfied, the decision record is honest about what it saw. Duplicate JSON keys are the same — `json.loads` silently keeps the last. Same shape as TM-24: a string meaning one thing where it is checked and another where it is used | The extractor never picks a winner. A query parameter, header, or JSON key **named by a mapping rule** that appears more than once denies the request as `MALFORMED_REQUEST` (spec 10 §5.2); duplicates are detectable via `object_pairs_hook`, measured. Path and query values are percent-decoded once and NFC-normalized so our view matches what the upstream acts on. Choosing first-wins or last-wins would be choosing an upstream to agree with, and the upstream is not ours to choose | mitigated | `tests/security/test_parameter_pollution.py` (T-020) |
 
 ---
 
@@ -225,7 +226,7 @@ rejected characters, the Bengali case that must still pass, and the rendering ha
 the guard is demonstrated to be load-bearing rather than asserted.
 
 `PLAN.md` §12 numbers 33 attacks and the submission scope is 15–20 (`ROADMAP.md` Part 1).
-TM-19 through TM-22 and TM-24 should be counted as additions to that set, not substitutions:
+TM-19 through TM-22 and TM-24 through TM-26 should be counted as additions to that set, not substitutions:
 they were found by measurement rather than brainstorming, which is usually a sign the remaining
 ones are worth looking for the same way. TM-24 in particular came from asking one question of a
 running library — *what does `block_source()` do with a quote?* — rather than from reading.
@@ -244,10 +245,10 @@ repudiation), so the rows below overlap rather than partition.
 | Repudiation | TM-12 | 1 of 1 |
 | Information disclosure | TM-13, TM-16 | 1 of 2 |
 | Denial of service | TM-07, TM-14, TM-25 | 2 of 3 |
-| Elevation of privilege | TM-02, TM-03, TM-04, TM-05, TM-10, TM-11, TM-19, TM-20 | 6 of 8 |
+| Elevation of privilege | TM-02, TM-03, TM-04, TM-05, TM-10, TM-11, TM-19, TM-20, TM-26 | 7 of 9 |
 
-**25 threats · 18 mitigated · 4 partially mitigated · 3 accepted risks.**
+**26 threats · 19 mitigated · 4 partially mitigated · 3 accepted risks.**
 
 The three accepted risks — bearer replay (TM-01), slow-drift evasion (TM-11), and
 agent-reported amounts (TM-23) — are the ones to raise voluntarily in the pitch. Each is real,
-each has a bound, and stating them is what makes the other twenty-two believable.
+each has a bound, and stating them is what makes the other twenty-three believable.

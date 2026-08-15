@@ -43,7 +43,7 @@ Steps 1–7 decide. Steps 8–10 act on the decision and belong to the PEP, not 
 | # | Step | Where it runs | Can produce |
 |---|---|---|---|
 | 1 | Extract token, scope, tool, args | PEP (T-020) | `MALFORMED_REQUEST` |
-| 2 | Verify the biscuit chain | `tokens.verify` (T-007) | `TOKEN_TOO_LARGE`, `MALFORMED_REQUEST`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_NOT_YET_VALID`, `TOKEN_EXPIRED`, `DEPTH_EXCEEDED` |
+| 2 | Verify the biscuit chain | `tokens.verify` (T-007) | `TOKEN_TOO_LARGE`, `MALFORMED_REQUEST`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_NOT_YET_VALID`, `TOKEN_EXPIRED`, `DEPTH_EXCEEDED`, `VERIFICATION_LIMIT_EXCEEDED` |
 | 3 | Check revocation | `decision.decide` | `TOKEN_REVOKED`, `ANCESTOR_REVOKED` |
 | 4 | Evaluate the token's caveats | `decision.decide` | `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `INTENT_MISMATCH`, `BUDGET_EXHAUSTED_CAVEAT`, `DEPTH_EXCEEDED`, `APPROVAL_REQUIRED` |
 | 5 | Evaluate the policy bundle | `decision.decide` | `POLICY_DENIED`, `POLICY_BUNDLE_STALE` |
@@ -156,6 +156,7 @@ that every code is reachable and every deny in the source cites one.*
 | `DRIFT_ESCALATION` | step 6 |
 | `BUDGET_EXHAUSTED_MANDATE`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE` | step 7, and the ledger (T-013, T-014) |
 | `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED` | §5 |
+| `VERIFICATION_LIMIT_EXCEEDED` | step 2 — the Datalog engine exhausted its budget reading the token (TM-14 or TM-25). Fails closed; added by T-020 |
 | `UPSTREAM_ERROR` | step 8, post-decision (§6) |
 | `RATE_LIMITED` | **unreachable** — `RateLimit` was dropped (`ROADMAP.md` Part 1) |
 

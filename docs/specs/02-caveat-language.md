@@ -204,7 +204,9 @@ reject if arg("email.domain", $d), !["example.com", "corp.example"].contains($d)
     predicate as a *new* restriction, which is always narrowing (§6 of spec 03)
 - **Reason code:** `ARG_PREDICATE_FAILED`
 - **Paths** use dotted JSONPath-lite notation, resolved by the PEP's extractor (T-020). The path
-  vocabulary is the extractor's contract, not this spec's.
+  vocabulary is the extractor's contract, not this spec's — see
+  [`10-scope-extraction.md`](10-scope-extraction.md) §4, which also settles what happens when a
+  path resolves to more than one value (it does not: the request is refused, TM-26).
 
 ### 4.7 `DepthLimit`
 
@@ -353,6 +355,6 @@ ever widen a Datalog decision.
 
 | # | Question | Owner |
 |---|---|---|
-| 1 | The `arg` path vocabulary and its extraction rules | T-020 |
+| ~~1~~ | ~~The `arg` path vocabulary and its extraction rules~~ — **resolved in T-020**: the path in a caveat is an opaque label bound to a source expression by the extractor's route mapping, so a token survives an upstream refactor. See [`10-scope-extraction.md`](10-scope-extraction.md) §4 | done |
 | 2 | Whether `evaluate()` should return the failing clause index for finer attribution | T-019 |
 | ~~3~~ | ~~Whether `role` should be a closed enum for console rendering~~ — **resolved in T-011**: no, see `01-token-format.md` §6.1 and ADR-013 | done |

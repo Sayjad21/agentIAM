@@ -1106,16 +1106,134 @@ was followed for the code and skipped for the diagnosis. A commit message is a c
 ---
 
 
+### T-020 · Where an HTTP request becomes a decision
+
+The extractor is step 1 of the pipeline and the only step that reads an untrusted wire format.
+It looks like plumbing. It is where the most interesting threat so far was found.
+
+#### The mapping table is not the interesting part
+
+`PLAN.md` asks for a config-driven `(method, path)` → scope mapping, JSONPath argument
+extraction, an `arg_digest`, and deny-by-default on an unmapped route. All of that is
+straightforward, and spec `10-scope-extraction.md` writes it down.
+
+The part worth reading is §5, and it came out of a probe rather than the plan.
+
+#### The PEP can authorize a value the upstream never acts on
+
+The gateway forwards the **original bytes**. It does not rewrite the query string or the body.
+So two parsers read every request: ours, and the upstream's. **Measured**, for
+`amount=1&amount=999999`:
+
+| Parser | Value |
+|---|---|
+| `dict(starlette.QueryParams(...))` | `999999` — last |
+| `urllib.parse.parse_qsl(...)[0]` | `1` — first |
+| Go `net/http` `Form.Get`, Java `getParameter` | first |
+| PHP | last |
+
+A caveat `amount <= 5000` checked against `1` passes, and a Go upstream executes `999999`.
+Nothing downstream detects it: the token was valid, the caveat was satisfied, and the decision
+record is honest about what *it* saw. Duplicate JSON object keys are the same shape —
+`json.loads` silently keeps the last.
+
+That is TM-26, and it is TM-24's family: a string that means one thing where it is checked and
+another where it is used. The first was found by asking a library what `block_source()` does with
+a quote; this one by asking what `dict(QueryParams)` does with a repeated key.
+
+**The answer is to never pick a winner.** Where a source expression could resolve to more than
+one value, the request is denied. Choosing first-wins or last-wins would be choosing an upstream
+to agree with, and the upstream is not ours to choose. The refusal applies only to names the
+mapping constrains — a repeated `tag=` that nothing reads is not ambiguous in any way that
+matters, and denying it would break ordinary clients for nothing.
+
+#### Two more places the two views can diverge, both closed the same way
+
+* **Percent-encoding.** `compile_path` leaves a matched parameter encoded — `/invoices/a%2Fb`
+  yields `a%2Fb` — while the upstream reads `a/b`. Path and query values are decoded **once**, so
+  our view matches. Once, because repeated decoding is its own smuggling primitive.
+* **Unicode.** NFC, the same rule `hashing.py` already applies, so two visually identical
+  arguments cannot produce two different digests or two different caveat outcomes.
+
+#### Guessing a type is a security decision
+
+The first draft inferred numeric-ness from the text: if it parses as a number, scale it. The
+counterexample is ordinary rather than adversarial — an `account_id` of `"0012"` extracts as
+`12`, and a caveat comparing it as a string stops matching the value the upstream uses. Silent,
+and it fails open.
+
+So the type is **declared**: `body.amount:number`, `query.limit:number`. Nothing is inferred
+(ADR-024).
+
+That raised a question the draft ADR answered confidently and wrongly. `ArgPredicate` compiles to
+`reject if arg(p, $x), <negated>` so it is vacuous when the argument is absent — so if a numeric
+comparison against a *string* term merely failed to match, the reject would never fire and a
+mistyped argument would fail **open**, not closed. Measured before writing it down:
+
+| Term | Result |
+|---|---|
+| `100` numeric, under the ceiling | allow |
+| `50000001` numeric, over | deny |
+| `"100"` **string**, under | **deny** |
+| `"50000001"` **string**, over | **deny** |
+| absent | allow |
+
+Both string rows deny, so forgetting the annotation costs a false *denial* — while the inference
+rule would have cost a false *authorization*. The asymmetry is the whole argument for requiring
+the annotation, and it now has a test (`TestArgTermTyping`) rather than a confident sentence.
+The same test pins the vacuity of an absent argument, which is what spec 10 §2 relies on when it
+declines to deny.
+
+#### A promise from T-018 that had to become conditional
+
+T-018 said *"nothing is buffered, so a large upload costs the PEP a constant amount of memory."*
+True, and incompatible with reading JSON arguments out of the body.
+
+Measured: `Request.json()` then `stream()` replays the body byte-identically; `stream()` then
+`json()` raises `RuntimeError: Stream consumed`. So extraction is possible, must precede
+forwarding, and buffers while it does.
+
+The guarantee is now conditional and says so (ADR-023): routes with no `body.` source stream
+unchanged; routes with one read at most 1 MiB and deny above it, because an unbounded read on an
+attacker-chosen path is TM-14 reintroduced at the gateway. T-018's docstring was amended rather
+than left standing — a claim that was true when written and is now conditional is worse than one
+never made, because a reader who checks the docstring and not the ADR gets the wrong answer.
+
+#### Enforcement does not turn on here
+
+`CONTEXT.md` and `STATUS.md` gap 11 both said T-020 would wire `decide()` into the gateway and
+flip `enforcing: true`. Reading `decide()`'s signature says otherwise: it needs a `BudgetOracle`,
+which is T-021's local lease pool, plus policy and revocation oracles that do not exist yet.
+
+Wiring it now would mean shipping allow-all stubs for three of five decision inputs in order to
+report `enforcing: true` — which is worse than the honest `false` that is there today, and
+exactly the kind of thing gap 11 exists to complain about. T-020's acceptance criteria are
+entirely about the extractor; none of them mention the gateway. So the note was wrong, and gap 11
+now names **T-021** as where enforcement actually begins.
+
+#### Closed on the way past
+
+TM-25's residual, recorded in ADR-021 the day before: an exceeded Datalog limit escaped `verify()`
+as a raw `biscuit_auth.AuthorizationError` carrying no reason code, so the PEP would have turned a
+transient CPU stall into an unexplained 500 rather than a named deny. It is now
+`VerificationLimitError` carrying `VERIFICATION_LIMIT_EXCEEDED`.
+
+That is one new entry in a closed enum, so it needs `PLAN.md` §6.9 to say so — the supersession
+note is there, and the test that pins the enum against the plan was updated rather than deleted.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 17 of 53 in scope (61 defined, 8 deferred) |
+| Tickets complete | 18 of 53 in scope (61 defined, 8 deferred) |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1075, all passing (992 plus 82 integration, plus the NFR-1 benchmark) |
+| Tests | 1200, all passing (1117 plus 82 integration, plus the NFR-1 benchmark) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 22 |
-| Specs written | 5 of 9 |
+| ADRs | 24 |
+| Specs written | 6 (01-04, 09, 10); 05-08 outstanding |
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |
-| Threats found by measurement | 7 (TM-19 through TM-25) |
+| Threats found by measurement | 8 (TM-19 through TM-26) |
