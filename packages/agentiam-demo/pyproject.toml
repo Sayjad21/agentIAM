@@ -6,6 +6,8 @@ requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
     "agentiam-sdk",
+    # The stub tool servers are ASGI apps the PEP proxies to (PLAN section 5).
+    "fastapi>=0.115",
 ]
 
 [build-system]

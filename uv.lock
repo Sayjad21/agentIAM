@@ -99,10 +99,14 @@ version = "0.1.0"
 source = { editable = "packages/agentiam-demo" }
 dependencies = [
     { name = "agentiam-sdk" },
+    { name = "fastapi" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "agentiam-sdk", editable = "packages/agentiam-sdk" }]
+requires-dist = [
+    { name = "agentiam-sdk", editable = "packages/agentiam-sdk" },
+    { name = "fastapi", specifier = ">=0.115" },
+]
 
 [[package]]
 name = "agentiam-pep"
