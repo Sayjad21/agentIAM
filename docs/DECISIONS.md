@@ -1163,3 +1163,81 @@ not — a heartbeat replaces a bound derived from the ledger's own `expires_at` 
 from message arrival, which has no bounded lateness, so a live-but-delayed PEP gets its lease
 reclaimed underneath it. That is TM-22 through a new channel. Reasoning and resumption trigger
 are in spec 04 §17.1.
+
+---
+
+## ADR-026 — A full audit buffer denies the request; `BLOCK` is not offered
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_pep.emitter`, `PLAN.md` §9 T-022, spec 09 step 10, NFR-1, NFR-5
+
+**Context:** `PLAN.md` T-022 requires the back-pressure policy to be *"defined and tested (when
+the buffer is full: block, drop, or deny — default is deny, because losing audit records is a
+compliance failure, and this choice must be recorded in `DECISIONS.md`)"*. The plan names three
+candidates and the default; this records what was actually built and why one candidate is gone.
+
+**Decision: `DENY` (default) and `DROP` (opt-in). `BLOCK` is not implemented.**
+
+**Why deny is the default.** A decision record is the answer to *who authorized this payment?*
+The system's entire pitch is chain of custody, and NFR-6 makes the audit ledger tamper-evident —
+which is worth nothing if records can go missing under load. So when the buffer is full the
+request is refused with `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`: a system that cannot record what
+it authorized should not authorize.
+
+This is the one place where step 10, which runs *after* the decision, can change the outcome. It
+is deliberate and it is the direction that fails closed.
+
+**Why `BLOCK` is not offered.** Blocking means the hot path waits for the audit sink to drain.
+`emit()` is synchronous and runs inside the ASGI event loop, so "blocking" there does not stall
+one request — it stalls the loop, and with it every other in-flight request, `/healthz`, and the
+lease pool's top-up tasks. A slow audit sink would become a total outage.
+
+`DENY` fails the same requests, per-request, with a reason code, while the process keeps serving
+health checks and draining the buffer that caused the problem. It is strictly better on every
+axis that matters, so `BLOCK` is absent rather than present-and-discouraged: an option that is
+never the right choice is a trap in a config file.
+
+If a future deployment genuinely wants to wait, the honest shape is an *asynchronous* emit on a
+path that is already awaiting — not a synchronous block on the loop. That is a different API and
+would need its own entry here.
+
+**Why `DROP` exists at all.** Some deployments would rather serve than record — a read-only
+reporting PEP, say, where the decisions are low-value and availability is the whole point. It is
+opt-in, never the default, and **counted**: `emitter.dropped` increments on every discard,
+because a dropped audit record that nothing counts is indistinguishable from one that was never
+made.
+
+**Consequences.** A saturated audit sink takes the PEP's availability with it. That is the
+intended reading and it deserves stating plainly: the buffer's capacity (1,024 records by
+default) and the drain cadence (§ spec 04 17.2's 64-record / 500 ms window) are what stand
+between a slow ledger and a refusing gateway. Both are configurable, and T-053's load profile
+should measure how much headroom the defaults actually give.
+
+**Writing this entry is what found the bug it now describes.** The first implementation counted
+a failed batch and *discarded* it, so a broken sink degraded to silently losing records — losing
+exactly what the deny policy refuses requests to protect. The argument above would have been one
+the code did not honour.
+
+A failed batch is now **retried**, paced by the drain interval, and stays at the head of the
+queue while it is. So a persistently broken sink fills the buffer and `DENY` starts refusing
+requests: a broken audit path stops authorization the same way a saturated one does. `max_retries`
+(3) then bounds a *poison* batch — one the sink will never accept — after which the records are
+dropped and counted in `lost_records`, because one bad record must not wedge the pipeline forever.
+
+A second bug fell out of the same test: `flush()` retried in a tight loop, spending the entire
+`max_retries` budget in microseconds against a sink that had had no time to recover. That is not
+a retry. `flush()` now gives each batch one attempt and leaves the pacing to the drain loop.
+
+**Measured, and recorded because it is a hot-path cost.** With `opentelemetry-api` installed and
+no SDK, `start_as_current_span` plus one attribute costs **5.58 µs** — the tracer is a
+`ProxyTracer` and the span a `NonRecordingSpan`, but context attach/detach is real work. Against
+`decide()`'s measured ~5.2 µs that roughly doubles the decision; against NFR-1's 1 ms budget it
+is 0.56%. The budget is the framing that matters, so tracing is on by default, and
+`EmitterSettings.tracing=False` exists so T-053 can measure both. `emit()` plus a span
+benchmarks at 6.3 µs mean.
+
+**Also measured:** with no SDK a span's `trace_id` is all zeroes and its context reports
+`is_valid=False`. `current_trace_id()` returns `None` there rather than handing back a
+correlation handle that correlates every decision to every other one — `DecisionRecord.trace_id`
+must come from the request (a `traceparent` header, or one the PEP generates), not from the span.

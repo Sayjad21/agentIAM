@@ -112,6 +112,7 @@ dependencies = [
     { name = "agentiam-core" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "opentelemetry-api" },
     { name = "prometheus-client" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -121,6 +122,7 @@ requires-dist = [
     { name = "agentiam-core", editable = "packages/agentiam-core" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "opentelemetry-api", specifier = ">=1.30" },
     { name = "prometheus-client", specifier = ">=0.21" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
@@ -636,6 +638,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/24/bf/d1bda4f6168e0b2e9e5958945e01910052158313224ada5ce1fb2e1113b8/nodeenv-1.10.0.tar.gz", hash = "sha256:996c191ad80897d076bdfba80a41994c2b47c68e224c542b48feba42ba00f8bb", size = 55611, upload-time = "2025-12-20T14:08:54.006Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/b2/d0896bdcdc8d28a7fc5717c305f1a861c26e18c05047949fb371034d98bd/nodeenv-1.10.0-py2.py3-none-any.whl", hash = "sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827", size = 23438, upload-time = "2025-12-20T14:08:52.782Z" },
+]
+
+[[package]]
+name = "opentelemetry-api"
+version = "1.44.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ee/8b/aa9e2d8b8dfa7c946f7dec5d1f8f6ba8eca062f43509a06bdb5ce93d26c0/opentelemetry_api-1.44.0.tar.gz", hash = "sha256:67647e5e9566edcf421166fdf022b3537f818635daa852b289e34604dc6fb33a", size = 72406, upload-time = "2026-07-16T15:25:32.678Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/6f/a04e900f465ff3221ccc395522503e2d10e79fa21f2723c8e177aae1e0d1/opentelemetry_api-1.44.0-py3-none-any.whl", hash = "sha256:94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef", size = 60018, upload-time = "2026-07-16T15:25:11.657Z" },
 ]
 
 [[package]]

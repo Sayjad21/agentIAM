@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-021.
+**Last updated:** after T-022.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | M1, M2, M3 complete · **M4 in progress** (T-018…T-021 done) · specs 05–08 outstanding |
-| **Tickets** | 19 done · 34 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 1248 passing (1163 in `make test`; 84 in `make test-integration`; 1 in `make bench`) |
+| **Milestone** | M1, M2, M3 complete · **M4 in progress** (T-018…T-022 done) · specs 05–08 outstanding |
+| **Tickets** | 20 done · 33 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 1288 passing (1202 in `make test`; 84 in `make test-integration`; 2 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — lint/types/tests, **NFR-1 benchmark**, integration against real Postgres, core purity, compose health |
 | **Specs** | 6 written — `10-scope-extraction` added by T-020; `05`–`08` outstanding |
-| **ADRs** | 25 |
+| **ADRs** | 26 |
 
 ---
 
@@ -49,14 +49,14 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-019 | `specs/09-decision-record.md` + `decision.py` — 10 steps, precedence contract, 54 scenarios, **NFR-1 measured at ~5 µs** | `7cf6448` |
 | — | Gap 13: explicit Datalog limits, two flaky property tests fixed at their causes (ADR-021, ADR-022, TM-25) | `d63e641` |
 | T-020 | `specs/10-scope-extraction.md` + `extractor.py` — route mapping, JSONPath-lite args, declared numeric types, **ambiguity refusal (TM-26)** | `acf6010` |
-| T-021 | `pool.py` — zero-network `reserve()`, single-flight top-up, graceful `RELEASE`, crash bound proven by killing a real process (ADR-025) | — |
+| T-021 | `pool.py` — zero-network `reserve()`, single-flight top-up, graceful `RELEASE`, crash bound proven by killing a real process (ADR-025) | `e34b698` |
+| T-022 | `emitter.py` — buffered emit, **deny-on-full** back-pressure, retry rather than silent loss, OTEL span (ADR-026) | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-022** | Buffered decision-record emitter — back-pressure policy, zero PII | M4 |
-| T-023 | **End-to-end thin slice.** Where enforcement actually turns on, because it is the first ticket with all five of `decide()`'s inputs | M4 |
+| **T-023** | **End-to-end thin slice.** Where enforcement turns on — the first ticket with all five of `decide()`'s inputs. Needs a deliberate answer for `PolicyEngine` (an allow-all stub would report that policy was evaluated when none exists) | M4 |
 | T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
 | T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
 | T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7 |

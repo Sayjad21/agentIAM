@@ -1323,15 +1323,102 @@ was read.
 ---
 
 
+### T-022 · The emitter, and an ADR that found its own bug
+
+Step 10 of the pipeline. It runs *after* the decision, so nothing in it can change a verdict —
+with one deliberate exception, which is the whole ticket.
+
+#### Deny is the default, and that is the unusual part
+
+`PLAN.md` sets the back-pressure default to **deny**: when the audit buffer is full the request
+is refused. A system that cannot record what it authorized should not authorize. The pitch is
+chain of custody and NFR-6 makes the ledger tamper-evident, which is worth nothing if records can
+quietly go missing under load.
+
+`BLOCK`, one of the three options the plan names, is not implemented at all. `emit()` is
+synchronous and runs inside the ASGI event loop, so "blocking" there does not stall one request —
+it stalls the loop, and with it every other in-flight request, `/healthz`, and the lease pool's
+top-up tasks. A slow audit sink would become a total outage. `DENY` fails the same requests,
+per-request, with a reason code, while the process keeps serving and keeps draining. An option
+that is never the right choice is a trap in a config file, so it is absent rather than
+discouraged (ADR-026).
+
+#### Writing the ADR found the bug
+
+The entry claimed a full buffer denies rather than loses records. Setting that down next to the
+code made it obvious that a *failing* sink took the other path: the first implementation counted
+a failed batch and discarded it, so a broken ledger degraded to silently losing exactly the
+records the deny policy exists to protect. The argument was one the code did not honour.
+
+A failed batch is now retried and stays at the head of the queue while it is, so a persistently
+broken sink fills the buffer and `DENY` starts refusing — a broken audit path stops authorization
+the same way a saturated one does. `max_retries` bounds a poison batch after that, counted in
+`lost_records`.
+
+This is the second time this project has had a document catch a code defect rather than the other
+way round, and both times it was because the document had to state a *consequence* rather than a
+behaviour.
+
+#### And the test found a second one
+
+The new retry logic needed a test that a wedged sink stays wedged. It failed, because `flush()`
+retried in a tight loop — spending the entire `max_retries` budget in microseconds against a sink
+that had had no time to recover. That is not a retry; it is a spin with a counter attached.
+`flush()` now gives each batch one attempt and leaves the pacing to the drain interval.
+
+#### A hang is a worse failure than an assertion
+
+Mutating the deny guard to a silent drop made the suite **hang** rather than fail. The gate that
+stalls the fake sink was released after the `pytest.raises` block, so when the expected exception
+did not arrive, the test aborted with the gate still shut and `aclose()`'s flush waited on it
+forever.
+
+A hang gives no name, no line, and in CI it burns the job timeout instead of reporting. Every
+stalled sink now releases in a `finally` via a small `stalled()` helper, and the same mutation now
+fails in 0.7 seconds with three named tests. Worth generalising: any test fixture that can block
+should be arranged so that a *failing assertion* still unblocks it.
+
+Eight guards were mutated in total; all eight now go red.
+
+#### Two measurements about tracing
+
+`opentelemetry-api` is a planned dependency (`PLAN.md` §4) and the collector is M6 (ADR-001), so
+the API goes in now and the SDK arrives with T-049. Two things about that were worth measuring
+rather than assuming:
+
+**A no-op span is not free.** `start_as_current_span` plus one attribute costs **5.58 µs** even
+with no SDK — the tracer is a `ProxyTracer` and the span a `NonRecordingSpan`, but the context
+attach and detach are real work. Against `decide()`'s ~5.2 µs that roughly doubles the decision;
+against NFR-1's 1 ms budget it is 0.56%. Both framings are true and the budget is the one that
+matters, so tracing is on by default with a switch for T-053 to measure both. `emit()` plus a span
+benchmarks at 6.3 µs, and the benchmark asserts p99 rather than printing it.
+
+**A no-op span's `trace_id` is all zeroes**, with `is_valid` False. Handing that back as a
+`DecisionRecord.trace_id` would put a correlation handle into every record that correlates every
+decision to every other one — worse than none. `current_trace_id()` returns `None` there, and the
+`trace_id` has to come from the request.
+
+#### Spec 04 §17 Q3, answered
+
+The `LEDGER_COMMIT` batching window: **64 records or 500 ms**. The interesting bound is the upper
+one — a batch must land before its lease can be reaped, because a commit arriving after
+reclamation is a late commit (§11), rejected and recorded as an anomaly with a real spend going
+unrecorded. 500 ms against a 60 s TTL is a margin of 120×, which leaves that failure dominated by
+process death rather than by the batching choice. Below about 10 ms the batching buys nothing and
+the wakeups cost more than the writes they combine.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 19 of 53 in scope (61 defined, 8 deferred) |
+| Tickets complete | 20 of 53 in scope (61 defined, 8 deferred) |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1248, all passing (1163 plus 84 integration, plus the NFR-1 benchmark) |
+| Tests | 1288, all passing (1202 plus 84 integration, plus 2 benchmarks) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 25 |
+| ADRs | 26 |
 | Specs written | 6 (01-04, 09, 10); 05-08 outstanding |
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |

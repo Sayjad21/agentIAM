@@ -546,7 +546,7 @@ broke.
 |---|---|---|
 | 1 | Should the ledger refuse a lease to a PEP whose reported clock is skewed beyond `S` (§9.3) | T-013 |
 | ~~2~~ | ~~Heartbeat-based early reclaim: worth it, or is TTL sufficient for the demo~~ — **resolved in T-021: TTL is sufficient, and a heartbeat would make things worse.** See below | done |
-| 3 | Batching window for `LEDGER_COMMIT` — latency against ledger write load | T-022 |
+| ~~3~~ | ~~Batching window for `LEDGER_COMMIT` — latency against ledger write load~~ — **resolved in T-022: 64 records or 500 ms, whichever comes first.** See §17.2 | done |
 | 4 | Should reconciliation anomalies block a mandate from being marked complete | T-014 |
 
 ### 17.1 Why not heartbeats (Q2, T-021)
@@ -572,3 +572,34 @@ Graceful shutdown already covers every planned exit; this is the unplanned-death
 **Resumption trigger:** a deployment where PEP crashes are frequent enough that 80 s of
 reduced availability is felt, *and* the heartbeat channel has a bounded delivery latency to
 size the grace period against. Neither is true of the demo or of a single-region deployment.
+
+### 17.2 The batching window (Q3, T-022)
+
+**64 records or 500 ms, whichever comes first.** Both configurable.
+
+The window is bounded from both ends, and the upper bound is the interesting one.
+
+**Upper bound — a batch must land before its lease can be reaped.** A commit arriving after
+the lease has been reclaimed is a *late commit* (§11): the ledger rejects it, records a
+reconciliation anomaly, and a real spend goes unrecorded in the budget. The reap cutoff is
+`expires_at + S`, so the batching window must be small against `ttl` — 500 ms against a 60 s
+TTL is a margin of 120×, which leaves the failure entirely dominated by process death rather
+than by the batching choice.
+
+**Lower bound — below about 10 ms the batching buys nothing.** The wakeups start costing more
+than the writes they combine, and a ledger round trip is already off the hot path, so the
+latency saved is latency nobody is waiting on.
+
+**What the window actually costs.** A commit delayed by up to 500 ms leaves `leased` high for
+that much longer, so a concurrent sibling sees marginally less `available` and may take a
+smaller grant. That is a fairness effect, not a safety one — `Σ committed ≤ total` holds
+throughout, because the budget is already deducted at `ACQUIRE`.
+
+**What it buys.** Up to 64 commits become one transaction on the budget row, and that row is
+the serialization point for every `ACQUIRE` in the mandate (§4.1's `FOR UPDATE`). Reducing
+write transactions against it is the difference between the ledger being a bottleneck under
+concurrent siblings and not.
+
+The same window governs the decision-record emitter (T-022), for the same reasons and with a
+looser constraint — an audit record has no reap deadline. Sharing the numbers means one thing
+to tune rather than two.
