@@ -87,6 +87,7 @@ convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = [
+    "scripts",
     "agentiam_controlplane",
     "agentiam_core",
     "agentiam_demo",
@@ -104,9 +105,7 @@ warn_unreachable = true
 warn_unused_ignores = true
 show_error_codes = true
 disallow_any_unimported = true
-# `scripts/` joins this list once it holds source (T-016 adds the first one). mypy errors
-# on an empty directory, so listing it now would fail the build for no reason.
-files = ["packages", "tests"]
+files = ["packages", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]

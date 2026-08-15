@@ -171,8 +171,8 @@ them, not M3, so M3 starts now and the specs land against the milestone that nee
 | T-012 | Budget schema — SQLAlchemy models + Alembic migration, `NUMERIC(20,4)` | **Done.** Migration runs against real Postgres; `CHECK` constraints reject bad rows |
 | T-013 | ACQUIRE / RELEASE / REAP + 50-concurrent-acquire test | **Done.** `FOR UPDATE` and the skew margin each removed to prove they are load-bearing; spec 04's `max_fraction` clamp found incompatible with this test (ADR-015) |
 | T-014 | RESERVE / COMMIT / refund, idempotent | **Done.** Decimal exact to 4 places; replayed commits are no-ops; spec 04 §4.4's statement order found to be a TOCTOU race (ADR-017) |
-| **T-016** | `scripts/run_invariant_checker.py` | Run it against a deliberately corrupted budget row and confirm it *detects* — a checker never tested against a real violation is decoration |
-| T-017 | Sibling budgets: proportional split + shared pool (INV-5) | 3-sibling concurrent test holds `Σ spend ≤ mandate` |
+| T-016 | `scripts/run_invariant_checker.py` | **Done.** Detects an injected violation of each of its four invariants; measured at 3–5 ms over 500 budgets against a 1 s bar; swept under concurrent load to prove it does not cry wolf |
+| **T-017** | Sibling budgets: proportional split + shared pool (INV-5) | 3-sibling concurrent test holds `Σ spend ≤ mandate` |
 
 **Exit gate:** all lease operations working · stateful hypothesis test P-10 green · invariant
 checker proven to catch a real violation · sibling budget test passing.

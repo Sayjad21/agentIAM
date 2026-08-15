@@ -627,3 +627,68 @@ reintroducing the crash. Verified guard-proof style (`docs/JOURNAL.md`'s recurri
 literal order was restored, `test_concurrent_duplicate_ledger_commits_apply_exactly_once` was
 rerun and failed with the exact error above on repeated attempts, then the lock-first order was
 restored and the full `test_ledger_commit.py` suite rerun green.
+
+---
+
+## ADR-018 — The invariant checker asserts three invariants, and one of them is already a `CHECK`
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_controlplane.db.invariants`, `scripts/run_invariant_checker.py`, T-016,
+T-047, T-052
+
+**Context:** `PLAN.md` §9 names two invariants for T-016: `committed + leased <= total` and
+`Σ committed = Σ settled reservations`. The first is already a database `CHECK` constraint
+(T-012, ADR-014). Re-asserting in application code something the schema enforces is normally
+waste, so the question was whether the checker is doing anything the database is not.
+
+**Measured**, before writing it:
+
+| Injection | Result |
+|---|---|
+| `UPDATE budgets SET committed = total + 1` | **Refused** — `IntegrityError` from `ck_budgets_invariant` |
+| `UPDATE budgets SET committed = committed + 10` | **Accepted.** `Σ reservations` still 40, `committed` now 50 |
+
+The `CHECK` compares three columns of one row. It cannot see a sum over `reservations` and
+`leases`, so the books invariants have no schema backing at all — and the second `UPDATE` is
+what a double-applied commit, a partially-rolled-back transaction, or a hand-repaired row
+actually looks like. That is precisely the drift ADR-010 predicts when it says idempotency
+protects the books rather than the pool: nothing was protecting the books.
+
+**Decision:** the checker asserts **four** things, not two.
+
+1. `committed + leased <= total` — the pool invariant. Redundant with the `CHECK` in normal
+   operation, and kept anyway: a `CHECK` can be dropped by a half-applied migration, and a
+   replica or a restored dump may not carry it. Cheap, and the one that matters most if it ever
+   does fire.
+2. `committed == Σ reservations.amount` over that budget's leases — the plan's second invariant.
+3. `leased == Σ (granted - settled)` over that budget's **active** leases. Not in `PLAN.md`,
+   derived from the write paths in `db/ledger.py`: `ACQUIRE` adds, `LEDGER_COMMIT` moves, and
+   `_retire` returns exactly `outstanding` when a lease leaves `active`. It is the invariant a
+   missed decrement in `_retire` breaks — the ADR-009 / TM-21 failure shape — and the schema
+   cannot see it either.
+4. `committed >= 0 AND leased >= 0`, reported separately from the pool violation. A negative
+   `leased` is the specific TM-21 signature that model-checking produced in T-004, and calling
+   it by its own name saves whoever reads the alert a step.
+
+**Everything is read in one SQL statement.** Not a style preference. The quantities are compared
+against each other, so they must share a snapshot; read in three statements, an `ACQUIRE`
+landing between two of them reports a violation that never existed. A checker that cries wolf
+gets muted, and a muted checker and a broken one fail identically. The integration suite sweeps
+25 times against four concurrent workers to keep that honest.
+
+**Consequences:** the checker never writes and never locks, so it is safe against a live ledger
+— which is what T-052 runs it as, and what Beat 4 puts on screen. Measured at 3–5 ms for a
+sweep over 500 budgets, against an acceptance bar of *detects within 1 s*, so the default 1 s
+interval has roughly 200× headroom and could be tightened for the demo without concern.
+
+`PLAN.md` §8's `GET /v1/budgets/{mandate_id}/invariant` is **not** built here — no FastAPI app
+exists yet. It should reuse `check_invariants` when the control-plane API lands rather than
+growing a second implementation of the same three sums.
+
+**One bug found by running it, not by testing it.** The loop catches errors so a chaos run can
+continue through CH-1 (Postgres down) — and caught only `SQLAlchemyError`, which is wrong: a
+refused connection surfaces as a bare `ConnectionRefusedError` because the failure happens below
+the dialect and SQLAlchemy never wraps it. The script crashed on the exact condition its
+docstring claimed it survived. The unit suite now points it at a dead port; removing `OSError`
+from the except clause fails three tests.

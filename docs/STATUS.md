@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-014.
+**Last updated:** after T-016.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | M1, M2 complete · **M3 in progress** (T-012…T-014 done), specs 05–09 outstanding |
-| **Tickets** | 13 done · 40 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 833 passing (788 in `make test`; 45 in `make test-integration`, need Docker) |
-| **Coverage** (`agentiam-core`, `agentiam-sdk`, `agentiam-pep`) | 100% statements · 99%+ branches |
+| **Milestone** | M1, M2 complete · **M3 in progress** (T-012…T-014, T-016 done), specs 05–09 outstanding |
+| **Tickets** | 14 done · 39 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Tests** | 898 passing (835 in `make test`; 63 in `make test-integration`, need Docker) |
+| **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — lint/types/tests, **integration against real Postgres**, core purity, compose health |
 | **Specs** | 4 of 9 written |
-| **ADRs** | 17 |
+| **ADRs** | 18 |
 
 ---
 
@@ -47,7 +47,7 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-016…T-017** | invariant checker, sibling budgets | M3 |
+| **T-017** | Sibling budgets: proportional split + shared pool (INV-5) | M3 — last |
 | T-018…T-023 | PEP, decision pipeline, lease pool, **end-to-end thin slice** | M4 |
 | T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
 | T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
