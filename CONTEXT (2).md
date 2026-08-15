@@ -3,7 +3,7 @@
 Hand-off snapshot for resuming work in a fresh session. Gitignored.
 
 **State:** **M1-M4 complete.** T-024, T-025, T-026 were pulled forward from M5. CI green on five jobs.
-**Next ticket:** **T-027** — Authoring UI for policies. Deps: T-026, done.
+**Next ticket:** **T-032** — Drift rule-based v0. Deps: T-030, done.
 
 Read `CLAUDE.md` first for the rules and the environment. This file is only *where things
 currently stand*.
@@ -72,7 +72,7 @@ tests/integration/ 84 tests, testcontainers, real Postgres — NOT in `make test
 tests/fixtures/    tokens.py — a_mandate(), a_root_client(), frozen_clock()
 ```
 
-1552 tests: 1434 in `.\make.ps1 check`, 103 in `.\make.ps1 test-integration`, 12 in `.\make.ps1 test-e2e`, 3 in `.\make.ps1 bench`.
+1676 tests: 1558 in `.\make.ps1 check`, 103 in `.\make.ps1 test-integration`, 12 in `.\make.ps1 test-e2e`, 3 in `.\make.ps1 bench`.
 
 ---
 
@@ -197,11 +197,14 @@ Do not reopen these without reading the ADR.
    test drafts have got this backwards.
 5. **`block_source()` is not a faithful round trip** (TM-24). Mint-time validation stops the
    input; consumers must still treat the output as untrusted.
-6. **T-026**: Added operator activation gate (`activation.py`) and 51-case corpus to `agentiam-pep` to ensure a bundle is fully evaluated before hot-reload caching.
-7. **T-027**: Added `agentiam-controlplane` Admin Console UI for Cedar Authoring. Features live testing, corpus evaluation, and diffing via FastAPI, Jinja2, and HTMX. The corpus was moved to `agentiam-core` to be shared between PEP and Control Plane.
-8. **T-028**: Created `ollama_client.py` as a strictly local, deterministic, and schema-constrained LLM client for the NL->Policy compiler. Uses `httpx.Timeout` and `temperature=0` to fulfill demo determinism requirements and `format` JSON constraints for generating policies.
-9. **T-029**: Built `compiler.py` to translate natural language to Cedar and auto-generate tests using Pydantic models. Wrote `evaluate_compiler.py` and a 30-case dataset in `dataset.json` to benchmark success rate on GPU-enabled environments.
-10. **A task copies its context at creation, not at first await** — but an awaited bare coroutine
+6. **State:**
+   - **Current Milestone:** M6 (Verification) — T-030 (Verify-before-deploy loop) complete.
+   - **Next Up:** T-032 (Drift rule-based v0).
+   - **Core Reliability:** The critical `test_one_authorize_stays_inside_the_budget` NFR-1 benchmark executes in ~100us per request.
+   - **Tests:** 1673 total tests passing (100% statement coverage on core).
+   - **Control Plane:** Features an Admin Console UI with natural language Authoring, ambiguity handling, and dual test gating (auto-tests + 51-case corpus).
+   - **Model Client:** Uses `httpx`-based `ollama_client.py` bound strictly to localhost:11434, utilizing Pydantic JSON schemas to constrain outputs.
+7. **A task copies its context at creation, not at first await** — but an awaited bare coroutine
    shares the caller's.
 9. **Alembic's `command.upgrade`/`downgrade` call `asyncio.run()` internally**, so they raise
    inside a running loop. The integration fixtures are deliberately *sync* for this reason.
@@ -216,7 +219,7 @@ Do not reopen these without reading the ADR.
 $env:Path = "$env:Path;C:\Users\Legion\AppData\Roaming\Python\Python312\Scripts"
 cd c:\Users\Legion\OneDrive\Desktop\agentIAM
 git log --oneline -5
-.\make.ps1 check              # expect: all green, 1080 passed, 83 deselected
+.\make.ps1 check              # expect: all green, 1558 passed, 83 deselected
 .\make.ps1 up                 # Docker Desktop must be running
 .\make.ps1 test-integration   # expect: 103 passed
 ```

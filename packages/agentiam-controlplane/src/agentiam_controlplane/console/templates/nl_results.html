@@ -1,0 +1,148 @@
+{% if error %}
+<div class="alert error">
+    <strong>Error:</strong> {{ error }}
+</div>
+{% elif clarifying_question %}
+<div class="alert warning">
+    <strong>Ambiguous Request:</strong> {{ clarifying_question }}
+</div>
+{% else %}
+<div class="alert success">
+    <strong>Success:</strong> Policy compiled successfully.
+</div>
+
+<script>
+    // Update the Cedar editor with the generated source
+    document.getElementById('cedar-editor').value = `{{ cedar_source | safe }}`;
+</script>
+
+<h3>Auto-Generated Tests (T-029)</h3>
+<table class="results-table">
+    <thead>
+        <tr>
+            <th>Test Name</th>
+            <th>Expected</th>
+            <th>Actual</th>
+            <th>Result</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for res in auto_test_results %}
+        <tr class="{% if not res.passed %}row-fail{% endif %}">
+            <td>
+                <strong>{{ res.test.name }}</strong>
+                <div class="small muted">{{ res.test.description }}</div>
+                <div class="small muted">{{ res.test.principal_id }} -> {{ res.test.action }} -> {{ res.test.resource_type }}::{{ res.test.resource_id }}</div>
+            </td>
+            <td>
+                {% if res.test.expected %}
+                    <span class="badge allow">ALLOW</span>
+                {% else %}
+                    <span class="badge deny">DENY</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if res.error %}
+                    <span class="badge neutral">ERROR</span>
+                {% elif res.allowed %}
+                    <span class="badge allow">ALLOW</span>
+                {% else %}
+                    <span class="badge deny">DENY</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if res.passed %}
+                    <span class="check-mark">✓ PASS</span>
+                {% else %}
+                    <span class="x-mark">✗ FAIL</span>
+                    {% if res.error %}
+                    <div class="small muted">{{ res.error }}</div>
+                    {% endif %}
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h3>Corpus Evaluation (T-026)</h3>
+{% if summary.failures == 0 %}
+<div class="alert success">
+    All {{ summary.total }} corpus tests passed against the generated policy.
+</div>
+{% else %}
+<div class="alert error">
+    {{ summary.failures }} / {{ summary.total }} corpus tests failed against the generated policy!
+</div>
+{% endif %}
+
+<table class="results-table">
+    <thead>
+        <tr>
+            <th>Operation</th>
+            <th>Condition</th>
+            <th>Candidate</th>
+            <th>Current</th>
+            <th>Result</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in diffs %}
+        <tr class="{% if not item.passed %}row-fail{% elif item.changed %}row-changed{% endif %}">
+            <td>
+                {{ item.case.operation }}
+                <div class="small muted">Role: {{ item.case.role }}</div>
+            </td>
+            <td>
+                {% if item.case.amount > 0 %}Amt: ${{ item.case.amount }}{% endif %}
+                {% if item.case.tool %}<br>Tool: {{ item.case.tool }}{% endif %}
+                {% if item.case.depth > 0 %}<br>Depth: {{ item.case.depth }}{% endif %}
+            </td>
+            <td>
+                {% if item.candidate_allowed %}
+                    <span class="badge allow">ALLOW</span>
+                {% else %}
+                    <span class="badge deny">DENY</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if item.current_allowed is none %}
+                    <span class="badge neutral">N/A</span>
+                {% elif item.current_allowed %}
+                    <span class="badge allow">ALLOW</span>
+                {% else %}
+                    <span class="badge deny">DENY</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if item.passed %}
+                    <span class="check-mark">✓ PASS</span>
+                {% else %}
+                    <span class="x-mark">✗ FAIL</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if can_activate %}
+<div class="activation-panel">
+    <h3>Ready for Activation</h3>
+    <p class="muted">The generated policy passed both the auto-generated tests and the master corpus. It is safe to activate.</p>
+    
+    <form hx-post="/policy/activate" hx-target="#results-container">
+        <!-- We use the content of the cedar-editor to ensure manual tweaks are captured -->
+        <input type="hidden" name="source" id="activate-source-input" value="">
+        <button type="submit" class="btn success" onclick="document.getElementById('activate-source-input').value = document.getElementById('cedar-editor').value;">Activate Policy</button>
+    </form>
+</div>
+{% else %}
+<div class="activation-panel">
+    <h3>Activation Blocked</h3>
+    <p class="muted">The policy cannot be activated because it failed tests. Review the failures above, adjust your Natural Language prompt, or manually fix the Cedar code.</p>
+    <button class="btn primary" disabled>Activate Policy</button>
+</div>
+{% endif %}
+
+{% endif %}

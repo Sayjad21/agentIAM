@@ -56,6 +56,12 @@ header p {
 }
 
 main {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.split-view {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 2rem;

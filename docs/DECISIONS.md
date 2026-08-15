@@ -1489,3 +1489,17 @@ operator's fix is identical either way, and `max_staleness` is already the knob;
 **Decision:** We use Pydantic models (`CompilerTestCase` and `CompilerOutput`) to define the structure and extract a JSON schema from it. We pass this schema to Ollama's `format` parameter. We also established a separate evaluation script (`evaluate_compiler.py`) with a curated 30-case dataset (`dataset.json`) to benchmark the success rate using the `cedarpy` engine.
 
 **Rationale:** Pydantic is already in the dependency tree and handles JSON schema generation flawlessly. Using a structured output ensures the Control Plane can directly parse the candidate test cases and surface them to the user. The standalone evaluation script keeps the heavy GPU requirement out of the automated CI pipeline.
+
+---
+
+## ADR-034 — Dual-Gating for Generated Policies
+
+**Date:** 2026-08-16
+**Status:** accepted
+**Affects:** `agentiam_controlplane.app`, T-030
+
+**Context:** The NL->Cedar compiler generates Cedar policy and test cases based on an operator's plain English input. However, verifying the intent of natural language is inherently fuzzy.
+
+**Decision:** We require **both** the auto-generated test suite AND the 51-case master corpus to pass before a generated policy can be activated in the Control Plane.
+
+**Rationale:** The master corpus prevents regression of the global invariants (like NFR-1 limits and immutable rules). The auto-generated tests prove that the LLM's own internal logic about the specific prompt holds true. By gating deployment on *both*, we combine global invariant safety with localized intent safety.

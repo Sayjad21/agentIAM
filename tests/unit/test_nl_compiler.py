@@ -57,3 +57,23 @@ async def test_compile_nl_to_policy_validates_and_parses() -> None:
     assert "Admins can do anything." in kwargs["prompt"]
     assert "schema" in kwargs
     assert kwargs["schema"]["title"] == "CompilerOutput"
+
+
+@pytest.mark.asyncio
+async def test_compile_nl_to_policy_handles_ambiguity() -> None:
+    """Ensure the compiler surfaces a clarifying question when the input is ambiguous."""
+    mock_response = {
+        "clarifying_question": "Who is 'someone' and what resource are they acting on?",
+        "cedar_source": None,
+        "tests": [],
+    }
+
+    mock_client = AsyncMock(spec=OllamaClient)
+    mock_client.generate_structured.return_value = mock_response
+
+    output = await compile_nl_to_policy("Someone can do something.", client=mock_client)
+
+    assert isinstance(output, CompilerOutput)
+    assert output.clarifying_question == "Who is 'someone' and what resource are they acting on?"
+    assert output.cedar_source is None
+    assert len(output.tests) == 0

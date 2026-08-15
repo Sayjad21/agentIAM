@@ -29,15 +29,27 @@ class CompilerTestCase(BaseModel):
 class CompilerOutput(BaseModel):
     """The structured output from the NL->Policy compiler."""
 
-    cedar_source: str = Field(..., description="The compiled Cedar policy source code.")
+    clarifying_question: str | None = Field(
+        default=None,
+        description="Ask a question if input is ambiguous. Only set if you cannot guess.",
+    )
+    cedar_source: str | None = Field(
+        default=None,
+        description="The compiled Cedar policy source code. Omit if asking a clarifying question.",
+    )
     tests: list[CompilerTestCase] = Field(
-        ...,
-        description="List of test cases to verify the policy. Must include Allow and Deny.",
+        default_factory=list,
+        description="Test cases to verify the policy. Omit if ambiguous. Must include Allow/Deny.",
     )
 
 
 _SYSTEM_PROMPT = """You are an expert IAM policy compiler.
 Translate the natural language requirement into a valid Cedar policy and generate test cases.
+
+CRITICAL RULES FOR AMBIGUITY:
+If the input is deliberately ambiguous or lacks context (e.g. missing who, what, or which resource),
+DO NOT guess. Instead, provide a `clarifying_question` asking for the missing context, and omit
+`cedar_source` and `tests`.
 
 CEDAR SYNTAX RULES:
 1. Every policy must be either `permit` or `forbid`.
@@ -50,7 +62,7 @@ permit (
     resource == Photo::"Vacation"
 );
 
-Generate the policy in `cedar_source`, and provide an array of `tests` to verify it.
+If there is no ambiguity, generate the policy in `cedar_source`, and provide `tests` to verify it.
 Ensure there are tests for both positive (expected=true) and negative (expected=false) cases.
 """
 

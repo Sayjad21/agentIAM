@@ -133,6 +133,7 @@ should explain *why*, and name anything measured.
 
 - **T-028**: Created `ollama_client.py` as a strictly local, deterministic, and schema-constrained LLM client over `httpx` for the NL->Policy compiler. Employs a strict timeout strategy via `httpx.Timeout` and `temperature=0` to fulfill demo requirements.
 - **T-029**: Built `compiler.py` and an evaluation script (`evaluate_compiler.py`) with a curated 30-case dataset (`dataset.json`). The compiler translates natural language to Cedar and auto-generates test cases, parsed safely via Pydantic models.
+- **T-030**: Integrated the NL->Cedar compiler into the `agentiam-controlplane` Admin Console UI. Enabled a verify-before-deploy loop with ambiguity handling, generating a diff against the current policy and enforcing dual-gating (auto-tests AND the 51-case master corpus must pass before activation).
 - **Tests before implementation**, and confirm they fail. A guard never seen to fire is not a
   guard.
 - **Coverage on `agentiam-core` is 100% of statements.** Keep it. The Definition of Done says
@@ -148,7 +149,7 @@ should explain *why*, and name anything measured.
 
 ### Ticket arithmetic
 We are strictly tracking 61 total scoped tickets (plus 8 deferred).
-Currently done: **28**. Remaining: **25**.
+Currently done: **29**. Remaining: **24**.
 
 T-010 is one of the deferred ones — `PLAN.md` marks it `[DEFERRED — see §21]`, so T-011 follows
 T-009 by the plan, not by choice. ADR-006 strengthened the reason with measurement.

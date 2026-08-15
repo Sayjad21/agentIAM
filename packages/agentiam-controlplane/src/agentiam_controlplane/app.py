@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
 from agentiam_core.corpus import CORPUS, CORPUS_SOURCE, CORPUS_TOOLS
 from agentiam_core.decision import PolicyVerdict
 from agentiam_core.hashing import DECIMAL_PLACES
@@ -176,6 +177,111 @@ def create_app() -> FastAPI:
                 "error": None,
                 "summary": summary,
                 "diffs": diffs,
+            },
+        )
+
+    @app.post("/policy/compile", response_class=HTMLResponse)
+    async def compile_policy(request: Request, nl_source: str = Form(...)) -> HTMLResponse:
+        """Compile a natural language statement into Cedar policy and evaluate."""
+        try:
+            output = await compile_nl_to_policy(nl_source)
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="nl_results.html",
+                context={"error": str(exc)},
+            )
+
+        if output.clarifying_question:
+            return templates.TemplateResponse(
+                request=request,
+                name="nl_results.html",
+                context={"clarifying_question": output.clarifying_question},
+            )
+
+        # We have a valid generated policy, let's test it!
+        cedar_source = output.cedar_source or ""
+
+        try:
+            candidate_engine = cedarpy.PolicySet.from_str(cedar_source)
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="nl_results.html",
+                context={"error": f"Generated Cedar is invalid: {exc}"},
+            )
+
+        # 1. Evaluate auto-generated tests
+        auto_test_results = []
+        auto_tests_passed = True
+
+        for t in output.tests:
+            req = {
+                "principal": f'User::"{t.principal_id}"',  # Simplification for generated tests
+                "action": f'Action::"{t.action}"',
+                "resource": f'{t.resource_type}::"{t.resource_id}"',
+                "context": {},
+            }
+            try:
+                res = cedarpy.is_authorized(req, candidate_engine, [])
+                allowed = res.decision is cedarpy.Decision.Allow
+                passed = allowed == t.expected
+                if not passed:
+                    auto_tests_passed = False
+                auto_test_results.append({"test": t, "allowed": allowed, "passed": passed})
+            except Exception as exc:
+                auto_tests_passed = False
+                auto_test_results.append({"test": t, "error": str(exc), "passed": False})
+
+        # 2. Evaluate master corpus
+        try:
+            current_engine = cedarpy.PolicySet.from_str(store.current_source)
+        except Exception:
+            current_engine = None
+
+        def eval_candidate(case: PolicyTestCase) -> PolicyVerdict:
+            return evaluate_case(candidate_engine, case)
+
+        def eval_current(case: PolicyTestCase) -> PolicyVerdict | None:
+            if current_engine is None:
+                return None
+            return evaluate_case(current_engine, case)
+
+        candidate_results = run_policy_tests(CORPUS, eval_candidate)
+        summary = summarize(candidate_results)
+
+        diffs = []
+        for res in candidate_results:
+            current_verdict = eval_current(res.case)
+            if current_verdict is None:
+                changed = True
+            else:
+                changed = current_verdict.allowed != res.actual
+
+            diffs.append(
+                {
+                    "case": res.case,
+                    "passed": res.passed,
+                    "candidate_allowed": res.actual,
+                    "current_allowed": current_verdict.allowed if current_verdict else None,
+                    "changed": changed,
+                }
+            )
+
+        corpus_passed = summary.failures == 0
+
+        return templates.TemplateResponse(
+            request=request,
+            name="nl_results.html",
+            context={
+                "error": None,
+                "cedar_source": cedar_source,
+                "auto_test_results": auto_test_results,
+                "auto_tests_passed": auto_tests_passed,
+                "summary": summary,
+                "diffs": diffs,
+                "corpus_passed": corpus_passed,
+                "can_activate": auto_tests_passed and corpus_passed,
             },
         )
 

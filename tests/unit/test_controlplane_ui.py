@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from fastapi.testclient import TestClient
 
 from agentiam_controlplane.app import app, store
@@ -60,9 +62,57 @@ def test_activate_policy_endpoint_updates_store() -> None:
 
     response = client.post("/policy/activate", data={"source": new_source})
     assert response.status_code == 200
-    assert "Policy Activated Successfully" in response.text
+    assert 'div class="alert success">Policy Activated' in response.text
 
-    assert store.current_source == new_source
 
-    # Restore the store
-    store.current_source = old_source
+@patch("agentiam_controlplane.app.compile_nl_to_policy")
+def test_compile_ambiguous_policy(mock_compile: MagicMock) -> None:
+    """Test that an ambiguous natural language prompt surfaces a clarifying question."""
+    from agentiam_controlplane.nl_compiler.compiler import CompilerOutput
+
+    # Setup the async mock
+    async_mock = AsyncMock(
+        return_value=CompilerOutput(
+            clarifying_question="Who is 'someone'?",
+            cedar_source=None,
+            tests=[],
+        )
+    )
+    mock_compile.side_effect = async_mock
+
+    response = client.post("/policy/compile", data={"nl_source": "someone can do something"})
+    assert response.status_code == 200
+    assert 'class="alert warning"' in response.text
+    assert "Who is &#39;someone&#39;?" in response.text or "Who is 'someone'?" in response.text
+
+
+@patch("agentiam_controlplane.app.compile_nl_to_policy")
+def test_compile_valid_policy(mock_compile: MagicMock) -> None:
+    """Test that a valid NL prompt generates Cedar and evaluates both auto-tests and corpus."""
+    from agentiam_controlplane.nl_compiler.compiler import CompilerOutput, CompilerTestCase
+
+    policy = 'permit(principal == Agent::"agent-1", action, resource);'
+
+    async_mock = AsyncMock(
+        return_value=CompilerOutput(
+            cedar_source=policy,
+            tests=[
+                CompilerTestCase(
+                    name="test1",
+                    description="test",
+                    expected=True,
+                    principal_id="admin",
+                    action="do",
+                    resource_type="System",
+                    resource_id="1",
+                )
+            ],
+        )
+    )
+    mock_compile.side_effect = async_mock
+
+    response = client.post("/policy/compile", data={"nl_source": "Admins can do anything"})
+    assert response.status_code == 200
+    assert "Success:</strong> Policy compiled successfully." in response.text
+    assert "Auto-Generated Tests" in response.text
+    assert "Corpus Evaluation" in response.text

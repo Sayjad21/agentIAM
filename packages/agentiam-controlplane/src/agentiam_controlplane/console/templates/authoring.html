@@ -16,16 +16,30 @@
         </header>
 
         <main>
-            <div class="editor-section">
-                <h2>Policy Editor</h2>
-                <form id="policy-form" hx-post="/policy/test" hx-target="#results-container" hx-indicator="#loading">
+            <div class="split-view">
+                <div class="editor-section">
+                    <h2>Natural Language (T-030)</h2>
+                    <form id="nl-form" hx-post="/policy/compile" hx-target="#results-container" hx-indicator="#loading-nl">
+                        <textarea name="nl_source" id="nl-editor" spellcheck="false" placeholder="Describe the policy rule in plain English..."></textarea>
+                        
+                        <div class="actions">
+                            <button type="submit" class="btn primary">Compile & Test</button>
+                            <span id="loading-nl" class="htmx-indicator">Compiling...</span>
+                        </div>
+                    </form>
+                </div>
+                
+                <div class="editor-section">
+                    <h2>Cedar Editor (T-027)</h2>
+                    <form id="policy-form" hx-post="/policy/test" hx-target="#results-container" hx-indicator="#loading">
                     <textarea name="source" id="cedar-editor" spellcheck="false">{{ source }}</textarea>
                     
                     <div class="actions">
                         <button type="submit" class="btn primary">Run Tests & Diff</button>
                         <span id="loading" class="htmx-indicator">Evaluating corpus...</span>
                     </div>
-                </form>
+                    </form>
+                </div>
             </div>
 
             <div class="results-section">
