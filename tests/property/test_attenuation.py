@@ -17,7 +17,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from biscuit_auth import AuthorizerBuilder
+from biscuit_auth import AuthorizationError, Authorizer, AuthorizerBuilder
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -37,7 +37,15 @@ from agentiam_core.models import (
     TimeWindow,
     ToolDeny,
 )
-from agentiam_core.tokens import RootKeySet, generate_keypair, mint_root, verify
+from agentiam_core.tokens import (
+    MAX_DATALOG_FACTS,
+    MAX_DATALOG_ITERATIONS,
+    MAX_DATALOG_TIME,
+    RootKeySet,
+    generate_keypair,
+    mint_root,
+    verify,
+)
 from tests.property.strategies import (
     EPOCH,
     ROLES,
@@ -57,8 +65,28 @@ KEY_SET = RootKeySet([ROOT.public_key])
 SLOW = settings(
     max_examples=60,
     deadline=None,
+    # Deliberately *not* derandomised. A fixed seed would make each run reproducible, but
+    # it buys that by searching the same examples forever — and these tests are the
+    # project's evidence that INV-1 holds, not a regression guard. Gap 13 was fixed at its
+    # cause (ADR-021); freezing the dice would only have hidden it. Same reasoning as
+    # ADR-022.
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
+
+
+#: biscuit's authorizer defaults to a **1 millisecond wall-clock** budget, so under load a
+#: query that normally takes microseconds raises `Reached Datalog execution limits`. These
+#: tests hammer the authorizer while the rest of the suite competes for CPU, which is
+#: exactly the condition that fires it. The production path sets the same limits in
+#: `agentiam_core.tokens`; `docs/STATUS.md` gap 13 records how it was found.
+def _build_authorizer(source: str, biscuit: object) -> Authorizer:
+    builder = AuthorizerBuilder(source)
+    limits = builder.limits()  # type: ignore[attr-defined]
+    limits.max_facts = MAX_DATALOG_FACTS
+    limits.max_iterations = MAX_DATALOG_ITERATIONS
+    limits.max_time = MAX_DATALOG_TIME
+    builder.set_limits(limits)  # type: ignore[attr-defined]
+    return builder.build(biscuit)  # type: ignore[arg-type]
 
 
 def _authorizes(token: str, ctx: RequestContext) -> bool:
@@ -66,8 +94,16 @@ def _authorizes(token: str, ctx: RequestContext) -> bool:
     parsed = verify(token, KEY_SET, now=ctx.now)
     source = request_context_datalog(ctx) + "\nallow if true;"
     try:
-        AuthorizerBuilder(source).build(parsed.biscuit).authorize()
+        _build_authorizer(source, parsed.biscuit).authorize()
         return True
+    except AuthorizationError as exc:
+        if "execution limits" in str(exc):
+            # Never a denial. Swallowing it as one is what made this suite report
+            # `child authorized what the parent did not`: the *parent's* query hit the
+            # time limit under load while the child's did not, so the two disagreed for a
+            # reason with nothing to do with authority. Fail loudly instead.
+            raise
+        return False
     except Exception:
         return False
 
@@ -76,6 +112,8 @@ def _safe_authorizes(token: str, ctx: RequestContext) -> bool:
     """Authority including the window and depth checks `verify()` performs."""
     try:
         return _authorizes(token, ctx)
+    except AuthorizationError:
+        raise
     except Exception:
         return False
 
@@ -94,6 +132,30 @@ def request_contexts(draw: st.DrawFn, mandate: Mandate) -> RequestContext:
         tool=draw(st.one_of(st.none(), st.sampled_from(TOOLS))),
         args={},
     )
+
+
+@st.composite
+def inv1_scenarios(draw: st.DrawFn) -> tuple[Mandate, list[Caveat], list[RequestContext]]:
+    """A mandate, the caveats to add, and the contexts to probe with — as one value.
+
+    Deliberately not `st.data()`. Interactive drawing inside a test body makes the example
+    a *script* rather than a value: the number of draws depends on how far the body gets.
+    The probe loop below exits early on failure, so the failing run and hypothesis's replay
+    consume different sequences, and the report becomes `FlakyStrategyDefinition:
+    Inconsistent data generation` — which points nowhere near the actual fault.
+
+    That is what hid gap 13 for three tickets. Demonstrated by injecting one
+    `AuthorizationError` at a parent check: with `st.data()`, 9 of 10 injections reported
+    inconsistent generation rather than the fault. Drawing up front, the same fault
+    reports the `AuthorizationError` with a traceback to the line (ADR-021).
+
+    Fixed draw counts do not make the test correct — `agentiam_core.tokens`' explicit
+    Datalog limits do that. They make it *diagnosable*, which is why the bug survived.
+    """
+    mandate = draw(mandates())
+    proposed = draw(st.lists(caveats(), min_size=1, max_size=3))
+    probes = [draw(request_contexts(mandate)) for _ in range(6)]
+    return mandate, proposed, probes
 
 
 class TestNarrowsAlgebra:
@@ -183,21 +245,26 @@ def _simple_mandate() -> Mandate:
 class TestInvariants:
     """INV-1, INV-2, INV-6, INV-7, INV-9 against real tokens."""
 
-    @given(mandates(), st.data())
+    @given(inv1_scenarios())
     @SLOW
-    def test_inv1_attenuation_never_widens(self, mandate: Mandate, data: st.DataObject) -> None:
-        """P-01: authority(child) ⊆ authority(parent)."""
+    def test_inv1_attenuation_never_widens(
+        self, scenario: tuple[Mandate, list[Caveat], list[RequestContext]]
+    ) -> None:
+        """P-01: authority(child) ⊆ authority(parent).
+
+        The scenario arrives as one drawn value rather than through `st.data()` — see
+        `inv1_scenarios` for why that matters to this test in particular.
+        """
+        mandate, proposed, probes = scenario
         token = mint_root(mandate, ROOT.private_key)
         parent = verify(token, KEY_SET, now=mandate.not_before)
-        proposed = data.draw(st.lists(caveats(), min_size=1, max_size=3))
         try:
             child = attenuate(parent, proposed, agent_id="agt", role="worker")
         except AttenuationError:
             # A rejected widening is TestWideningIsRefused's business, not this one.
             assume(False)
 
-        for _ in range(6):
-            ctx = data.draw(request_contexts(mandate))
+        for ctx in probes:
             if _safe_authorizes(child, ctx):
                 assert _safe_authorizes(token, ctx), (
                     f"child authorized what the parent did not: {ctx!r}"
@@ -213,6 +280,11 @@ class TestInvariants:
         chain = [token]
         current = verify(token, KEY_SET, now=mandate.not_before)
         steps = data.draw(st.integers(min_value=1, max_value=min(mandate.max_depth, 4)))
+        # Every interactive draw happens here, before any loop that can `break`.
+        # A draw count that depends on how far the body got makes the choice
+        # sequence outcome-dependent, and hypothesis then cannot replay it:
+        # `FlakyStrategyDefinition: Inconsistent data generation`.
+        probes = [data.draw(request_contexts(mandate)) for _ in range(4)]
         for depth in range(1, steps + 1):
             proposed = data.draw(st.lists(caveats(), max_size=2))
             try:
@@ -222,19 +294,16 @@ class TestInvariants:
             chain.append(nxt)
             current = verify(nxt, KEY_SET, now=mandate.not_before)
 
-        for _ in range(4):
-            ctx = data.draw(request_contexts(mandate))
+        for ctx in probes:
             verdicts = [_safe_authorizes(t, ctx) for t in chain]
             # Once a step denies, no later step may allow.
             for i in range(1, len(verdicts)):
                 if verdicts[i]:
                     assert all(verdicts[:i]), f"authority reappeared at step {i}"
 
-    @given(mandates(), st.data())
+    @given(mandates())
     @SLOW
-    def test_inv6_depth_increases_and_is_bounded(
-        self, mandate: Mandate, data: st.DataObject
-    ) -> None:
+    def test_inv6_depth_increases_and_is_bounded(self, mandate: Mandate) -> None:
         """P-06: depth strictly increases; beyond max_depth nothing verifies."""
         token = mint_root(mandate, ROOT.private_key)
         current = verify(token, KEY_SET, now=mandate.not_before)
@@ -255,9 +324,9 @@ class TestInvariants:
             previous = current.depth
         assert previous <= mandate.max_depth
 
-    @given(mandates(), st.data())
+    @given(mandates())
     @SLOW
-    def test_inv7_intent_is_immutable(self, mandate: Mandate, data: st.DataObject) -> None:
+    def test_inv7_intent_is_immutable(self, mandate: Mandate) -> None:
         """P-07: no attenuation can change the bound intent."""
         token = mint_root(mandate, ROOT.private_key)
         parent = verify(token, KEY_SET, now=mandate.not_before)
@@ -321,8 +390,12 @@ class TestInvariants:
             agent_id="agt2",
             role="worker",
         )
-        for _ in range(4):
-            ctx = data.draw(request_contexts(mandate))
+        # Drawn up front, not inside the loop. A `data.draw()` whose count depends
+        # on whether an assertion fires makes the choice sequence outcome-dependent,
+        # so hypothesis cannot replay or shrink it and reports inconsistent data
+        # generation instead of the real fault. See `inv1_scenarios`.
+        probes = [data.draw(request_contexts(mandate)) for _ in range(4)]
+        for ctx in probes:
             assert not _safe_authorizes(child, ctx)
             assert not _safe_authorizes(grandchild, ctx)
 
@@ -393,9 +466,9 @@ class TestWideningIsRefused:
                 role="worker",
             )
 
-    @given(mandates(), st.data())
+    @given(mandates())
     @SLOW
-    def test_raised_depth_limit(self, mandate: Mandate, data: st.DataObject) -> None:
+    def test_raised_depth_limit(self, mandate: Mandate) -> None:
         assume(mandate.max_depth < 8)
         token = mint_root(mandate, ROOT.private_key)
         parent = verify(token, KEY_SET, now=mandate.not_before)

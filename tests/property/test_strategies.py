@@ -31,7 +31,7 @@ from agentiam_core.models import (
     ToolAllow,
     ToolDeny,
 )
-from tests.property.strategies import arg_predicates, caveats, mandates
+from tests.property.strategies import arg_predicates, caveats, caveats_of_kind, mandates
 
 DRAWS = 400
 
@@ -59,9 +59,44 @@ def _sample(strategy: st.SearchStrategy[object], n: int = DRAWS) -> list[object]
     return collected
 
 
+KIND_DRAWS = 300
+
+
+def _sample_kind(kind: type, n: int = KIND_DRAWS) -> list[object]:
+    """Draw one kind directly, rather than filtering it out of the nine-kind union.
+
+    A 400-draw union sample holds only 23-49 caveats of any given kind, so a thin shape can
+    be missed by luck rather than by a real gap in the strategy. Measured: the zero-ceiling
+    audit missed 3 times in 60 union campaigns and 0 times in 60 direct ones (ADR-022). A
+    coverage audit that fails at random gets deleted, and then it audits nothing.
+    """
+    return _sample(caveats_of_kind(kind), n)
+
+
 @pytest.fixture(scope="module")
 def caveat_sample() -> list[object]:
+    """The union. Only `test_every_caveat_kind_is_generated` should want this."""
     return _sample(caveats())
+
+
+@pytest.fixture(scope="module")
+def ceiling_sample() -> list[object]:
+    return _sample_kind(BudgetCeiling)
+
+
+@pytest.fixture(scope="module")
+def scope_subset_sample() -> list[object]:
+    return _sample_kind(ScopeSubset)
+
+
+@pytest.fixture(scope="module")
+def depth_limit_sample() -> list[object]:
+    return _sample_kind(DepthLimit)
+
+
+@pytest.fixture(scope="module")
+def window_sample() -> list[object]:
+    return _sample_kind(TimeWindow)
 
 
 class TestKindCoverage:
@@ -71,8 +106,8 @@ class TestKindCoverage:
         missing = set(CaveatKind) - seen
         assert not missing, f"strategy never generates {sorted(k.value for k in missing)}"
 
-    def test_every_budget_dimension_is_generated(self, caveat_sample: list[object]) -> None:
-        dims = {c.dimension for c in caveat_sample if isinstance(c, BudgetCeiling)}
+    def test_every_budget_dimension_is_generated(self, ceiling_sample: list[object]) -> None:
+        dims = {c.dimension for c in ceiling_sample}  # type: ignore[attr-defined]
         assert len(dims) >= 4, f"only {len(dims)} budget dimensions generated"
 
     def test_every_arg_operator_is_generated(self) -> None:
@@ -90,23 +125,23 @@ class TestKindCoverage:
 class TestShapeCoverage:
     """The specific shapes spec 03 §6 requires."""
 
-    def test_empty_scope_sets_occur(self, caveat_sample: list[object]) -> None:
+    def test_empty_scope_sets_occur(self, scope_subset_sample: list[object]) -> None:
         """EC-T14: a token that grants nothing."""
-        assert any(isinstance(c, ScopeSubset) and not c.scopes for c in caveat_sample)
+        assert any(not c.scopes for c in scope_subset_sample)  # type: ignore[attr-defined]
 
-    def test_zero_ceilings_occur(self, caveat_sample: list[object]) -> None:
-        assert any(isinstance(c, BudgetCeiling) and c.value == 0 for c in caveat_sample)
+    def test_zero_ceilings_occur(self, ceiling_sample: list[object]) -> None:
+        """The thin one: measured at 3 misses in 60 union campaigns, 0 direct (ADR-022)."""
+        assert any(c.value == 0 for c in ceiling_sample)  # type: ignore[attr-defined]
 
-    def test_depth_zero_and_max_both_occur(self, caveat_sample: list[object]) -> None:
-        depths = {c.max_depth for c in caveat_sample if isinstance(c, DepthLimit)}
+    def test_depth_zero_and_max_both_occur(self, depth_limit_sample: list[object]) -> None:
+        depths = {c.max_depth for c in depth_limit_sample}  # type: ignore[attr-defined]
         assert 0 in depths
         assert max(depths) >= 6
 
-    def test_time_windows_of_all_three_shapes_occur(self, caveat_sample: list[object]) -> None:
+    def test_time_windows_of_all_three_shapes_occur(self, window_sample: list[object]) -> None:
         shapes: Counter[tuple[bool, bool]] = Counter()
-        for c in caveat_sample:
-            if isinstance(c, TimeWindow):
-                shapes[(c.not_before is not None, c.not_after is not None)] += 1
+        for c in window_sample:
+            shapes[(c.not_before is not None, c.not_after is not None)] += 1  # type: ignore[attr-defined]
         assert shapes[(True, False)], "no lower-bound-only window"
         assert shapes[(False, True)], "no upper-bound-only window"
         assert shapes[(True, True)], "no two-sided window"

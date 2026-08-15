@@ -7,8 +7,8 @@
 > **mitigated**, **partially mitigated**, or **accepted risk**, and the accepted ones are
 > stated with their bound rather than buried.
 >
-> A table claiming everything is mitigated is not a threat model, it is marketing. Eight of
-> the twenty-three entries here are not fully mitigated, and each says why.
+> A table claiming everything is mitigated is not a threat model, it is marketing. Seven of
+> the twenty-five entries here are not fully mitigated, and each says why.
 
 ---
 
@@ -102,6 +102,7 @@ T-013; TM-24 has one.
 | TM-22 | T | **Clock skew beyond the configured allowance.** If the reaper reclaims while a lagging PEP still spends, the same budget is issued twice. Measured with no skew margin: the lease was reaped and re-issued while still in use | PEPs expire early at `expires_at − S`; the reaper reclaims late at `expires_at + S`; `ttl > 2S`. **Safety depends on actual skew staying within `S`** | **partially mitigated** (§5.6) | `test_ledger.py` (reaper side, T-013); CH-7, EC-T08 (PEP side) |
 | TM-23 | T | **Agent under-reports the actual amount** to hide spend, where the PEP cannot independently determine it | Over-reporting is clamped to the lease's outstanding, so it cannot break the budget invariant. Under-reporting is flagged and audited wherever the PEP can cross-check, but is not prevented | **accepted risk** (§5.7) | A-19 |
 | TM-24 | S | **A free-text identifier that reshapes rendered Datalog.** `quote_string()` escapes correctly, so a crafted `role`, `agent_id` or `principal_id` cannot forge a fact inside a signed token. But `block_source()` renders the string back **unescaped**: measured, a role of `x"); admin(true); //` renders as block text that re-parses into a genuine second fact. Every planned consumer of block source is a display or parsing path — the console's caveat chain (T-045), the audit explorer (T-048), the Datalog-to-caveat parser both need. A bidi override additionally reorders a rendered role without changing a byte | `models.validate_label` refuses quotes, backslashes, C0/C1 controls and bidi controls in the three fields that become Datalog string facts, at the only places they enter a token: `Mandate.principal_id` and `attenuate()`'s `agent_id` and `role`. Non-ASCII is otherwise unrestricted, so a Bengali role renders as itself | mitigated | `tests/security/test_datalog_labels.py` (66 cases) |
+| TM-25 | D | **A library timeout shorter than the operation it guards.** `biscuit-python` 0.4.0's authorizer defaults to `max_time = 1 millisecond`, and it is **wall clock, not work**. A query taking microseconds raises `AuthorizationError: Reached Datalog execution limits` whenever the process loses the CPU for a millisecond, so a *legitimate* request is refused for want of scheduling — under exactly the load NFR-1's 1 ms budget exists to describe. Measured: a depth-8 chain costs 290 us to authorize quiet and 478 us under 24-way contention, under 2x headroom; and 2 of 42,014 authorize calls during a loaded test run hit the limit, both inside `verify()`. Fault injection confirmed the consequence: 10 of 10 injected timeouts on a parent check produced a false INV-1 violation report (ADR-021) | All limits set explicitly on every authorizer: `max_time=250 ms`, `max_facts=10 000`, `max_iterations=1 000`. Still bounded, so TM-14's ceiling survives; token size (8 192 b64) and depth (8) bound the input the engine can be given. The property harness re-raises the error rather than reading it as a denial | mitigated | `test_tokens.py::TestDatalogExecutionLimits` — pins the library defaults, and drives `MAX_DATALOG_TIME` to zero to prove `verify()` actually applies it |
 
 ---
 
@@ -195,7 +196,7 @@ flagged and audited wherever the PEP can cross-check.
 
 ## 6. Coverage gaps
 
-Three threats still have no test. Recorded here rather than left implicit, and each is a
+Two threats still have no test. Recorded here rather than left implicit, and each is a
 concrete addition to T-051's red-team suite.
 
 | Threat | Test to add | Ticket |
@@ -242,11 +243,11 @@ repudiation), so the rows below overlap rather than partition.
 | Tampering | TM-06, TM-08, TM-09, TM-12, TM-15, TM-17, TM-21, TM-22, TM-23 | 7 of 9 |
 | Repudiation | TM-12 | 1 of 1 |
 | Information disclosure | TM-13, TM-16 | 1 of 2 |
-| Denial of service | TM-07, TM-14 | 1 of 2 |
+| Denial of service | TM-07, TM-14, TM-25 | 2 of 3 |
 | Elevation of privilege | TM-02, TM-03, TM-04, TM-05, TM-10, TM-11, TM-19, TM-20 | 6 of 8 |
 
-**24 threats · 17 mitigated · 4 partially mitigated · 3 accepted risks.**
+**25 threats · 18 mitigated · 4 partially mitigated · 3 accepted risks.**
 
 The three accepted risks — bearer replay (TM-01), slow-drift evasion (TM-11), and
 agent-reported amounts (TM-23) — are the ones to raise voluntarily in the pitch. Each is real,
-each has a bound, and stating them is what makes the other twenty believable.
+each has a bound, and stating them is what makes the other twenty-two believable.

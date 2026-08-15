@@ -961,6 +961,12 @@ attempt:
     FlakyStrategyDefinition: Inconsistent data generation! Data generation behaved
     differently between test cases. Is your data generation depending on external state?
 
+> **Superseded — the paragraph below is wrong.** It is left standing because the record of a
+> mistaken diagnosis is worth more than a tidy page. The correct account is *Gap 13* further
+> down; ADR-021 carries the measurements. In short: the ephemeral-key fact is true, the
+> inference from it is false, and the actual cause is a 1 ms wall-clock limit inside
+> `biscuit-python` being read as a denial.
+
 The external state is entropy. `attenuate()` mints with a fresh ephemeral key on every call — a
 fact already written down in this project's own notes — so when hypothesis replays a choice
 sequence to shrink a failure, it does so against a *different child token*. The test cannot
@@ -977,15 +983,139 @@ carries the security claim deserved a loop the first time.
 
 ---
 
+### Gap 13 · Two flakes, and three wrong diagnoses
+
+The one item marked ahead of new features, because it sat under the project's central security
+claim. It took four measurements to get right, and three of those were needed to unsay something
+already written down.
+
+#### First, the question that actually mattered
+
+Not *why is the test flaky?* but **is INV-1 violated?** The suite had printed
+`child authorized what the parent did not`, and no amount of "hypothesis was confused" makes that
+safe to ignore.
+
+Answered twice, independently. A hand-rolled brute force with `random` and a real authorizer:
+zero violations. Then the same property driven through this project's own strategies but
+*collecting* violations into a list instead of asserting — no exception, so no shrinking, no
+replay, nothing for hypothesis to be confused by. Zero again, across roughly 15,000 request
+contexts. **INV-1 stands.** Everything after this is about why a sound property reported
+otherwise.
+
+#### The diagnosis that was already written down, and was wrong
+
+T-019 recorded the cause as entropy: `attenuate()` mints with a fresh ephemeral key per call, so
+a replayed choice sequence meets a different child token. It is a tidy story and the underlying
+fact is true (spec 01 §4).
+
+It is also false. 200 re-mints of identical inputs produced identical token sizes and identical
+authorization results. The mint is deterministic in every way the test can observe. The claim had
+by then reached four places, including a pushed commit message.
+
+#### What the running system said instead
+
+`biscuit-python` 0.4.0's authorizer defaults to `max_time = 1 millisecond`, and it is **wall
+clock, not work**:
+
+```
+AuthorizerBuilder("allow if true;").limits()
+  max_facts = 1000 · max_iterations = 100 · max_time = 0:00:00.001000
+```
+
+The property harness caught every exception from `authorize()` and returned `False` — a design
+that cannot distinguish *this token does not permit that* from *the CPU was busy*.
+
+**And here the second wrong claim went in.** Instrumenting the test to log what it swallowed, the
+first campaign showed 5,618 exceptions and **zero** limit errors, which looked like a clean
+refutation. It was a sample-size artefact: the larger campaign found **2 in 42,014**, both inside
+`verify()`. A 0.005% event is precisely what a small sample reports as absent, and that rate is
+also why three earlier `make check` failures were each honestly recorded as unreproducible — and
+why 30 runs of `test_attenuation.py` on its own still give 0 failures. One file does not generate
+enough CPU contention to lose a millisecond.
+
+#### Proving it, rather than arguing it
+
+Waiting for a 1-in-21,000 event to recur is not a method. Injecting one
+`AuthorizationError("Reached Datalog execution limits")` at a chosen call is, and the calls
+alternate child-check, parent-check:
+
+| Injection lands on | Result |
+|---|---|
+| a child check | passes — a spurious denial of the child asserts nothing |
+| **a parent check** | **10 of 10 produce the false `child authorized what the parent did not`**; 9 of those 10 also report `FlakyStrategyDefinition` |
+
+Timeout on the parent check → `False` → the assertion fires → hypothesis shrinks and replays →
+the timeout does not recur → the loop no longer exits early → the interactive draw count differs
+→ `FlakyStrategyDefinition`. Two symptoms, one cause, demonstrated rather than inferred.
+
+So the printed counterexample was spurious after all — but only after the property itself had
+been checked directly, which is the right order.
+
+#### A product bug wearing a test bug's clothes
+
+`_authorizer()` runs on every `verify()`, which is the PEP's hot path, and both real timeouts
+were inside `verify()`. Measured on a depth-8 chain, an `authorize()` costs 290 µs quiet and
+478 µs under 24-way contention — against a 1 ms cap, under 2× headroom before anything
+adversarial. One millisecond is also the same order as NFR-1's *entire* decision budget. A
+hot-path library whose internal timeout equals the system's latency target will fire under
+exactly the load that target exists to describe.
+
+Limits are now set explicitly everywhere an authorizer is built: 250 ms, 10,000 facts, 1,000
+iterations (ADR-021, TM-25). `test_tokens.py` pins the library defaults so an upgrade that moves
+them fails a test, and proves the constant is load-bearing by driving it to zero.
+
+#### The fix that mattered most was the one that made the bug legible
+
+Raising the limit removes the cause. But the reason this survived three tickets is that the
+failure was *unreadable*: `is your data generation depending on external state?` points nowhere
+near a library timeout. Two harness changes fix that, and they would have been worth making even
+if the limit had been fine:
+
+* Execution-limit errors are **re-raised**, never read as denials.
+* INV-1 draws its mandate, caveats and probes as **one composite value** instead of interactively
+  through `st.data()` inside a loop the assertion can exit early. Fixed draw counts mean a
+  mid-loop failure shrinks properly instead of reporting inconsistent generation.
+
+Injecting the same fault into the fixed harness now reports `biscuit_auth.AuthorizationError:
+Reached Datalog execution limits` with a traceback to the line.
+
+#### The second flake, which had been counted as the first
+
+`tests/property/test_strategies.py::test_zero_ceilings_occur` drew 400 caveats from the nine-kind
+union and asserted one was a `BudgetCeiling` of value 0. A 400-draw union holds 23–49 ceilings,
+so the assertion was a coin flip: **3 misses in 60 campaigns**, and **2 of 30** runs of that file
+at HEAD. Sampling the kind directly: 0 of 60.
+
+That ~5% is the "residual rate" previously attributed to INV-1. Two intermittent failures in one
+directory read as one intermittent failure, and the arithmetic quietly stopped making sense —
+which is a signal worth heeding sooner.
+
+The file's own docstring names the hazard, for a *different* test it had guarded against exactly
+this. `strategies.py` even ships `caveats_of_kind()`, documented as *"drawn directly rather than
+filtered out of the union."* Everything needed to avoid it was already there (ADR-022).
+
+#### What to take from this
+
+Three wrong diagnoses, and every one was defensible on paper. The distinguishing feature of the
+right one is not that it was cleverer; it is that it came from instrumenting the running system
+and then injecting the fault to close the loop.
+
+The project's own rule — *check the claim against the running system before writing it down* —
+was followed for the code and skipped for the diagnosis. A commit message is a claim too.
+
+---
+
+
 ## What the numbers look like
 
 | | |
 |---|---|
 | Tickets complete | 17 of 53 in scope (61 defined, 8 deferred) |
 | Milestones | M1, M2, M3 complete; M4 started (specs 05-09 outstanding) |
-| Tests | 1072, all passing (989 plus 82 integration, plus the NFR-1 benchmark) |
+| Tests | 1075, all passing (992 plus 82 integration, plus the NFR-1 benchmark) |
 | Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
-| ADRs | 20 |
+| ADRs | 22 |
 | Specs written | 5 of 9 |
 | Design errors caught before implementation | 12 |
-| Threats found by measurement | 6 (TM-19 through TM-24) |
+| Wrong diagnoses written down before being measured | 3, all in gap 13 |
+| Threats found by measurement | 7 (TM-19 through TM-25) |

@@ -18,7 +18,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from biscuit_auth import KeyPair
+from biscuit_auth import AuthorizationError, AuthorizerBuilder, KeyPair
 
 from agentiam_core.errors import (
     DepthExceededError,
@@ -32,6 +32,9 @@ from agentiam_core.errors import (
 from agentiam_core.models import Budget, BudgetDimension, Mandate
 from agentiam_core.tokens import (
     HARD_SIZE_LIMIT_B64,
+    MAX_DATALOG_FACTS,
+    MAX_DATALOG_ITERATIONS,
+    MAX_DATALOG_TIME,
     WARN_SIZE_LIMIT_B64,
     RootKeySet,
     generate_keypair,
@@ -389,3 +392,45 @@ class TestMintedStructure:
         token = mint_root(a_mandate(budget=Budget()), root_key.private_key)
         verified = verify(token, key_set, now=MID_WINDOW)
         assert set(verified.scaled_budget) == set(BudgetDimension)
+
+
+class TestDatalogExecutionLimits:
+    """TM-25 / ADR-021 — the library's default timeout is shorter than the work it guards.
+
+    `biscuit-python`'s authorizer defaults to a **wall-clock** budget of one millisecond, so
+    a query that takes microseconds fails whenever the process loses the CPU for long enough.
+    Under a parallel test run that surfaced as a bogus INV-1 violation (`STATUS.md` gap 13).
+    In production the same mechanism denies a legitimate request for want of scheduling — and
+    one millisecond is the whole of NFR-1's decision budget.
+    """
+
+    def test_the_library_default_is_one_millisecond_of_wall_clock(self) -> None:
+        """Pin the measured defaults so a `biscuit-python` upgrade that moves them shows up here."""
+        default = AuthorizerBuilder("allow if true;").limits()  # type: ignore[attr-defined]
+
+        assert default.max_time == timedelta(milliseconds=1)
+        assert default.max_facts == 1000
+        assert default.max_iterations == 100
+
+    def test_this_module_raises_every_default(self) -> None:
+        default = AuthorizerBuilder("allow if true;").limits()  # type: ignore[attr-defined]
+
+        assert MAX_DATALOG_TIME > default.max_time
+        assert MAX_DATALOG_FACTS > default.max_facts
+        assert MAX_DATALOG_ITERATIONS > default.max_iterations
+
+    def test_the_time_limit_is_load_bearing_in_verify(
+        self, root_key: KeyPair, key_set: RootKeySet, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Drive the constant to zero and `verify()` must fail — otherwise it is not applied.
+
+        A constant that no code path reads would satisfy the two assertions above and protect
+        nothing. `timedelta(0)` exceeds deterministically, so this needs no timing luck.
+        """
+        token = mint_root(a_mandate(), root_key.private_key)
+        assert verify(token, key_set, now=MID_WINDOW).max_depth == 8
+
+        monkeypatch.setattr("agentiam_core.tokens.MAX_DATALOG_TIME", timedelta(0))
+
+        with pytest.raises(AuthorizationError, match="execution limits"):
+            verify(token, key_set, now=MID_WINDOW)

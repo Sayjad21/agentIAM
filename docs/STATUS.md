@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-019.
+**Last updated:** after T-019 and the gap-13 fix.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -13,11 +13,11 @@ Keep this current at every milestone boundary — a stale status page is worse t
 |---|---|
 | **Milestone** | M1, M2, M3 complete · **M4 in progress** (T-018, T-019 done) · specs 05–08 outstanding |
 | **Tickets** | 17 done · 36 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 1072 passing (989 in `make test`; 82 in `make test-integration`; 1 in `make bench`) |
+| **Tests** | 1075 passing (992 in `make test`; 82 in `make test-integration`; 1 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — lint/types/tests, **NFR-1 benchmark**, integration against real Postgres, core purity, compose health |
 | **Specs** | 5 of 9 written — `09-decision-record` added by T-019 |
-| **ADRs** | 20 |
+| **ADRs** | 22 |
 
 ---
 
@@ -33,7 +33,7 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-003 | `specs/02-caveat-language.md`, `specs/03-attenuation.md` | `f26e10c` |
 | T-004 | `specs/04-lease-protocol.md` — model-checked | `7a9e9a3` |
 | T-005 | `models.py`, `errors.py`, `hashing.py` | `7122cf0` |
-| T-006 | `threat-model.md` — 23 STRIDE threats (24 after T-011) | `c565367` |
+| T-006 | `threat-model.md` — 23 STRIDE threats (25 after T-011 and gap 13) | `c565367` |
 | T-007 | `tokens.py` — biscuit mint and verify | `a073b3e` |
 | T-008 | `caveats.py` — DSL to Datalog + conformance suite | `1bfa35a` |
 | T-009 | `attenuation.py` — `narrows()` + invariant properties | `ff7bb5e` |
@@ -46,7 +46,7 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-016 | `db/invariants.py` + `scripts/run_invariant_checker.py` — four invariants, one statement, 3–5 ms over 500 budgets | `ecbd448` |
 | T-017 | Sibling budgets: shared pool + proportional split (`allocated`, migration 0004), INV-5 under 3 PEP instances | `0b4d10b` |
 | T-018 | PEP gateway: ASGI app, streaming reverse proxy, header hygiene, timeout budget, `/healthz` `/readyz` `/metrics` | `e6d57ec` |
-| T-019 | `specs/09-decision-record.md` + `decision.py` — 10 steps, precedence contract, 54 scenarios, **NFR-1 measured at ~5 µs** | — |
+| T-019 | `specs/09-decision-record.md` + `decision.py` — 10 steps, precedence contract, 54 scenarios, **NFR-1 measured at ~5 µs** | `7cf6448` |
 
 ### Next
 
@@ -99,10 +99,29 @@ Real debt, not speculation. Each has a home.
 | 7 | **`budgets.mandate_id` carries no foreign key.** No `mandates` SQL table exists yet — T-005 built `Mandate` as a pure Pydantic model, no persistence (ADR-014) | A budget row can reference a mandate id that was never issued; nothing in the schema catches it | Whichever ticket first persists mandates (issuance service, `PLAN.md` §8 — not yet its own ticket) |
 | 8 | **`ACQUIRE` does not clamp by `max_fraction`.** Spec 04 §4.1's clamp is mathematically incompatible with T-013's own acceptance test, applied to a fixed caller-`requested` amount (ADR-015, measured) | No single-PEP-crash blast-radius bound beyond `ttl` — a PEP can be granted more than a quarter of the pool in one `ACQUIRE` | T-015 (adaptive lease sizing, deferred) — that's where the formula actually applies |
 | ~~9~~ | ~~**CI ran none of the 45 integration tests.**~~ Closed while integrating M3: `make test` and the CI workflow both excluded the `integration` marker, so every ledger race test ran only by hand | Three tickets of ledger correctness — `FOR UPDATE` serialization, the 50-concurrent-acquire bound, the ADR-017 dedup race — were gated by nothing and would have rotted silently | Closed: `integration` CI job + `make test-integration` |
-| **13** | **`test_inv1_attenuation_never_widens` is intermittently flaky** — roughly 1 run in 10 of the full suite. Hypothesis reports `FlakyStrategyDefinition: Inconsistent data generation`, and the cause is that `attenuate()` draws fresh OS entropy per call, so a replay of the same choice sequence mints a *different* child token. Diagnosed during T-019; present since T-009 | **The most serious open item.** INV-1 is the central security property and its property test is the project's headline answer to *how do you prove this?*. A test that cannot shrink reliably cannot be trusted — and the falsifying example it printed (*"child authorized what the parent did not"*) has **not** been confirmed as spurious | Next ticket. Fix by seeding the mint deterministically for the property tests, or by drawing the child once outside the replayed sequence |
+| ~~13~~ | ~~**`test_inv1_attenuation_never_widens` is intermittently flaky**~~ — closed. **Two** unrelated flakes, and the recorded cause was wrong twice. INV-1 is *not* violated: zero violations across ~15,000 contexts in two brute-force campaigns. The real cause is `biscuit-python`'s authorizer defaulting to `max_time = 1 ms` of **wall clock** — measured at 2 of 42,014 authorize calls under suite load, both inside `verify()`. The harness read that as a denial, so the parent "denied" what the child allowed. Fault injection proved it: 10 of 10 timeouts injected on a parent check reproduce the false `child authorized what the parent did not`, 9 of them with `FlakyStrategyDefinition` on top. The second flake was `test_strategies.py::test_zero_ceilings_occur`, a shape audit sampling the nine-kind union — 3 misses in 60 campaigns | The printed counterexample was **spurious**, and INV-1 stands. But this was a *product* bug on the PEP hot path, not only a test bug: a loaded PEP would have denied legitimate requests for want of scheduling, and 1 ms is the whole of NFR-1's decision budget | Closed: ADR-021 (explicit Datalog limits, harness re-raises, INV-1 draws its scenario as one composite value), ADR-022 (`caveats_of_kind`), TM-25 |
 | 11 | **The PEP enforces nothing.** T-018 built the gateway; it forwards every request, token or not. `/readyz` reports `enforcing: false` and `TestEnforcementIsNotWiredYet` pins it | A component named *policy enforcement point* that looks like protection and is not. Deliberate and visible, but it is the single most misleading state in the repo until T-019 lands | T-019 (decision pipeline), T-020 (extractor) |
 | 12 | **No HTTP trailer support, and none available.** Measured across httpx, Starlette and uvicorn: no layer exposes trailers (ADR-020) | One T-018 acceptance criterion consciously unmet. Costs nothing for the demo; trailers are rare on HTTP/1.1 | Only reopens if T-041 (MCP, deferred) needs them — and the fix would be in the ASGI server, not here |
 | 10 | **`tests/integration/test_budget_schema.py` duplicates `conftest.py`'s fixtures.** T-012 predates the shared conftest; noted in its header and left alone | Two copies of the container and migration fixtures drift apart | Same cleanup as §4.3 |
+
+---
+
+### Correction to the T-019 record
+
+Gap 13's original entry, `JOURNAL.md`'s T-019 section and the T-019 commit message all state
+that the flake came from `attenuate()` drawing fresh entropy per call, breaking hypothesis
+replay. **That is false.** The ephemeral-key fact is true (spec 01 §4), but the inference was
+not: 200 re-mints of identical inputs produced identical token sizes and identical authorization
+results, so the mint is deterministic in every way the test observes.
+
+A second attribution — that the 1 ms timeout was firing constantly — was also wrong in degree,
+and was caught the same way. The first instrumented campaign logged 5,618 swallowed exceptions
+with **zero** limit errors; only the larger campaign (42,014) found the two that matter. A rate
+of 0.005% is exactly the sort of thing a small sample says is absent.
+
+The lesson is not that the guesses were bad. It is that each was written down before it was
+measured, and two of the three documents carrying the first claim were user-facing. Measuring
+first would have cost one afternoon and saved the correction.
 
 ---
 

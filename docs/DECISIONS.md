@@ -803,3 +803,172 @@ it.
 **Cost:** one acceptance criterion consciously unmet, in a submission judged partly on honesty
 about limitations. Stating it in `STATUS.md` §3 alongside the other known gaps is cheaper than a
 reviewer finding the silence.
+
+---
+
+## ADR-021 — Datalog execution limits are set explicitly, because the default is 1 ms of wall clock
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `agentiam_core.tokens`, `tests/property/test_attenuation.py`, TM-25, NFR-1, gap 13
+
+**Context:** `STATUS.md` gap 13 recorded `test_inv1_attenuation_never_widens` as intermittently
+flaky — roughly one full-suite run in ten — reporting `FlakyStrategyDefinition` and, once,
+`child authorized what the parent did not`. INV-1 is the central security property, so the
+question *is INV-1 actually violated?* had to be answered before the flake could be dismissed.
+
+**It is not violated.** Two independent brute-force campaigns found zero violations across
+roughly 15,000 request contexts: one with hand-rolled generators and `random`, one driving this
+project's own hypothesis strategies while *collecting* violations rather than asserting, so no
+shrinking or replay could distort the result.
+
+The cause is a library default, and it is a product bug rather than a test bug. **Measured**
+against `biscuit-python` 0.4.0:
+
+```
+AuthorizerBuilder("allow if true;").limits()
+  max_facts      = 1000
+  max_iterations = 100
+  max_time       = 0:00:00.001000     ← one millisecond
+```
+
+`max_time` is **wall clock, not work.** A query that normally takes microseconds raises
+`AuthorizationError: Reached Datalog execution limits` whenever the process loses the CPU for
+long enough — which is what a full test suite arranges. `_safe_authorizes` caught that and read
+it as *denied*, so parent and child disagreed for a reason having nothing to do with authority.
+
+**How rare, and how it was caught.** Instrumenting the HEAD test to log every exception it
+swallowed as a denial: **2 of 42,014** (~0.005%) were execution-limit errors, both raised inside
+`verify()`. That rate is why three earlier `make check` failures were each dismissed as
+unreproducible, and why 30 runs of `test_attenuation.py` *alone* produce 0 failures — the file on
+its own does not generate enough CPU contention.
+
+**The causal chain, proven by fault injection rather than inferred.** Injecting one
+`AuthorizationError("Reached Datalog execution limits")` at a chosen authorize call, sweeping the
+injection point across twenty calls:
+
+| Injection lands on | Result |
+|---|---|
+| a child check (even indices) | passes — a spurious denial of the child asserts nothing |
+| **a parent check (odd indices)** | **10 of 10 produce the false `child authorized what the parent did not`**; 9 of those 10 additionally report `FlakyStrategyDefinition` |
+
+So: timeout on the parent check → `False` → the assertion fires → hypothesis shrinks and replays
+→ the timeout does not recur → the loop no longer exits early → the interactive draw count
+differs → `FlakyStrategyDefinition`. Both observed symptoms, from one cause.
+
+Note what that means for the printed counterexample: it was spurious. `child authorized what the
+parent did not` named a real disagreement between two authorizations, but the disagreement was
+scheduling, not authority.
+
+**Decision:** every authorizer this project builds sets its limits explicitly.
+
+| Limit | Default | Ours | Why |
+|---|---|---|---|
+| `max_time` | 1 ms | **250 ms** | Generous against work measured in microseconds; still bounded, so TM-14 keeps a ceiling |
+| `max_facts` | 1,000 | **10,000** | A depth-8 chain with several caveats per block sits well inside; the default leaves little headroom for chains spec 01 §9 permits |
+| `max_iterations` | 100 | **1,000** | Raised proportionally, same reasoning |
+
+`AuthorizerLimits` has no constructor in `biscuit-python`; the builder's own object is fetched,
+mutated and set back. That is the supported route, not a workaround. Neither `limits()` nor
+`set_limits()` appears in the type stubs, so both carry an ignore — and `test_tokens.py` pins the
+defaults and proves the constant is load-bearing by driving `max_time` to zero, so a stub or API
+change fails a test rather than silently leaving the limits unset.
+
+Two changes to the property harness go with it, and the second matters more than the first:
+
+* It applies the same limits, and **re-raises** an execution-limit error instead of swallowing it.
+  A timeout can never again be read as a denial.
+* INV-1's mandate, caveats and probes are drawn as **one composite value** rather than
+  interactively through `st.data()` inside a loop that the assertion can exit early. This is what
+  makes the failure *legible*: injecting the same fault into the fixed harness now reports
+  `biscuit_auth.AuthorizationError: Reached Datalog execution limits` with a traceback to the
+  line, instead of `FlakyStrategyDefinition: is your data generation depending on external
+  state?`. The root cause is the limit; this is why the bug survived three tickets undiagnosed.
+
+**Consequences:** the ceiling is 250× looser, so a pathological token can occupy a worker for a
+quarter second instead of a millisecond. That is the trade and it is the right way round — a
+bounded resource cost against denying legitimate requests for want of scheduling. Token size is
+already capped at 8,192 base64 characters and depth at 8, which bounds what the engine can be
+handed.
+
+**Why this is a product bug and not only a test bug.** `_authorizer()` runs on every `verify()`,
+which is the PEP's hot path, and both observed timeouts were inside `verify()`. One millisecond
+is also the same order as NFR-1's *entire* decision budget (`PLAN.md` §17): a hot-path library
+whose internal timeout equals the system's latency target will fire under exactly the load that
+target exists to describe. Measured on a depth-8 chain, a full `authorize()` costs 290 µs quiet
+and 478 µs under 24-way CPU contention — against a 1 ms cap, that is under 2× headroom before
+any adversarial input.
+
+**Residual, recorded rather than fixed here:** an exceeded limit still surfaces as a raw
+`biscuit_auth.AuthorizationError` out of `verify()`, not as a typed error with a reason code.
+Nothing depends on it today — the PEP does not yet call `verify()` (gap 11) — but T-020 wires
+that path and must map it, or the project's *every deny names a reason* rule has a hole in it.
+Tracked as TM-25.
+
+**Cost:** this supersedes a written claim. T-019's commit message and journal entry attributed
+the flake to `attenuate()` drawing fresh entropy per call and so breaking hypothesis replay. The
+ephemeral-key fact is true (spec 01 §4) but the inference was **false**, and measuring it said so:
+200 re-mints of identical inputs produced identical token sizes and identical authorization
+results. The mint is deterministic in every way the test observes. Superseded in `JOURNAL.md`
+T-019 and `STATUS.md` §3; the commit message stands as written, because history is not rewritten
+to look better than it was.
+
+---
+
+## ADR-022 — Shape-coverage audits draw from the kind they audit, not from the union
+
+**Date:** 2026-08-15
+**Status:** accepted
+**Affects:** `tests/property/test_strategies.py`, gap 13
+
+**Context:** `test_strategies.py` audits the generators rather than the code — the roadmap's note
+on T-009 is *check the property-test strategies, not just that the tests pass; a weak strategy
+passes vacuously.* Each test asserts that some shape spec 03 §6 requires is actually reachable.
+
+Chasing gap 13 turned up a **second, unrelated** intermittent failure in the same directory, and
+it was the one that reproduced most readily. `test_zero_ceilings_occur` drew 400 caveats from the
+nine-kind union and asserted at least one was a `BudgetCeiling` with value 0. About a ninth of
+the union's draws are ceilings and `money()` is `decimals(0, 1000, places=4)`, so whether a zero
+appeared was luck the test had no control over.
+
+**Measured**, 60 campaigns of exactly the sampling the test performs:
+
+| Shape | Missed, union of 400 | Missed, kind sampled directly (300) |
+|---|---|---|
+| **zero ceiling** | **3 / 60** | 0 / 60 |
+| empty scope set | 0 / 60 | 0 / 60 |
+| depth limit 0 | 0 / 60 | 0 / 60 |
+| depth limit ≥ 6 | 0 / 60 | 0 / 60 |
+| two-sided time window | 0 / 60 | 0 / 60 |
+
+A 400-draw union sample holds 23–49 ceilings (mean 36); one shape in five is thin enough for that
+to matter. Confirmed end to end: at HEAD, `tests/property/test_strategies.py` failed **2 of 30**
+runs, both on `test_zero_ceilings_occur` and nothing else.
+
+That ~5% is also, in hindsight, the "residual" rate previously attributed to INV-1 while chasing
+gap 13. Two intermittent failures in one directory read as one intermittent failure.
+
+The file's own docstring already names this hazard — `test_every_arg_operator_is_generated` says
+*"sampling the union instead would leave only about a ninth of the draws here, and an operator
+could be missed by chance rather than by a real gap — which would make this audit flaky, and a
+flaky audit gets deleted."* That test was guarded. The shape tests were not.
+
+**Decision:** every coverage assertion about a *specific kind* samples that kind directly, via
+`strategies.caveats_of_kind()` — which already existed for exactly this, documented as *"drawn
+directly rather than filtered out of the union."* The union is still sampled, but only by
+`test_every_caveat_kind_is_generated`, whose subject genuinely is the union.
+
+Rejected alternatives:
+
+* **`derandomize=True`.** Freezes the dice, so the test becomes deterministic — but deterministic
+  on one lucky seed. A strategy producing the shape 1% of the time would then pass forever, which
+  is the opposite of what an audit is for.
+* **Raise the draw count.** Pushes the rate down without bounding it, and buys a probability
+  rather than a guarantee at a cost paid on every run.
+
+**Consequences:** the audit now fails when the strategy actually narrows, and not otherwise. The
+file runs in 3.8 s.
+
+**Cost:** a coverage audit is still a sampling argument, not a proof; `caveats_of_kind` makes the
+sample dense, not exhaustive. Worth stating, because the value of these tests is precisely that
+they are believed.

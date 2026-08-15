@@ -19,7 +19,7 @@ never called implicitly by mint or verify.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final
 from uuid import UUID
 
@@ -200,13 +200,53 @@ def _parse(token: str, key_set: RootKeySet) -> Biscuit:
     )
 
 
+#: Explicit Datalog evaluation limits, because biscuit's defaults are not survivable on a
+#: loaded host.
+#:
+#: Measured: `AuthorizerBuilder(...).limits()` defaults to `max_facts=1000`,
+#: `max_iterations=100`, and **`max_time=1 millisecond`**. That last one is wall clock, not
+#: work — so a query that normally completes in microseconds raises
+#: `AuthorizationError: Reached Datalog execution limits` whenever the process loses the
+#: CPU for long enough. It surfaced as an intermittent property-test failure that only ever
+#: appeared with other tests running alongside (`docs/STATUS.md` gap 13); the same
+#: mechanism in production is a *legitimate request denied because of scheduling*.
+#:
+#: One millisecond is also, uncomfortably, the same order as NFR-1's entire decision
+#: budget. A hot-path library whose internal timeout equals the system's latency target
+#: will fire under exactly the load that target exists to describe.
+#:
+#: 250 ms is generous for work measured in microseconds and still bounded, so TM-14
+#: (control-plane denial of service via expensive tokens) keeps a ceiling. The fact and
+#: iteration caps are raised proportionally: a depth-8 chain with several caveats per block
+#: sits well inside them, while the defaults leave little headroom for the chains spec 01
+#: §9 permits.
+MAX_DATALOG_FACTS: Final = 10_000
+MAX_DATALOG_ITERATIONS: Final = 1_000
+MAX_DATALOG_TIME: Final = timedelta(milliseconds=250)
+
+
 def _authorizer(biscuit: Biscuit) -> Authorizer:
     """Build an authorizer used only to read facts back out of the authority block.
 
     `authorize()` is deliberately never called: this is fact extraction, not a decision.
     Authority-block facts are readable without it.
+
+    The limits are set explicitly on every authorizer this module builds. `AuthorizerLimits`
+    has no constructor in `biscuit-python`, so the builder's own object is fetched and
+    mutated — which is the only supported route, not a shortcut.
+
+    `limits()` and `set_limits()` are absent from the type stubs but present at runtime
+    (measured against 0.4.0), hence the ignores. `test_tokens.py` asserts both the defaults
+    and that ours are applied, so a stub or API change fails a test rather than passing
+    silently with the limits unset.
     """
-    return AuthorizerBuilder("allow if true;").build(biscuit)
+    builder = AuthorizerBuilder("allow if true;")
+    limits = builder.limits()  # type: ignore[attr-defined]
+    limits.max_facts = MAX_DATALOG_FACTS
+    limits.max_iterations = MAX_DATALOG_ITERATIONS
+    limits.max_time = MAX_DATALOG_TIME
+    builder.set_limits(limits)  # type: ignore[attr-defined]
+    return builder.build(biscuit)
 
 
 def _query_one(authorizer: Authorizer, predicate: str) -> object | None:
