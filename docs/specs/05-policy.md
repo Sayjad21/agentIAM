@@ -209,6 +209,22 @@ lock — a Python attribute rebind is atomic under the GIL, and a request that b
 A bundle that fails to parse or verify never becomes the current one, so a request can never
 observe a half-loaded bundle.
 
+### 5.5 The activation gate (T-026)
+
+`PolicyCache.load` is the fast path for hot reload — the cache reads a signed bundle from
+distribution and applies it. It runs three safety checks (signature, monotonic serial, parse)
+before swapping the reference.
+
+`activate_bundle` is the operator-initiated slow path: it runs the same three verification
+gates, but adds a fourth: **a policy test corpus**. A candidate bundle must pass a corpus of
+≥50 request/expectation pairs derived from the demo workflows. If any test fails, the bundle
+is refused with an `ActivationFailed` error (mapped to HTTP 409), and the existing bundle
+keeps serving. This provides a hard correctness floor: an operator cannot deploy a policy
+that accidentally blocks standard workflow components.
+
+An empty corpus passes vacuously — an operator deploying the initial system without tests
+sees a warning, but is not blocked.
+
 
 ---
 
@@ -272,6 +288,6 @@ Full OPA is deferred (`PLAN.md` §21).
 
 | # | Question | Owner |
 |---|---|---|
-| 1 | Whether the bundle should be validated against `entity_schema` at load, or only at activation | T-026 |
+| ~~1~~ | ~~Whether the bundle should be validated against `entity_schema` at load, or only at activation~~ — **resolved in T-026: at activation.** `load()` is the hot path for the PEP cache, where tests have already run; `activate_bundle` is the operator-initiated gate. Forcing tests on the hot path creates a failure mode that breaks the PEP pulling updates, rather than breaking the operator pushing them. | done |
 | ~~2~~ | ~~Whether `stale` should deny immediately or serve a grace window with a flag~~ — **resolved in T-025: deny immediately.** A grace window is a second staleness limit with a friendlier name, and it makes the failure mode *policy silently out of date* rather than *policy refused*. The operator's fix is the same either way — refresh the bundle — and `max_staleness` is already the knob for how much staleness is tolerable. Setting it to 600 s is the grace window, stated once | done |
 | 3 | Whether policy evaluation should be cached by `(scope, tool, principal, rounded amount)` — worth it only if T-053 shows step 5 dominating | T-053 |

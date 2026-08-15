@@ -11,8 +11,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025 done) · specs 06–07 outstanding |
-| **Tickets** | 23 done · 30 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026 done) · specs 06–07 outstanding |
+| **Tickets** | 24 done · 29 remaining · 8 deferred · **61 defined, 53 in scope** |
 | **Tests** | 1552 passing (1434 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 3 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |

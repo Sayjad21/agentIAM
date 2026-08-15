@@ -20,6 +20,7 @@ import pytest
 
 from agentiam_core.decision import OracleUnavailable
 from agentiam_core.models import BudgetDimension, RequestContext
+from agentiam_core.policy_testing import PolicyTestCase
 from agentiam_pep.policy import (
     AgentPrincipal,
     CedarEngine,
@@ -373,4 +374,69 @@ class TestPolicyCost:
         assert p99 < 0.0005, (
             f"p99 was {p99 * 1e6:.0f} us; step 5 must stay a minority of NFR-1's 1 ms, and "
             f"the pre-parsed arrangement measured ~80 us"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T-026: The 50-case corpus, run against the real engine
+# ---------------------------------------------------------------------------
+
+
+class TestT026Corpus:
+    """The ≥50 case corpus from T-026, validated against the real Cedar engine.
+
+    This is the second half of T-026's acceptance criterion: the corpus must be
+    *correct* — every case must produce the expected verdict against the demo's
+    organization policy.
+    """
+
+    def test_the_corpus_has_at_least_fifty_cases(self) -> None:
+        """`PLAN.md` T-026 requires ≥50 cases derived from demo workflows."""
+        from agentiam_pep.corpus import CORPUS
+
+        assert len(CORPUS) >= 50, f"T-026 requires ≥50; have {len(CORPUS)}"
+
+    def test_the_corpus_exercises_both_outcomes(self) -> None:
+        """All-allow or all-deny would pass against a broken engine."""
+        from agentiam_pep.corpus import CORPUS
+
+        outcomes = {case.expected for case in CORPUS}
+        assert outcomes == {True, False}
+
+    def test_every_case_has_a_name_and_description(self) -> None:
+        """A corpus whose rows nobody can explain is a corpus nobody will maintain."""
+        from agentiam_pep.corpus import CORPUS
+
+        for case in CORPUS:
+            assert case.name, f"case at index {CORPUS.index(case)} has no name"
+            assert case.description, f"{case.name} has no description"
+
+    def test_every_case_has_tags(self) -> None:
+        """Tags trace each case to a demo beat or safety category."""
+        from agentiam_pep.corpus import CORPUS
+
+        for case in CORPUS:
+            assert case.tags, f"{case.name} has no tags"
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            pytest.param(c, id=c.name)
+            for c in __import__("agentiam_pep.corpus", fromlist=["CORPUS"]).CORPUS
+        ],
+    )
+    def test_case_against_real_engine(self, case: PolicyTestCase) -> None:
+        """Every corpus case must produce the expected verdict against the real engine."""
+        engine = an_engine().bound(a_principal(case.role))
+        verdict = engine.evaluate(
+            ctx(
+                case.operation,
+                tool=case.tool,
+                amount=str(case.amount),
+                depth=case.depth,
+            )
+        )
+        assert verdict.allowed is case.expected, (
+            f"{case.name}: expected {'allow' if case.expected else 'deny'}, "
+            f"got {'allow' if verdict.allowed else 'deny'} — {case.description}"
         )
