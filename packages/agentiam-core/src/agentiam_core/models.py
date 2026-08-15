@@ -517,8 +517,6 @@ def caveat_kind_of(caveat: object) -> CaveatKind:
 # ---------------------------------------------------------------------------
 
 
-
-
 class DriftMode(StrEnum):
     """How drift scoring affects the decision (T-036)."""
 

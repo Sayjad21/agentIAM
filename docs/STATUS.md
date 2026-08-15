@@ -11,8 +11,8 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 started (T-028, T-029, T-030 done) · specs 06–07 outstanding |
-| **Tickets** | 29 done · 24 remaining · 8 deferred · **61 defined, 53 in scope** |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-036 done) · specs 06–07 outstanding |
+| **Tickets** | 31 done · 21 remaining · 9 deferred · **61 defined, 52 in scope** |
 | **Tests** | 1676 passing (1558 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 3 in `make bench`) |
 | **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
@@ -77,7 +77,7 @@ Keep this current at every milestone boundary — a stale status page is worse t
 record). They gate the tickets that implement them, so spec `06-revocation` and
 `09-decision-record` are wanted before M4 rather than before M3.
 
-### Deferred — 8 tickets
+### Deferred — 9 tickets
 
 Each is a genuine roadmap item with a resumption trigger, recorded in `PLAN.md` §21. Stating
 them explicitly is part of the submission's honesty story, not an omission to hide.
@@ -85,6 +85,7 @@ them explicitly is part of the submission's honesty story, not an omission to hi
 | Ticket | Why | Resumption trigger |
 |---|---|---|
 | T-010 | Token reference for oversized chains. **Measured unreachable**: at `max_depth = 8` a token is 4,940 base64 chars — 60% of the 8 KB limit (ADR-006) | `max_depth` above ~16 |
+| T-031 | Template fallback for NL compiler (Failure Drill F-2). Rule-based drift handles core demo features. | Mandatory requirement for offline F-2 drill |
 | T-015 | Adaptive lease sizing. Fixed leases behave identically for the demo; the algorithm is specified in spec 04 §12 | Production traffic with variable rate |
 | T-034 | Drift dataset — 2,000+ labelled pairs, weeks of irreducible human labelling | Research phase |
 | T-035 | Calibrated ML drift classifier. Rule-based v0 gives the same demo experience | After T-034 |
