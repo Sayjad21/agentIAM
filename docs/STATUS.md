@@ -13,9 +13,9 @@ Keep this current at every milestone boundary — a stale status page is worse t
 |---|---|
 | **Milestone** | M1, M2 complete · **M3 in progress** (T-012…T-014 done), specs 05–09 outstanding |
 | **Tickets** | 13 done · 40 remaining · 8 deferred · **61 defined, 53 in scope** |
-| **Tests** | 833 collected (788 in `make test`; 45 `integration`, need Docker) |
+| **Tests** | 833 passing (788 in `make test`; 45 in `make test-integration`, need Docker) |
 | **Coverage** (`agentiam-core`, `agentiam-sdk`, `agentiam-pep`) | 100% statements · 99%+ branches |
-| **CI** | green — lint/types/tests, core purity, compose health |
+| **CI** | green — lint/types/tests, **integration against real Postgres**, core purity, compose health |
 | **Specs** | 4 of 9 written |
 | **ADRs** | 17 |
 
@@ -41,7 +41,7 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-011 | SDK: identity propagation, `attenuate()`, `@requires_scope`, **TM-24** | `66f12cb` |
 | T-012 | `budgets` table + Alembic migration, DB `CHECK` for the pool invariant, testcontainers | `0905e7a` |
 | T-013 | `leases` table + `ACQUIRE`/`RELEASE`/`REAP`, `FOR UPDATE` and clock-skew guards proven load-bearing, partial P-10/P-20 | `0c145ec` |
-| T-014 | `RESERVE`/`COMMIT` (`agentiam_pep.lease`, pure) + `LEDGER_COMMIT` (`reservations`, `reconciliation_anomalies`), G2/G3/G4 guards proven load-bearing, TM-21 closed, P-10/P-12 extended | — |
+| T-014 | `RESERVE`/`COMMIT` (`agentiam_pep.lease`, pure) + `LEDGER_COMMIT` (`reservations`, `reconciliation_anomalies`), G2/G3/G4 guards proven load-bearing, TM-21 closed, P-10/P-12 extended | `ca5b83a` |
 
 ### Next
 
@@ -93,6 +93,8 @@ Real debt, not speculation. Each has a home.
 | 6 | **A1 re-verification is manual.** The security rests on biscuit scoping block facts; nothing fails if a library upgrade changes it | Silent collapse of INV-1 on a dependency bump | Should become a test — see §4 |
 | 7 | **`budgets.mandate_id` carries no foreign key.** No `mandates` SQL table exists yet — T-005 built `Mandate` as a pure Pydantic model, no persistence (ADR-014) | A budget row can reference a mandate id that was never issued; nothing in the schema catches it | Whichever ticket first persists mandates (issuance service, `PLAN.md` §8 — not yet its own ticket) |
 | 8 | **`ACQUIRE` does not clamp by `max_fraction`.** Spec 04 §4.1's clamp is mathematically incompatible with T-013's own acceptance test, applied to a fixed caller-`requested` amount (ADR-015, measured) | No single-PEP-crash blast-radius bound beyond `ttl` — a PEP can be granted more than a quarter of the pool in one `ACQUIRE` | T-015 (adaptive lease sizing, deferred) — that's where the formula actually applies |
+| ~~9~~ | ~~**CI ran none of the 45 integration tests.**~~ Closed while integrating M3: `make test` and the CI workflow both excluded the `integration` marker, so every ledger race test ran only by hand | Three tickets of ledger correctness — `FOR UPDATE` serialization, the 50-concurrent-acquire bound, the ADR-017 dedup race — were gated by nothing and would have rotted silently | Closed: `integration` CI job + `make test-integration` |
+| 10 | **`tests/integration/test_budget_schema.py` duplicates `conftest.py`'s fixtures.** T-012 predates the shared conftest; noted in its header and left alone | Two copies of the container and migration fixtures drift apart | Same cleanup as §4.3 |
 
 ---
 
@@ -125,6 +127,10 @@ frozen clock, and the four SDK and security test modules use it. The four *older
 carry their own near-duplicate copies. Migrating them, and adding the deterministic keypair and
 golden depth-4 chain `PLAN.md` §10.4 calls for, would make the M3–M4 integration tests cheaper
 to write and comparable to each other.
+
+The same duplication now exists on the integration side: `tests/integration/conftest.py` (T-013)
+and `tests/integration/test_budget_schema.py` (T-012) hold two copies of the container and
+migration fixtures, which the latter's header states plainly. One cleanup covers both.
 
 ### 4.4 Make the milestone review a script — **medium value, ~1 hour**
 

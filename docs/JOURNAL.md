@@ -11,11 +11,15 @@ findings that did *not* need an ADR, and the mistakes worth remembering.
 
 Before writing any spec, I checked its claims against a running system.
 
-That sounds like overhead for a documentation ticket. It was the opposite. Across T-002,
-T-003, T-004, T-009 and T-011 it found **seven design errors**, every one of which would
-otherwise have surfaced later as a failing property test — or worse, as a *passing* one written
-from the same wrong premise. It also turned up a security finding no amount of brainstorming was
-going to produce (TM-24).
+That sounds like overhead for a documentation ticket. It was the opposite. From T-002 through
+T-014 it found **nine design errors**, every one of which would otherwise have surfaced later as
+a failing property test — or worse, as a *passing* one written from the same wrong premise. It
+also turned up a security finding no amount of brainstorming was going to produce (TM-24).
+
+Twice the thing measured was a *specification of ours* rather than a library: spec 04's `ACQUIRE`
+formula cannot pass its own ticket's acceptance test, and spec 04's `LEDGER_COMMIT` statement
+order is a TOCTOU race. Writing a spec first is what makes the project defensible; it does not
+make the spec right.
 
 The pattern each time was identical: the design was defensible on paper, and wrong against the
 library. Reading harder would not have caught any of them.
@@ -30,6 +34,8 @@ library. Reading harder would not have caught any of them.
 | Spec 03 | `TimeWindow` narrowing is interval containment | Refuses the most common attenuation there is |
 | SDK | `copy_context()` carries identity into a thread pool | Two threads entering one `Context` raise `RuntimeError` |
 | SDK | Escaping a `role` correctly is enough | `block_source()` renders it back **unescaped** (TM-24) |
+| Spec 04 | `ACQUIRE` clamps the grant by `max_fraction` | All 50 concurrent callers get a grant; `available` never reaches 0 |
+| Spec 04 | Dedup check, then lock the lease | TOCTOU: concurrent duplicates both pass the check, crash on the PK |
 
 ---
 
@@ -542,17 +548,140 @@ three tickets running.
 
 ---
 
+## M3 — Ledger and leases
+
+Where the budget stops being a number in a token and becomes a row that two processes can fight
+over. Everything before this was provable by reading; nothing here is.
+
+### T-012 · Budget schema and migrations
+
+`budgets`, one Alembic migration, and the pool invariant `committed + leased <= total` as a
+database `CHECK` rather than application logic. Putting it in the schema means the invariant
+holds against a buggy migration, a manual `psql` session, and any future service that writes the
+table without going through the ledger code.
+
+Two scoping questions had to be answered before the migration could be written, and neither was
+answerable from `PLAN.md` §7's data-model block alone (ADR-014).
+
+**Only `budgets` ships.** §7 lists `budgets`, `leases` and `reservations` together, but every
+test that would give the other two meaning is assigned to T-013 and T-014 by spec 04 §16.
+Shipping empty tables would mean guessing at columns a later ticket might reshape, for no test
+this ticket can write.
+
+**`mandate_id` gets no foreign key.** There is no `mandates` table anywhere in the repository —
+T-005 built `Mandate` as a pure Pydantic model, and no ticket in `PLAN.md` §9 yet owns persisting
+one. Inventing a schema for it here, ahead of the ticket that owns it, risks a second migration
+to reshape it later. Recorded as gap 7 rather than left implicit: a budget row can name a mandate
+that was never issued, and nothing catches it. The pool invariant does not depend on the FK — it
+is a property of one row, not a join.
+
+### T-013 · ACQUIRE, RELEASE, REAP
+
+The three ledger-side operations, each inside `SELECT ... FOR UPDATE`.
+
+#### A spec formula that cannot pass its own ticket's test
+
+Spec 04 §4.1 computes `grant := min(requested, available, max_fraction × available)`.
+`PLAN.md` §6.4 has no third term. Spec supersedes plan on protocol detail, so the clamp was
+implemented first — and then measured against T-013's own acceptance bar.
+
+With `max_fraction = 0.25` and 50 concurrent callers each requesting 1 against a total of 10, the
+clamp binds once `available < 4`, and past that point every grant is a quarter of what is left.
+`available` shrinks by a factor of 0.75 per call and **never reaches zero**; it only lands on
+`0.0000` when `NUMERIC(20,4)` rounding forces it, around the 40th call. All 50 callers get a
+nonzero grant. `PLAN.md` §9's stated bar — *exactly 10 succeed, 40 get Insufficient* — is
+unreachable with the clamp applied to a caller-supplied amount, for any numbers large enough to
+make the test meaningful.
+
+Not a rounding corner. The clamp's ordinary behaviour on the exact scenario the ticket specifies.
+
+The resolution was to read spec 04 §12 back: `max_fraction` belongs to *adaptive lease sizing* —
+it bounds a size the ledger itself computes, not a second cap on an amount a caller explicitly
+asked for. §4.1 folding it into `ACQUIRE` conflates the two. So `ACQUIRE` uses `PLAN.md`'s
+simpler form, and `max_fraction`'s real job — bounding what one PEP can strand on a crash — is
+unenforced until T-015 (ADR-015, and gap 8). Rule 9 says never weaken a test to make it pass: the
+code was changed to match the plan, and the incompatibility written down.
+
+#### The guards, removed one at a time
+
+Both the `FOR UPDATE` serialization and the clock-skew margin were verified by deleting them and
+watching the tests fail. A guard whose removal changes nothing is not protecting anything, and
+this is the third ticket where that check earned its keep.
+
+### T-014 · RESERVE, COMMIT, LEDGER_COMMIT
+
+#### Where the PEP-side operations live
+
+Spec 04 §4.2 and §4.3 describe `RESERVE` and `COMMIT` as PEP-side: no network, no ledger
+mutation, no lock, touching only in-memory state. So they went into a new `agentiam_pep.lease` —
+not `db/ledger.py` beside the `AsyncSession`-taking functions, where a future edit would reach
+for a session that should not exist, and not `agentiam_core`, which holds immutable value types
+rather than mutable per-process runtime state (ADR-016).
+
+`reconciliation_anomalies` is a table with no entry in `PLAN.md` §7 at all. It exists because
+spec 04 §11's late-commit rule — itself found by model-checking the plan's original pseudocode in
+T-004, not present in it — requires the rejection to be recorded, and nothing else in the schema
+does. TM-21, the threat that model-check produced, is closed here.
+
+#### A TOCTOU race in the spec's own statement order
+
+Spec 04 §4.4 writes `LEDGER_COMMIT` as: check whether the reservation is already settled, *then*
+`SELECT lease FOR UPDATE`. Implemented literally, the dedup check runs against an unlocked read,
+so two concurrent commits carrying the same `reservation_id` — a retried batch racing itself,
+exactly what the guard exists for — can both see "not settled" before either takes the row lock.
+
+**Measured: reproduced on all three attempts.** Ten concurrent `ledger_commit()` calls, same
+lease and reservation id. It is not a silent double-apply — the `reservations` primary key catches
+the second insert — but it surfaces as an unhandled `UniqueViolationError` escaping the function
+instead of the clean idempotent `False` the caller is promised. A batched-commit worker retrying
+in a loop would crash rather than degrade.
+
+Taking the lock first fixes it: every concurrent commit against the same lease now serializes
+before either re-reads `reservations`. The external contract is unchanged; only the order of two
+reads moved, so this is a deviation from the pseudocode's statement order, not from the protocol
+it describes (ADR-017). The ADR exists mainly to stop a future edit "correcting" the code back to
+the literal spec order and silently reintroducing the crash — and it was verified the way this
+repo verifies things: literal order restored, test failed with the exact error, lock-first
+restored, suite green.
+
+### Found while integrating M3: none of it ran in CI
+
+Picking the work back up, the whole suite passed — 788 tests. It also **deselected 45**, which is
+every integration test in the repository, because `make test` and the CI workflow both exclude
+the `integration` marker and nothing else ran them.
+
+So the 50-concurrent-acquire test, the `FOR UPDATE` serialization proof, and the `LEDGER_COMMIT`
+dedup race that ADR-017 exists to prevent a future edit from reintroducing were running only when
+somebody remembered to run them by hand, on a machine with Docker. Three tickets of ledger
+correctness, gated by nothing.
+
+That is worse than an untested guard, because the tests exist and look like coverage. A race test
+that runs only on request will rot silently, and the first sign of it will be a production
+double-spend rather than a red check.
+
+CI now has a fourth job that runs them. No compose services are needed — the fixtures use
+testcontainers, which starts its own `postgres:16-alpine` against the runner's Docker daemon.
+
+Two smaller things fell out of the same pass. `.\make.ps1 help` had been printing one character
+per line since T-001, because PowerShell flattens nested `@(...)` literals and `$_[0]` was
+indexing a string rather than a pair. And testcontainers cannot start at all on Docker Desktop
+for Windows — its Ryuk reaper sidecar never gets a published port — which is why
+`test-integration` sets `TESTCONTAINERS_RYUK_DISABLED` on the Windows shim only. Linux CI does not
+need it, so it stays out of the authoritative Makefile.
+
+---
+
 ---
 
 ## What the numbers look like
 
 | | |
 |---|---|
-| Tickets complete | 10 of 53 in scope (61 defined, 8 deferred) |
-| Milestones | M1 complete, M2 code complete (specs 05-09 outstanding) |
-| Tests | 705, all passing |
-| Coverage on `agentiam-core` and `agentiam-sdk` | 100% of statements, 99% of branches |
-| ADRs | 13 |
+| Tickets complete | 13 of 53 in scope (61 defined, 8 deferred) |
+| Milestones | M1 and M2 complete, M3 in progress (specs 05-09 outstanding) |
+| Tests | 833, all passing (788 plus 45 integration) |
+| Coverage on `agentiam-core`, `agentiam-sdk`, `agentiam-pep` | 100% of statements |
+| ADRs | 17 |
 | Specs written | 4 of 9 |
-| Design errors caught before implementation | 7 |
+| Design errors caught before implementation | 9 |
 | Threats found by measurement | 6 (TM-19 through TM-24) |

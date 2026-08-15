@@ -17,7 +17,8 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'install', 'up', 'down', 'logs', 'ps', 'test', 'test-unit',
-                 'lint', 'fmt', 'typecheck', 'check', 'bench', 'cov', 'clean', 'nuke')]
+                 'test-integration', 'lint', 'fmt', 'typecheck', 'check', 'bench', 'cov',
+                 'clean', 'nuke')]
     [string]$Target = 'help'
 )
 
@@ -36,24 +37,29 @@ function Invoke-Step {
 switch ($Target) {
     'help' {
         Write-Host "AgentIAM targets (mirrors ./Makefile):" -ForegroundColor White
-        @(
-            @('install',   'Sync the workspace and install pre-commit hooks')
-            @('up',        'Start infrastructure (Postgres, Redis) and wait for healthy')
-            @('down',      'Stop infrastructure, keeping volumes')
-            @('logs',      'Tail infrastructure logs')
-            @('ps',        'Show infrastructure status')
-            @('test',      'Run the test suite, excluding tests that need infrastructure')
-            @('test-unit', 'Run unit and property tests only')
-            @('lint',      'Check formatting and lint rules')
-            @('fmt',       'Apply formatting and autofixable lint rules')
-            @('typecheck', 'Run mypy in strict mode')
-            @('check',     'Everything CI runs')
-            @('bench',     'Run benchmarks (PLAN.md §13.1, NFR-1)')
-            @('cov',       'Run tests with a coverage report')
-            @('clean',     'Remove caches and build artifacts')
-            @('nuke',      'Stop infrastructure and delete its volumes (destroys local data)')
-        ) | ForEach-Object {
-            Write-Host ("  {0,-12} {1}" -f $_[0], $_[1]) -ForegroundColor Gray
+        # An ordered hashtable rather than an array of pairs: PowerShell's `@(...)`
+        # flattens nested array literals, so `@( @('up','...'), @('down','...') )`
+        # collapses into a flat list of strings and `$_[0]` indexes a *character*. That
+        # printed one letter per line from T-001 until it was noticed in T-016.
+        ([ordered]@{
+            'install'          = 'Sync the workspace and install pre-commit hooks'
+            'up'               = 'Start infrastructure (Postgres, Redis) and wait for healthy'
+            'down'             = 'Stop infrastructure, keeping volumes'
+            'logs'             = 'Tail infrastructure logs'
+            'ps'               = 'Show infrastructure status'
+            'test'             = 'Run the test suite, excluding tests that need infrastructure'
+            'test-unit'        = 'Run unit and property tests only'
+            'test-integration' = 'Run tests that need Docker (spins its own Postgres)'
+            'lint'             = 'Check formatting and lint rules'
+            'fmt'              = 'Apply formatting and autofixable lint rules'
+            'typecheck'        = 'Run mypy in strict mode'
+            'check'            = 'Everything CI runs'
+            'bench'            = 'Run benchmarks (PLAN.md §13.1, NFR-1)'
+            'cov'              = 'Run tests with a coverage report'
+            'clean'            = 'Remove caches and build artifacts'
+            'nuke'             = 'Stop infrastructure and delete its volumes (destroys local data)'
+        }).GetEnumerator() | ForEach-Object {
+            Write-Host ("  {0,-17} {1}" -f $_.Key, $_.Value) -ForegroundColor Gray
         }
     }
     'install' {
@@ -69,6 +75,14 @@ switch ($Target) {
                       'not integration and not e2e and not chaos and not perf')
     }
     'test-unit' { Invoke-Step @('uv', 'run', 'pytest', 'tests/unit', 'tests/property') }
+    'test-integration' {
+        # Docker Desktop on Windows does not publish a port for testcontainers' Ryuk
+        # reaper, so every container fails to start with a ConnectionError. Disabling
+        # Ryuk skips that sidecar; containers are still torn down by the fixtures'
+        # context managers. Linux CI does not need this, so it stays out of the Makefile.
+        if (-not $env:TESTCONTAINERS_RYUK_DISABLED) { $env:TESTCONTAINERS_RYUK_DISABLED = 'true' }
+        Invoke-Step @('uv', 'run', 'pytest', '-m', 'integration')
+    }
     'lint' {
         Invoke-Step @('uv', 'run', 'ruff', 'check', '.')
         Invoke-Step @('uv', 'run', 'ruff', 'format', '--check', '.')

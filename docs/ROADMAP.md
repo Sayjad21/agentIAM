@@ -168,14 +168,19 @@ them, not M3, so M3 starts now and the specs land against the milestone that nee
 
 | Ticket | Build | Verify |
 |---|---|---|
-| T-012 | Budget schema — SQLAlchemy models + Alembic migration, `NUMERIC(20,4)` | Migration runs against real Postgres; `CHECK` constraints actually reject bad rows |
-| T-013 | ACQUIRE / RELEASE / REAP + 50-concurrent-acquire test | `FOR UPDATE` serialization is correct; test green against testcontainers |
-| T-014 | RESERVE / COMMIT / refund, idempotent | Decimal exactness to 4 places on refund edge cases; replayed commits are no-ops |
-| T-016 | `scripts/run_invariant_checker.py` | Run it against a deliberately corrupted budget row and confirm it *detects* — a checker never tested against a real violation is decoration |
+| T-012 | Budget schema — SQLAlchemy models + Alembic migration, `NUMERIC(20,4)` | **Done.** Migration runs against real Postgres; `CHECK` constraints reject bad rows |
+| T-013 | ACQUIRE / RELEASE / REAP + 50-concurrent-acquire test | **Done.** `FOR UPDATE` and the skew margin each removed to prove they are load-bearing; spec 04's `max_fraction` clamp found incompatible with this test (ADR-015) |
+| T-014 | RESERVE / COMMIT / refund, idempotent | **Done.** Decimal exact to 4 places; replayed commits are no-ops; spec 04 §4.4's statement order found to be a TOCTOU race (ADR-017) |
+| **T-016** | `scripts/run_invariant_checker.py` | Run it against a deliberately corrupted budget row and confirm it *detects* — a checker never tested against a real violation is decoration |
 | T-017 | Sibling budgets: proportional split + shared pool (INV-5) | 3-sibling concurrent test holds `Σ spend ≤ mandate` |
 
 **Exit gate:** all lease operations working · stateful hypothesis test P-10 green · invariant
 checker proven to catch a real violation · sibling budget test passing.
+
+> The `integration` marker is excluded from `make test` because it needs Docker, so these tests
+> run under `make test-integration` and in their own CI job. That job was added while picking
+> M3 back up — until then nothing ran them automatically, which made every race test above
+> decoration in exactly the sense T-016's Verify column warns about.
 
 ---
 

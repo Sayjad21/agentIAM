@@ -54,6 +54,35 @@ jobs:
           path: coverage.xml
           if-no-files-found: ignore
 
+  integration:
+    name: Ledger against real Postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync workspace
+        run: uv sync
+
+      # The `quality` job excludes these, so until now nothing ran them automatically.
+      # They are the only tests that exercise `SELECT ... FOR UPDATE` serialization, the
+      # 50-concurrent-acquire bound, and the LEDGER_COMMIT dedup race that ADR-017 exists
+      # to prevent a future edit from reintroducing. A race test that runs only when
+      # someone remembers to run it is a race test that will rot silently.
+      #
+      # No compose services needed: the fixtures use testcontainers, which starts its own
+      # postgres:16-alpine per module against the runner's Docker daemon.
+      - name: Integration tests
+        run: uv run pytest -m integration -v
+
   purity:
     name: agentiam-core is I/O-free
     runs-on: ubuntu-latest

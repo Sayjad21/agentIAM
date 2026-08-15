@@ -29,6 +29,9 @@ test: ## Run the test suite, excluding tests that need infrastructure
 test-unit: ## Run unit and property tests only
 	$(UV) run pytest tests/unit tests/property
 
+test-integration: ## Run tests that need Docker (testcontainers spins its own Postgres)
+	$(UV) run pytest -m integration
+
 lint: ## Check formatting and lint rules
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
