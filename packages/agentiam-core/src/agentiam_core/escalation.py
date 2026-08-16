@@ -106,6 +106,7 @@ class ElevationGrant:
     task_id: uuid.UUID
     principal_id: str
     agent_id: str
+    intent_hash: str
     scopes: frozenset[str]
     amount: Decimal
     not_before: datetime
@@ -122,6 +123,7 @@ class Escalation:
     task_id: uuid.UUID
     agent_id: str
     principal_id: str
+    intent_hash: str
     requested_scopes: frozenset[str]
     requested_amount: Decimal
     reason: str
@@ -158,6 +160,7 @@ def request_escalation(
     task_id: uuid.UUID,
     agent_id: str,
     principal_id: str,
+    intent_hash: str,
     requested_scopes: frozenset[str],
     requested_amount: Decimal,
     reason: str,
@@ -182,6 +185,7 @@ def request_escalation(
         task_id=task_id,
         agent_id=agent_id,
         principal_id=principal_id,
+        intent_hash=intent_hash,
         requested_scopes=requested_scopes,
         requested_amount=requested_amount,
         reason=reason,
@@ -247,6 +251,7 @@ def approve(
         task_id=escalation.task_id,
         principal_id=escalation.principal_id,
         agent_id=escalation.agent_id,
+        intent_hash=escalation.intent_hash,
         scopes=scopes,
         amount=amount,
         not_before=now,

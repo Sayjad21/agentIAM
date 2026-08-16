@@ -23,6 +23,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from agentiam_core.tokens import RootKeySet, VerifiedToken
     from agentiam_pep.drift import FeatureExtractor
     from agentiam_pep.emitter import DecisionEmitter
+    from agentiam_pep.escalation_sink import EscalationSink
     from agentiam_pep.extractor import Extraction, RouteTable
     from agentiam_pep.lease import Reservation
     from agentiam_pep.policy import AgentPrincipal, CedarEngine
@@ -108,6 +110,11 @@ class PipelineSettings:
 
     pep_id: str
     policy_version_fallback: str = "none"
+    #: How long a pending escalation stays actionable before `state_at()` reports it
+    #: `EXPIRED` — spec: "expiry is a state, not a sweeper." 15 minutes by default: long
+    #: enough for a human to notice a queue notification, short enough that a stale
+    #: request does not sit there looking approvable.
+    escalation_ttl_s: float = 900.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,15 +126,22 @@ class Refused:
     detail: str
     decision_id: uuid.UUID
     trace_id: str
+    #: Set only for `APPROVAL_REQUIRED` / `DRIFT_ESCALATION` with a sink configured — spec
+    #: 09 §11: "the escalation id travels in the body, because a client that cannot see it
+    #: cannot follow up."
+    escalation_id: uuid.UUID | None = None
 
     def body(self) -> dict[str, str]:
         """The response body spec 09 §11.3 fixes."""
-        return {
+        body = {
             "reason_code": self.reason_code.value,
             "detail": self.detail,
             "decision_id": str(self.decision_id),
             "trace_id": self.trace_id,
         }
+        if self.escalation_id is not None:
+            body["escalation_id"] = str(self.escalation_id)
+        return body
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +173,7 @@ class Pipeline:
         caveats_for: Callable[[VerifiedToken], Sequence[Caveat]] | None = None,
         drift_oracle: DriftOracle | None = None,
         features: FeatureExtractor | None = None,
+        escalation_sink: EscalationSink | None = None,
     ) -> None:
         """Assemble the five oracles and the two adapters the steps need."""
         self._routes = routes
@@ -173,6 +188,7 @@ class Pipeline:
         self._caveats_for = caveats_for or (lambda _token: ())
         self._drift_oracle = drift_oracle
         self._features = features
+        self._escalation_sink = escalation_sink
 
     async def authorize(
         self,
@@ -227,6 +243,37 @@ class Pipeline:
             budget=self._pool,
             drift=self._drift_oracle,
         )
+
+        # --- an escalating outcome opens a queue entry before it is recorded --------
+        escalation_id: uuid.UUID | None = None
+        if decision.outcome is Outcome.ESCALATE and self._escalation_sink is not None:
+            try:
+                escalation = await self._escalation_sink.create(
+                    decision_id=decision_id,
+                    task_id=token.task_id,
+                    agent_id=self._principal_for(token).agent_id,
+                    principal_id=token.principal_id,
+                    intent_hash=context.request_intent,
+                    requested_scopes=frozenset({context.operation}),
+                    requested_amount=context.requested.get(BudgetDimension.SPEND_BDT, Decimal(0)),
+                    reason=decision.reason_detail,
+                    now=self._now(),
+                    ttl=timedelta(seconds=self._settings.escalation_ttl_s),
+                )
+            except Exception as exc:
+                # ADR-026's reasoning, applied here: a system that cannot record *that a
+                # human was asked* must not tell the agent one was asked.
+                return self._record_and_refuse(
+                    ReasonCode.CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED,
+                    f"could not open an escalation: {exc}",
+                    decision_id,
+                    trace_id,
+                    extraction=extraction,
+                    token=token,
+                    context=context,
+                    started=started,
+                )
+            escalation_id = escalation.id
 
         reservation: Reservation | None = None
         if decision.outcome is Outcome.ALLOW:
@@ -283,6 +330,7 @@ class Pipeline:
                 detail=decision.reason_detail,
                 decision_id=decision_id,
                 trace_id=trace_id,
+                escalation_id=escalation_id,
             )
 
         return Authorized(

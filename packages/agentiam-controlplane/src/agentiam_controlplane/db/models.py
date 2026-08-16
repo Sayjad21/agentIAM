@@ -28,6 +28,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agentiam_controlplane.db.base import Base
+from agentiam_core.escalation import EscalationState
 from agentiam_core.models import LeaseState
 
 #: Matches `NUMERIC(20,4)` — the money rule (`PLAN.md` §7, `ENGINEERING-RULES.md` rule 4).
@@ -265,3 +266,46 @@ class AuditRecordRow(Base):
         ),
         Index("ix_audit_records_decision", "decision_id"),
     )
+
+
+_ESCALATION_STATES_SQL = ", ".join(f"'{state.value}'" for state in EscalationState)
+
+
+class EscalationRow(Base):
+    """A request for human authority, and its resolution — T-037, `PLAN.md` §11.7.
+
+    `agentiam_core.escalation` holds the rules (the grant is ⊆ the request, one resolution
+    only, expiry is a state); this row is where "one resolution only" (EC-A10) actually gets
+    enforced for two approvers racing the same request — `resolve_approve`/`resolve_deny`
+    take a `SELECT ... FOR UPDATE` on this row before checking `state`, so the loser blocks
+    on the lock rather than reading a stale `pending`.
+
+    `requested_scopes` is `JSONB` rather than a Postgres array: every other set-valued column
+    in this schema (`DecisionRecord.token_chain_ids` et al.) already goes through the same
+    JSON-first ORM boundary, and a second array-typed encoding would just be a second
+    convention to remember.
+    """
+
+    __tablename__ = "escalations"
+    __table_args__ = (
+        UniqueConstraint("decision_id", name="uq_escalations_decision_id"),
+        CheckConstraint(f"state IN ({_ESCALATION_STATES_SQL})", name="ck_escalations_state"),
+        CheckConstraint("requested_amount >= 0", name="ck_escalations_amount_nonneg"),
+        Index("ix_escalations_state_expires", "state", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    decision_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[str] = mapped_column(nullable=False)
+    principal_id: Mapped[str] = mapped_column(nullable=False)
+    intent_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    requested_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    reason: Mapped[str] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    state: Mapped[str] = mapped_column(nullable=False, default=EscalationState.PENDING.value)
+    resolved_by: Mapped[str | None] = mapped_column(nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_reason: Mapped[str | None] = mapped_column(nullable=True)

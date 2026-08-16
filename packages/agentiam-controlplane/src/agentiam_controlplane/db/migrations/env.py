@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_engine_from_config
 from agentiam_controlplane.db.base import Base
 from agentiam_controlplane.db.models import (  # noqa: F401  (registers on Base.metadata)
     BudgetRow,
+    EscalationRow,
     LeaseRow,
     ReconciliationAnomalyRow,
     ReservationRow,

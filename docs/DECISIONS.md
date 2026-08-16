@@ -1803,3 +1803,84 @@ entirely by `AGENTIAM_LLM_BACKEND=ollama`. Both providers' paid tiers drop the c
 Selection order with nothing configured: Gemini, then Groq, then local. The key travels in
 the `x-goog-api-key` header rather than the query string, because a URL lands in proxy and
 server logs in a way a header does not.
+
+---
+
+## ADR-041 — T-037's persistence half: a config-list root key and approver set, extended
+## request bodies, and `max_depth = 1` on every elevation
+
+**Date:** 2026-08-16
+**Status:** accepted — both custody mechanisms are named stopgaps, not decisions to build on
+**Affects:** `agentiam_core.escalation`, `agentiam_controlplane.{settings,escalations_api,
+db.escalations,db.escalation_sink}`, `agentiam_pep.{pipeline,escalation_sink}`, `PLAN.md` §8
+
+**Context:** the T-037 commit that shipped the pure workflow (`agentiam_core/escalation.py`)
+deliberately stopped there: "the escalations table, the four HTTP endpoints in `PLAN.md`
+932-936, and the console queue" were left for a second pass, because they need Postgres and
+FastAPI rather than the rules the ticket's acceptance criteria are actually about. This ADR
+covers that second pass, and the four places it had to choose something `PLAN.md` doesn't
+fix.
+
+**1. The root signing key.** Approving an escalation mints a fresh root-signed `Mandate`
+(the T-037 commit's own reasoning: `attenuate()` cannot widen, so elevation cannot be an
+attenuation of the agent's token). No issuance service exists yet to custody that key —
+every `mint_root()` call anywhere in the repo before this ticket was test-only. Threat model
+A3 names the target ("vault in dev"); until an issuance service exists, `agentiam_controlplane
+.settings.ControlPlaneSettings.from_env()` reads a hex-encoded Ed25519 private key from
+`AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY`, mirroring `agentiam_pep.config`'s
+`AGENTIAM_PEP_*` pattern rather than inventing a second one. Stated as a stopgap in the
+module docstring; resumption trigger is the issuance service `PLAN.md` §8 assumes but never
+schedules as its own ticket.
+
+**2. Who may approve.** `approve()`/`deny()` need an authorized-approver set, and T-043
+(Keycloak OIDC) is not built — there is no session identity to check against. Until it
+lands, `AGENTIAM_CONTROLPLANE_APPROVERS` is a fixed comma-separated config list, and the
+caller names which approver is acting in the request body (`ApproveRequest.approver`,
+`DenyRequest.approver`) rather than it coming from a session. Same shape the already-shipped
+`tests/unit/test_escalation.py` uses (`APPROVERS = frozenset({...})`), just sourced from the
+environment instead of a test literal.
+
+**3. `POST /v1/escalations`'s body is bigger than `PLAN.md` §8 shows.** The plan's sketch —
+`{decision_id, requested_scope, requested_amount, reason}` — is what a UI form would submit,
+not what `Mandate` needs to exist (spec 01 §4: `task_id`, `principal_id`, `intent_hash`, none
+of which the plan's four fields carry, and which the escalating decision's own context is the
+only source of). The endpoint accepts all of them; `agentiam_pep.pipeline.Pipeline.authorize()`
+supplies them automatically from the `RequestContext` when an `ESCALATE` outcome fires and an
+`EscalationSink` is configured, so a human caller hitting the endpoint directly is the only
+path that has to supply them by hand. `POST .../approve` similarly gained `narrowed_scopes`
+(plural — `PLAN.md` writes `narrowed_scope`, singular, but a request can name more than one
+scope) and both resolution endpoints gained `approver` per point 2.
+
+**4. Every elevated token gets `max_depth = 1`.** `PLAN.md` never fixes this number.
+`ElevationGrant` carries what was approved (scopes, amount, validity window) but not a
+delegation depth, and the pure `agentiam_core.escalation` module has no opinion on one — the
+choice belongs to whoever mints, so it lives in
+`ControlPlaneSettings.elevation_max_depth` (default `1`) rather than in core. The grant is
+for the escalating agent's direct, one-time use on the task that triggered it, not a new root
+of a delegation chain; `1` forbids that token from minting any children at all, which is the
+narrowest reading consistent with "elevation is not an attenuation" and costs nothing the
+approval didn't already grant.
+
+**Locking, not the pure check alone, proves EC-A10 under real concurrency.** The already-
+shipped `agentiam_core.escalation` module's docstring says a persisted implementation needs
+an `UPDATE ... WHERE state = 'pending'`; `db/escalations.py` uses `SELECT ... FOR UPDATE`
+before calling `approve()`/`deny()` instead — same effect, same pattern `db/ledger.py`
+already established for the identical problem. `tests/integration/test_escalations.py` races
+ten concurrent approvers against one escalation and asserts exactly one wins, the same shape
+`test_ledger_commit.py` uses for `LEDGER_COMMIT`'s G4.
+
+**A failed escalation write fails the request closed.** `Pipeline.authorize()` treats a sink
+exception the way `ADR-026` treats a full audit buffer: a system that cannot record *that a
+human was asked* must not tell the agent one was asked, so it denies with
+`CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED` rather than returning an `ESCALATE` response with no
+id to follow up on.
+
+**Not done here, and left to the tickets that already own them:** the rich approve/deny
+screen with inline narrowing is T-050's acceptance criterion, not this one's — the console
+page added here (`GET /escalations`) is a read-only queue with two prompt-and-fetch buttons,
+enough to satisfy T-037's own "pending queue in the console" line without pre-building T-050.
+A sweeper that persists `EXPIRED` onto a stale `pending` row is not built either;
+`state_at()` already makes "TTL expiry auto-denies" true for every reader without one
+(`db/escalations.list_by_state` excludes an unswept-expired row from a `pending` query for
+the same reason), and the schema's `CHECK` already allows the `expired` state so adding a
+sweeper later needs no migration.

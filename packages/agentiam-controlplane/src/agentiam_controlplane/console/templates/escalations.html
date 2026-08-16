@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentIAM Control Plane - Escalation Queue</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dark-mode">
+    <div class="container">
+        <header>
+            <h1>AgentIAM Control Plane</h1>
+            <p>Escalation Queue (T-037) &mdash; read-only list; the rich approve/deny screen is T-050</p>
+        </header>
+
+        <main>
+            {% if error %}
+            <p class="alert danger">{{ error }}</p>
+            {% elif not pending %}
+            <p class="muted">No {{ state }} escalations.</p>
+            {% else %}
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>Agent</th>
+                        <th>Principal</th>
+                        <th>Requested scopes</th>
+                        <th>Amount</th>
+                        <th>Reason</th>
+                        <th>Expires</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for e in pending %}
+                    <tr id="row-{{ e.id }}">
+                        <td>{{ e.agent_id }}</td>
+                        <td>{{ e.principal_id }}</td>
+                        <td>{{ e.requested_scopes | join(", ") }}</td>
+                        <td>{{ e.requested_amount }}</td>
+                        <td>{{ e.reason }}</td>
+                        <td>{{ e.expires_at }}</td>
+                        <td>
+                            <button class="btn primary" onclick="approve('{{ e.id }}')">Approve</button>
+                            <button class="btn" onclick="deny('{{ e.id }}')">Deny</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </main>
+    </div>
+
+    <script>
+        async function approve(id) {
+            const approver = prompt("Approver id (must be in AGENTIAM_CONTROLPLANE_APPROVERS):");
+            if (!approver) return;
+            const res = await fetch(`/v1/escalations/${id}/approve`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({approver}),
+            });
+            const body = await res.json();
+            if (!res.ok) {
+                alert("Approve failed: " + (body.detail || res.status));
+                return;
+            }
+            alert("Approved. Elevated token minted; see the network tab for the full response.");
+            document.getElementById(`row-${id}`)?.remove();
+        }
+
+        async function deny(id) {
+            const approver = prompt("Approver id (must be in AGENTIAM_CONTROLPLANE_APPROVERS):");
+            if (!approver) return;
+            const reason = prompt("Reason for denial:");
+            if (!reason) return;
+            const res = await fetch(`/v1/escalations/${id}/deny`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({approver, reason}),
+            });
+            const body = await res.json();
+            if (!res.ok) {
+                alert("Deny failed: " + (body.detail || res.status));
+                return;
+            }
+            document.getElementById(`row-${id}`)?.remove();
+        }
+    </script>
+</body>
+</html>

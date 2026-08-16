@@ -50,9 +50,18 @@ class AllocationError(ControlPlaneError):
     reason_code = ReasonCode.BUDGET_EXHAUSTED_MANDATE
 
 
+class EscalationNotFoundError(ControlPlaneError):
+    """No escalation exists with the given id — T-037. Maps to HTTP 404.
+
+    Not part of the closed reason-code enum (rule 5): that set names why a *decision*
+    denied a request, and a 404 on the admin API is neither a decision nor a denial.
+    """
+
+
 __all__ = [
     "AllocationError",
     "ControlPlaneError",
+    "EscalationNotFoundError",
     "LeaseNotActiveError",
     "LeaseUnavailableError",
 ]

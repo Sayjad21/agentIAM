@@ -24,14 +24,17 @@ import httpx
 import pytest
 
 from agentiam_core.errors import ReasonCode
+from agentiam_core.escalation import Escalation, request_escalation
 from agentiam_core.hashing import hash_object
 from agentiam_core.models import (
     Budget,
     BudgetDimension,
+    Caveat,
     DecisionRecord,
     Mandate,
     Outcome,
     RequestContext,
+    RequiresApproval,
     ScopeSubset,
 )
 from agentiam_core.tokens import RootKeySet, generate_keypair, mint_root
@@ -117,6 +120,56 @@ class FakeLedger:
         return None
 
 
+class FakeEscalationSink:
+    """Records what it was asked to persist; fails on demand."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        """Start with no calls recorded."""
+        self.calls: list[dict[str, object]] = []
+        self._fail = fail
+
+    async def create(
+        self,
+        *,
+        decision_id: uuid.UUID,
+        task_id: uuid.UUID,
+        agent_id: str,
+        principal_id: str,
+        intent_hash: str,
+        requested_scopes: frozenset[str],
+        requested_amount: Decimal,
+        reason: str,
+        now: datetime,
+        ttl: timedelta,
+    ) -> Escalation:
+        self.calls.append(
+            {
+                "decision_id": decision_id,
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "principal_id": principal_id,
+                "intent_hash": intent_hash,
+                "requested_scopes": requested_scopes,
+                "requested_amount": requested_amount,
+                "reason": reason,
+            }
+        )
+        if self._fail:
+            raise RuntimeError("escalation store unavailable")
+        return request_escalation(
+            decision_id=decision_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            principal_id=principal_id,
+            intent_hash=intent_hash,
+            requested_scopes=requested_scopes,
+            requested_amount=requested_amount,
+            reason=reason,
+            now=now,
+            ttl=ttl,
+        )
+
+
 def a_mandate(**over: object) -> Mandate:
     base: dict[str, object] = {
         "mandate_id": uuid.uuid4(),
@@ -189,6 +242,8 @@ async def a_pipeline(
     granted: Decimal = Decimal(1000),
     drift: FakeDrift | None = None,
     features: FeatureExtractor | None = None,
+    caveats: tuple[Caveat, ...] = (),
+    escalation_sink: FakeEscalationSink | None = None,
 ) -> tuple[Pipeline, CollectingSink, LeasePool]:
     sink = CollectingSink()
     pool = LeasePool(
@@ -210,8 +265,10 @@ async def a_pipeline(
         revocation=InMemoryRevocationSet(revoked or []),
         settings=PipelineSettings(pep_id="pep-1"),
         now=lambda: NOW,
+        caveats_for=(lambda _token: caveats) if caveats else None,
         drift_oracle=drift,
         features=features,
+        escalation_sink=escalation_sink,
     )
     return pipeline, sink, pool
 
@@ -350,6 +407,77 @@ class TestRefusals:
         body = result.body()
         assert body["decision_id"]
         assert body["reason_code"] == result.reason_code.value
+
+
+class TestEscalation:
+    """T-037: an `ESCALATE` outcome opens a queue entry before it reaches the agent."""
+
+    async def test_without_a_sink_configured_there_is_no_escalation_id(self) -> None:
+        pipeline, _, _ = await a_pipeline(
+            caveats=(RequiresApproval(scopes=frozenset({"invoice:read"})),)
+        )
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.APPROVAL_REQUIRED
+        assert result.status == 403
+        assert result.escalation_id is None
+        assert "escalation_id" not in result.body()
+
+    async def test_a_sink_opens_an_escalation_and_its_id_travels_in_the_body(self) -> None:
+        """Spec 09 §11: 'the escalation id travels in the body ... cannot follow up' otherwise."""
+        sink = FakeEscalationSink()
+        pipeline, _, _ = await a_pipeline(
+            caveats=(RequiresApproval(scopes=frozenset({"invoice:read"})),),
+            escalation_sink=sink,
+        )
+        mandate = a_mandate()
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(mandate)
+        )
+        assert isinstance(result, Refused)
+        assert result.escalation_id is not None
+        assert result.body()["escalation_id"] == str(result.escalation_id)
+
+        assert len(sink.calls) == 1
+        call = sink.calls[0]
+        assert call["task_id"] == mandate.task_id
+        assert call["principal_id"] == mandate.principal_id
+        assert call["requested_scopes"] == frozenset({"invoice:read"})
+        assert call["requested_amount"] == Decimal(0)
+
+    async def test_a_sink_that_fails_denies_closed_rather_than_hiding_the_escalation(self) -> None:
+        sink = FakeEscalationSink(fail=True)
+        pipeline, sink_records, _ = await a_pipeline(
+            caveats=(RequiresApproval(scopes=frozenset({"invoice:read"})),),
+            escalation_sink=sink,
+        )
+        emitter = pipeline._emitter
+        await emitter.start()
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED
+        assert result.status == 503
+        assert result.escalation_id is None
+
+        await emitter.flush()
+        assert len(sink_records.records) == 1
+        assert sink_records.records[0].outcome is Outcome.DENY  # type: ignore[attr-defined]
+
+    async def test_drift_escalation_also_opens_a_queue_entry(self) -> None:
+        """The sink is generic across every `ESCALATE` reason, not just `RequiresApproval`."""
+        sink = FakeEscalationSink()
+        pipeline, _, _ = await a_pipeline(drift=FakeDrift(Decimal("0.9")), escalation_sink=sink)
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=intent_headers()
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.DRIFT_ESCALATION
+        assert result.escalation_id is not None
+        assert len(sink.calls) == 1
 
 
 class TestRecording:

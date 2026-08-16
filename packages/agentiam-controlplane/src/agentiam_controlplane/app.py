@@ -6,23 +6,35 @@ Provides the Cedar Authoring UI (T-027).
 from __future__ import annotations
 
 import pathlib
+from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import cedarpy
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from agentiam_controlplane.db.escalations import list_by_state
+from agentiam_controlplane.escalations_api import build_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
 from agentiam_core.corpus import CORPUS, CORPUS_SOURCE, CORPUS_TOOLS
 from agentiam_core.decision import PolicyVerdict
+from agentiam_core.escalation import EscalationState
 from agentiam_core.hashing import DECIMAL_PLACES
 from agentiam_core.policy_testing import (
     PolicyTestCase,
     run_policy_tests,
     summarize,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from agentiam_controlplane.settings import ControlPlaneSettings
 
 # Set up paths for templates and static assets
 BASE_DIR = pathlib.Path(__file__).parent / "console"
@@ -112,11 +124,67 @@ def _refuse_activation(detail: str) -> HTMLResponse:
     return HTMLResponse(content=f'<div class="alert danger">{detail}</div>', status_code=409)
 
 
-def create_app() -> FastAPI:
-    """Create the FastAPI application for the Control Plane."""
+def create_app(
+    *,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    escalation_settings: ControlPlaneSettings | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> FastAPI:
+    """Create the FastAPI application for the Control Plane.
+
+    The escalation queue (`/v1/escalations`, `GET /escalations`) is mounted only when both
+    `session_factory` and `escalation_settings` are supplied — no database has ever been
+    reachable from this app before T-037, and a console built for a demo without one should
+    keep working exactly as before rather than fail to start.
+    """
     app = FastAPI(title="AgentIAM Control Plane")
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+    if session_factory is not None and escalation_settings is not None:
+        app.include_router(
+            build_router(session_factory=session_factory, settings=escalation_settings, now=now)
+        )
+
+    @app.get("/escalations", response_class=HTMLResponse)
+    async def escalation_queue(
+        request: Request, state: str = Query(default="pending")
+    ) -> HTMLResponse:
+        """The pending-approval queue — T-037's console acceptance criterion.
+
+        Read-only: narrowing an approval and the richer approve/deny screen are T-050's job.
+        This page exists so a pending escalation is visible somewhere before that ticket
+        lands, and posts straight to the JSON API for approve/deny.
+        """
+        pending: list[dict[str, object]] = []
+        error: str | None = None
+        if session_factory is None:
+            error = "the escalation queue has no database configured"
+        else:
+            try:
+                parsed_state = EscalationState(state)
+            except ValueError:
+                parsed_state = EscalationState.PENDING
+            instant = now()
+            async with session_factory() as session:
+                found = await list_by_state(session, state=parsed_state, now=instant)
+            pending = [
+                {
+                    "id": str(e.id),
+                    "agent_id": e.agent_id,
+                    "principal_id": e.principal_id,
+                    "requested_scopes": sorted(e.requested_scopes),
+                    "requested_amount": str(e.requested_amount),
+                    "reason": e.reason,
+                    "expires_at": e.expires_at.isoformat(),
+                }
+                for e in found
+            ]
+        return templates.TemplateResponse(
+            request=request,
+            name="escalations.html",
+            context={"pending": pending, "error": error, "state": state},
+        )
 
     @app.get("/policy", response_class=HTMLResponse)
     async def get_policy_editor(request: Request) -> HTMLResponse:

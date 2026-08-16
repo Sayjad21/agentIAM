@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · spec 07 outstanding |
-| **Tickets** | 32 done · 20 remaining · 9 deferred · **61 defined, 52 in scope** |
-| **Tests** | 1758 passing (1639 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · **M8 started (T-037 done)** · spec 07 outstanding |
+| **Tickets** | 33 done · 19 remaining · 9 deferred · **61 defined, 52 in scope** |
+| **Tests** | 1919 passing (1786 in `make test`; 121 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
 | **Coverage** | **`agentiam-core` 100% statements** (the rule that is kept). Whole tree 98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86%. See §3 gap 14 |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
 | **Specs** | 9 written — `06-drift-detection` added with T-032/T-033; only `07-revocation` outstanding |
-| **ADRs** | 37 |
+| **ADRs** | 41 |
 
 ---
 
@@ -64,12 +64,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-032 | `specs/06-drift-detection.md` + `drift.py` — Stateless Intent Binding via headers (`AgentIAM-Task-Intent`), Semantic drift oracle using local Ollama | — |
 | T-036 | Drift modes wiring (`off`, `log_only`, `strict`) — Extractor configuration parsing, pipeline context integration, drift score evaluation | — |
 | **T-033** | `drift_features.py` + `EmbeddingClient` — f1/f2/f5 and a startup warm-up. **Probing found two defects in T-032**: a 14,244 ms cold embedding against a 2 s timeout (drift was *absent*, not slow, on a cold PEP), and a 724 ms `httpx.Client` built per cache miss on the event loop — 748 ms → 83 ms per miss. f3/f4/f6 deferred (ADR-036, ADR-037) | — |
+| **T-037** | `escalation.py` (pure workflow: request/approve/deny, EC-A07…EC-A10) + `escalations` table, `SELECT ... FOR UPDATE` for exactly-once resolution under real concurrency, `/v1/escalations` (open/list/approve/deny), a read-only console queue page, and the PEP wiring that opens one automatically on an `ESCALATE` outcome and puts its id in the response body (spec 09 §11). Root key and approver set are both config-list stopgaps ahead of an issuance service and T-043 (ADR-041) | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-037/T-038** | Escalation workflow, then revocation service + gossip. `PLAN.md` §1627 lists T-038/T-039 among the must-keep core | M8 |
+| **T-038** | Revocation service + gossip. `PLAN.md` §1627 lists T-038/T-039 among the must-keep core | M8 |
 | T-039…T-040 | PEP revocation cache, subtree revocation e2e | M8 |
 | T-045…T-050 | Console, D3 identity tree, live decision stream, Grafana | M10 |
 | T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7/M11 |

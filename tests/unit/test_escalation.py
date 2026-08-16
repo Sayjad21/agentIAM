@@ -18,6 +18,7 @@ Rule 4: money is `Decimal`, never `float`.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -39,6 +40,9 @@ from agentiam_core.escalation import (
 NOW = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
 APPROVERS = frozenset({"kc:manager", "kc:cfo"})
 
+#: sha256 of a demo task description — same shape spec 01 §4 requires of `intent_hash`.
+INTENT_HASH = hashlib.sha256(b"invoice INV-2291 exceeds the standing ceiling").hexdigest()
+
 
 def an_escalation(**over: object) -> Escalation:
     base: dict[str, object] = {
@@ -46,6 +50,7 @@ def an_escalation(**over: object) -> Escalation:
         "task_id": uuid.uuid4(),
         "agent_id": "agt-1",
         "principal_id": "kc:alice",
+        "intent_hash": INTENT_HASH,
         "requested_scopes": frozenset({"payment:initiate"}),
         "requested_amount": Decimal(50000),
         "reason": "invoice INV-2291 exceeds the standing ceiling",
@@ -163,6 +168,19 @@ class TestApproval:
             elevation_ttl=timedelta(minutes=5),
         )
         assert grant.approved_by == "kc:cfo"
+
+    def test_the_grant_carries_the_intent_it_was_requested_under(self) -> None:
+        # `Mandate` requires `intent_hash` (spec 01 §4); without it the grant is not
+        # enough to mint from.
+        escalation = an_escalation()
+        _, grant = approve(
+            escalation,
+            approver="kc:manager",
+            authorized=APPROVERS,
+            now=NOW,
+            elevation_ttl=timedelta(minutes=5),
+        )
+        assert grant.intent_hash == escalation.intent_hash
 
     def test_the_grant_keeps_the_task_it_belongs_to(self) -> None:
         escalation = an_escalation()
