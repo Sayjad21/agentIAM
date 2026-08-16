@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -11,25 +12,26 @@ from agentiam_controlplane.nl_compiler.ollama_client import OllamaClient
 async def test_compile_nl_to_policy_validates_and_parses() -> None:
     """Ensure the compiler successfully parses the model's JSON into Pydantic models."""
     mock_response = {
-        "cedar_source": 'permit(principal == User::"admin", action, resource);',
+        "cedar_source": (
+            'permit(principal, action == Action::"invoice:write", resource) '
+            'when { principal.role == "senior" };'
+        ),
         "tests": [
             {
-                "name": "admin_can_do_anything",
-                "description": "Admins are allowed all actions",
+                "name": "senior_can_write",
+                "description": "Seniors are allowed to write invoices",
                 "expected": True,
-                "principal_id": "admin",
-                "action": "system:reboot",
-                "resource_type": "System",
-                "resource_id": "host1",
+                "role": "senior",
+                "operation": "invoice:write",
+                "tool": "invoice_api",
             },
             {
-                "name": "guest_cannot_reboot",
-                "description": "Guests are denied",
+                "name": "worker_cannot_write",
+                "description": "Workers are denied",
                 "expected": False,
-                "principal_id": "guest",
-                "action": "system:reboot",
-                "resource_type": "System",
-                "resource_id": "host1",
+                "role": "worker",
+                "operation": "invoice:write",
+                "tool": "invoice_api",
             },
         ],
     }
@@ -42,16 +44,24 @@ async def test_compile_nl_to_policy_validates_and_parses() -> None:
     # Verify Pydantic parsing
     assert isinstance(output, CompilerOutput)
     assert output.cedar_source is not None
-    assert 'permit(principal == User::"admin", action, resource);' in output.cedar_source
+    assert 'principal.role == "senior"' in output.cedar_source
     assert len(output.tests) == 2
 
     t1 = output.tests[0]
-    assert t1.name == "admin_can_do_anything"
+    assert t1.name == "senior_can_write"
     assert t1.expected is True
 
     t2 = output.tests[1]
-    assert t2.name == "guest_cannot_reboot"
+    assert t2.name == "worker_cannot_write"
     assert t2.expected is False
+
+    # The generated test must convert to the core PolicyTestCase, because that is what
+    # the shared evaluator takes. If this drifts, the console's dual gate silently
+    # stops testing what the PEP would enforce.
+    core_case = t1.as_policy_test_case()
+    assert core_case.operation == "invoice:write"
+    assert core_case.role == "senior"
+    assert core_case.amount == Decimal(0)
 
     # Verify the client was called with the correct prompt and schema
     mock_client.generate_structured.assert_called_once()

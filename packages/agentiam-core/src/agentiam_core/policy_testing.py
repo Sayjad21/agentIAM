@@ -53,6 +53,11 @@ class PolicyTestCase:
     principal_id: str = "kc:alice"
     task_id: str = "00000000-0000-0000-0000-000000000000"
     tags: tuple[str, ...] = ()
+    #: Whether an approver elevated this request (`context.elevated`). Defaults to the
+    #: value the evaluator previously hardcoded, so the existing corpus is unaffected.
+    elevated: bool = False
+    #: `context.environment`. Same reasoning: the default is what was hardcoded before.
+    environment: str = "production"
 
 
 @dataclass(frozen=True, slots=True)

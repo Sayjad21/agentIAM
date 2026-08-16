@@ -32,7 +32,7 @@
             <td>
                 <strong>{{ res.test.name }}</strong>
                 <div class="small muted">{{ res.test.description }}</div>
-                <div class="small muted">{{ res.test.principal_id }} -> {{ res.test.action }} -> {{ res.test.resource_type }}::{{ res.test.resource_id }}</div>
+                <div class="small muted">role={{ res.test.role }} depth={{ res.test.depth }} &rarr; {{ res.test.operation }} on {{ res.test.tool }}{% if res.test.amount and res.test.amount != "0" %} (amount {{ res.test.amount }}){% endif %}{% if res.test.elevated %} elevated{% endif %}</div>
             </td>
             <td>
                 {% if res.test.expected %}

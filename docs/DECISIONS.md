@@ -1680,3 +1680,62 @@ denies everything and would take the demo down, so it must be *refused* (409), n
 as a malformed request (422). Measured: httpx drops an empty form value, so a required field
 yields 422, while a browser sends `source=` and would reach the gate. Defaulting to `""`
 makes both paths agree on 409, and the browser is the path that matters.
+
+---
+
+## ADR-040 — The compiler runs on hosted inference for now; local is the production target
+
+**Date:** 2026-08-16
+**Status:** accepted — **supersedes ADR-032's no-egress guarantee**
+**Affects:** `agentiam_controlplane.nl_compiler.llm`, T-028, T-029, `DEMO.md` F-1, NFR-10
+
+**Context:** ADR-032 hardcoded the compiler's base URL to `127.0.0.1` specifically so that
+external egress was impossible. That was the right call for a system whose selling point is
+control over what agents may do — and it is not what the measurements support today.
+
+Against `qwen2.5:7b-instruct-q4_0`, resident in 5.32 GB of VRAM on a development GPU
+(ADR-038): cold generation **216.3 s**, warm median **45.2 s**, worst warm **233.7 s**.
+Demo beat 5 is budgeted **90 s end to end**. And that is the *favourable* case: the
+deployment target is a cloud VM without a GPU, where a 7B model is markedly slower still.
+Renting GPU inference is not affordable at prototype stage.
+
+**Decision:** the compiler talks to a pluggable `LLMClient`. `GroqClient` (hosted) is the
+default while AgentIAM is a prototype; `OllamaClient` (strictly local, unchanged) remains a
+first-class backend. `AGENTIAM_LLM_BACKEND` selects, and with nothing set a present
+`GROQ_API_KEY` means Groq while its absence falls back to local — so a machine with no key
+still runs rather than failing at import.
+
+**This is a real trade, and it should be stated rather than glossed:**
+
+* **Egress.** The operator's policy text now leaves the machine for the compiler path only.
+  Tokens, decisions, budgets, the ledger and the audit chain remain entirely local — the
+  enforcement core never had, and still has no, network dependency. What is exported is one
+  English sentence and the Cedar it compiles to.
+* **`DEMO.md` F-1** claimed "everything is local, zero external dependencies". That claim is
+  now false for beat 5 and F-1 is rewritten around the local fallback instead — which is a
+  *better* drill, since it exercises a real capability rather than asserting one.
+* **Determinism.** ADR-032 claimed reproducibility from `temperature=0` and `seed=42`.
+  Hosted inference makes that best-effort at most. The compiler does not depend on it: what
+  makes a generated policy safe to activate is the corpus gate (ADR-039), not
+  reproducibility. This is worth being precise about, because ADR-032 overstated it even
+  locally — a fixed seed constrains sampling, not kernel-level nondeterminism.
+* **NFR-10 / §14.4.** Unaffected. The IP claim is about authorship of this repository's
+  code, and calling a third-party API no more transfers ownership than calling Postgres
+  does. But the *narrative* is weaker — "runs on your hardware" is a stronger story than
+  "our prompt against someone's API", which is part of why local remains the target.
+
+**Rationale for the shape rather than a straight swap:** selection is configuration, so the
+migration back is a config flip, not a rewrite. `tests/unit/test_llm_backend.py` pins that
+property — the promise is checked rather than merely asserted. `OllamaError` now subclasses
+`LLMError` so callers, including T-031's deferred template fallback, catch one type
+regardless of which backend is live.
+
+**The key never appears in code.** It is read from `GROQ_API_KEY`; `.gitignore` already
+covers `.env` and `.env.*`; `.env.example` documents the variable with an empty value. A
+missing key raises at construction rather than at first request, because failing when the
+console starts is far easier to diagnose than failing the first time an operator writes a
+policy on stage. HTTP errors deliberately do not echo the response body, since a provider
+error can repeat the request content — the operator's policy text — into the console UI.
+
+**Resumption trigger for the migration:** funded inference hardware, or a customer whose
+data residency terms forbid the hop. Either flips `AGENTIAM_LLM_BACKEND` to `ollama`.

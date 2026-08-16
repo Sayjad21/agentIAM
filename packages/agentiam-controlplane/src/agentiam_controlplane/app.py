@@ -86,8 +86,8 @@ def evaluate_case(engine: cedarpy.PolicySet, case: PolicyTestCase) -> PolicyVerd
         "context": {
             "amount": _as_cedar_decimal(case.amount),
             "arg_digest": "",
-            "elevated": False,
-            "environment": "production",
+            "elevated": case.elevated,
+            "environment": case.environment,
         },
     }
 
@@ -221,24 +221,20 @@ def create_app() -> FastAPI:
                 context={"error": f"Generated Cedar is invalid: {exc}"},
             )
 
-        # 1. Evaluate auto-generated tests
+        # 1. Evaluate the auto-generated tests — through the *same* evaluator the corpus
+        #    and the activation gate use. They previously ran against an empty entity
+        #    list, so they could only turn on guessed ids rather than on the policy being
+        #    right (STATUS gap 19).
         auto_test_results = []
         auto_tests_passed = True
 
         for t in output.tests:
-            req = {
-                "principal": f'User::"{t.principal_id}"',  # Simplification for generated tests
-                "action": f'Action::"{t.action}"',
-                "resource": f'{t.resource_type}::"{t.resource_id}"',
-                "context": {},
-            }
             try:
-                res = cedarpy.is_authorized(req, candidate_engine, [])
-                allowed = res.decision is cedarpy.Decision.Allow
-                passed = allowed == t.expected
+                verdict = evaluate_case(candidate_engine, t.as_policy_test_case())
+                passed = verdict.allowed == t.expected
                 if not passed:
                     auto_tests_passed = False
-                auto_test_results.append({"test": t, "allowed": allowed, "passed": passed})
+                auto_test_results.append({"test": t, "allowed": verdict.allowed, "passed": passed})
             except Exception as exc:
                 auto_tests_passed = False
                 auto_test_results.append({"test": t, "error": str(exc), "passed": False})

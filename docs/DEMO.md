@@ -31,7 +31,7 @@ Rehearse **every single one** of these before the presentation. Each must have a
 
 | # | Failure | What happens | Recovery |
 |---|---|---|---|
-| F-1 | No internet | Everything is local — Ollama, Postgres, Redis, all containers. | Say so. It's a selling point: "zero external dependencies." |
+| F-1 | No internet | **Beat 5 only.** Since ADR-040 the NL→Cedar compiler calls hosted inference; everything else — tokens, decisions, budgets, ledger, audit chain, Postgres, Redis — is local and unaffected. | Set `AGENTIAM_LLM_BACKEND=ollama` and restart the console: the compiler falls back to the local model. Narrate honestly: "enforcement never left this machine; only the English-to-policy step is hosted, and it fails over to on-device inference." Rehearse this — the local model is slower (ADR-038), so know what the wait looks like. |
 | F-2 | Ollama slow or down | Beat 5 (NL→Cedar) hangs. | Template fallback engages automatically (T-031). The flow is identical. Narrate: "the template fallback just activated — this is a production-grade failsafe." |
 | F-3 | Postgres restarts mid-demo | PEPs fail closed. No spend goes through. | Narrate: "Fail-closed is the correct behaviour for a financial system. Watch the PEPs resume when the DB comes back." Then wait 10 seconds. |
 | F-4 | Judge input breaks the parser | Beat 5: judge types something the compiler can't parse. | Clarifying-question path engages. Also narrate as a feature: "rather than guessing, the system asks for clarification." |

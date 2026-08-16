@@ -6,13 +6,17 @@ from typing import Any, Final
 
 import httpx
 
+from agentiam_controlplane.nl_compiler.llm import LLMError
+
 logger = logging.getLogger(__name__)
 
 
-class OllamaError(Exception):
-    """Raised when Ollama generation fails (network, timeout, or bad response)."""
+class OllamaError(LLMError):
+    """Raised when Ollama generation fails (network, timeout, or bad response).
 
-    pass
+    Subclasses `LLMError` so a caller can catch either backend's failure without knowing
+    which is configured (ADR-040), while existing `except OllamaError` sites keep working.
+    """
 
 
 #: Measured against `qwen2.5:7b-instruct-q4_0`, resident in 5.32 GB of VRAM on the

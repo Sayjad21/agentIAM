@@ -143,20 +143,19 @@ def test_compile_valid_policy(mock_compile: MagicMock) -> None:
     """Test that a valid NL prompt generates Cedar and evaluates both auto-tests and corpus."""
     from agentiam_controlplane.nl_compiler.compiler import CompilerOutput, CompilerTestCase
 
-    policy = 'permit(principal == Agent::"agent-1", action, resource);'
+    policy = 'permit(principal, action == Action::"invoice:read", resource);'
 
     async_mock = AsyncMock(
         return_value=CompilerOutput(
             cedar_source=policy,
             tests=[
                 CompilerTestCase(
-                    name="test1",
-                    description="test",
+                    name="worker_reads",
+                    description="any agent may read invoices",
                     expected=True,
-                    principal_id="admin",
-                    action="do",
-                    resource_type="System",
-                    resource_id="1",
+                    role="worker",
+                    operation="invoice:read",
+                    tool="invoice_api",
                 )
             ],
         )

@@ -1,212 +1,272 @@
-[
-  {
-    "nl": "Admins can do anything.",
-    "expected_tests": [
-      {"principal_id": "admin", "action": "system:reboot", "resource_type": "System", "expected": true},
-      {"principal_id": "user", "action": "system:reboot", "resource_type": "System", "expected": false}
-    ]
+{
+  "schema": {
+    "version": 2,
+    "why": "v1 could not be passed. Of 30 cases the positive principal id appeared verbatim in the English in only 10; 13 needed an arbitrary suffix guessed and 7 named an id the prompt never mentioned. Worse, the harness passed entities=[], so role and ownership did not exist at evaluation time and the only way to 'pass' was to emit a policy about one named individual. v2 evaluates against AgentIAM's own entity model, so a case is won by generalising (principal.role == 'senior') rather than by guessing an id.",
+    "principal": "Agent::\"agent-1\" with attrs role, depth, task_id, principal_id",
+    "resource": "Tool::\"<tool>\" with attrs tool_id, server, sensitivity, is_external",
+    "context": "amount (decimal), arg_digest, elevated, environment",
+    "tools": "invoice_api low | vendor_api low | payment_api critical+external | email_internal low | email_external medium+external",
+    "note": "reference_cedar is the intended answer. It is validated without the model, so a failing instrument is caught before any generation run."
   },
-  {
-    "nl": "Users can read their own documents.",
-    "expected_tests": [
-      {"principal_id": "alice", "action": "document:read", "resource_type": "Document", "expected": true},
-      {"principal_id": "bob", "action": "document:read", "resource_type": "Document", "expected": false}
-    ]
-  },
-  {
-    "nl": "Managers can approve expenses.",
-    "expected_tests": [
-      {"principal_id": "manager1", "action": "expense:approve", "resource_type": "Expense", "expected": true},
-      {"principal_id": "worker1", "action": "expense:approve", "resource_type": "Expense", "expected": false}
-    ]
-  },
-  {
-    "nl": "Anyone can read public announcements.",
-    "expected_tests": [
-      {"principal_id": "guest", "action": "announcement:read", "resource_type": "Announcement", "expected": true},
-      {"principal_id": "user1", "action": "announcement:read", "resource_type": "Announcement", "expected": true}
-    ]
-  },
-  {
-    "nl": "Contractors can only access the staging environment.",
-    "expected_tests": [
-      {"principal_id": "contractor", "action": "env:access", "resource_type": "Environment", "expected": true},
-      {"principal_id": "contractor", "action": "env:access", "resource_type": "Production", "expected": false}
-    ]
-  },
-  {
-    "nl": "HR can view employee records.",
-    "expected_tests": [
-      {"principal_id": "hr_rep", "action": "record:view", "resource_type": "EmployeeRecord", "expected": true},
-      {"principal_id": "engineer", "action": "record:view", "resource_type": "EmployeeRecord", "expected": false}
-    ]
-  },
-  {
-    "nl": "Billing admins can refund payments.",
-    "expected_tests": [
-      {"principal_id": "billing_admin", "action": "payment:refund", "resource_type": "Payment", "expected": true},
-      {"principal_id": "sales", "action": "payment:refund", "resource_type": "Payment", "expected": false}
-    ]
-  },
-  {
-    "nl": "Only the creator of a post can edit it.",
-    "expected_tests": [
-      {"principal_id": "creator", "action": "post:edit", "resource_type": "Post", "expected": true},
-      {"principal_id": "reader", "action": "post:edit", "resource_type": "Post", "expected": false}
-    ]
-  },
-  {
-    "nl": "Security team can view audit logs.",
-    "expected_tests": [
-      {"principal_id": "security", "action": "audit:view", "resource_type": "AuditLog", "expected": true},
-      {"principal_id": "dev", "action": "audit:view", "resource_type": "AuditLog", "expected": false}
-    ]
-  },
-  {
-    "nl": "Support agents can reset passwords for regular users but not admins.",
-    "expected_tests": [
-      {"principal_id": "support", "action": "user:reset_password", "resource_type": "User", "expected": true},
-      {"principal_id": "support", "action": "admin:reset_password", "resource_type": "Admin", "expected": false}
-    ]
-  },
-  {
-    "nl": "Users in the 'engineering' group can deploy to staging.",
-    "expected_tests": [
-      {"principal_id": "engineer", "action": "deploy:staging", "resource_type": "Environment", "expected": true},
-      {"principal_id": "marketing", "action": "deploy:staging", "resource_type": "Environment", "expected": false}
-    ]
-  },
-  {
-    "nl": "Only owners can delete repositories.",
-    "expected_tests": [
-      {"principal_id": "owner", "action": "repo:delete", "resource_type": "Repository", "expected": true},
-      {"principal_id": "contributor", "action": "repo:delete", "resource_type": "Repository", "expected": false}
-    ]
-  },
-  {
-    "nl": "Any authenticated user can create a comment.",
-    "expected_tests": [
-      {"principal_id": "user", "action": "comment:create", "resource_type": "Comment", "expected": true},
-      {"principal_id": "anonymous", "action": "comment:create", "resource_type": "Comment", "expected": false}
-    ]
-  },
-  {
-    "nl": "System services can read secrets.",
-    "expected_tests": [
-      {"principal_id": "service", "action": "secret:read", "resource_type": "Secret", "expected": true},
-      {"principal_id": "user", "action": "secret:read", "resource_type": "Secret", "expected": false}
-    ]
-  },
-  {
-    "nl": "Project managers can update project timelines.",
-    "expected_tests": [
-      {"principal_id": "pm", "action": "timeline:update", "resource_type": "Project", "expected": true},
-      {"principal_id": "developer", "action": "timeline:update", "resource_type": "Project", "expected": false}
-    ]
-  },
-  {
-    "nl": "QA engineers can transition issues to 'testing'.",
-    "expected_tests": [
-      {"principal_id": "qa", "action": "issue:transition_testing", "resource_type": "Issue", "expected": true},
-      {"principal_id": "pm", "action": "issue:transition_testing", "resource_type": "Issue", "expected": false}
-    ]
-  },
-  {
-    "nl": "Compliance officers can freeze accounts.",
-    "expected_tests": [
-      {"principal_id": "compliance", "action": "account:freeze", "resource_type": "Account", "expected": true},
-      {"principal_id": "support", "action": "account:freeze", "resource_type": "Account", "expected": false}
-    ]
-  },
-  {
-    "nl": "Data scientists can query the data warehouse.",
-    "expected_tests": [
-      {"principal_id": "data_scientist", "action": "warehouse:query", "resource_type": "Warehouse", "expected": true},
-      {"principal_id": "intern", "action": "warehouse:query", "resource_type": "Warehouse", "expected": false}
-    ]
-  },
-  {
-    "nl": "Only the CFO can approve expenses over $10000.",
-    "expected_tests": [
-      {"principal_id": "cfo", "action": "expense:approve_large", "resource_type": "Expense", "expected": true},
-      {"principal_id": "vp", "action": "expense:approve_large", "resource_type": "Expense", "expected": false}
-    ]
-  },
-  {
-    "nl": "Users can view their own profile.",
-    "expected_tests": [
-      {"principal_id": "user1", "action": "profile:view", "resource_type": "Profile", "expected": true},
-      {"principal_id": "user2", "action": "profile:view", "resource_type": "Profile", "expected": false}
-    ]
-  },
-  {
-    "nl": "Designers can upload assets to the design folder.",
-    "expected_tests": [
-      {"principal_id": "designer", "action": "folder:upload", "resource_type": "DesignFolder", "expected": true},
-      {"principal_id": "writer", "action": "folder:upload", "resource_type": "DesignFolder", "expected": false}
-    ]
-  },
-  {
-    "nl": "IT admins can provision new laptops.",
-    "expected_tests": [
-      {"principal_id": "it_admin", "action": "laptop:provision", "resource_type": "Hardware", "expected": true},
-      {"principal_id": "hr", "action": "laptop:provision", "resource_type": "Hardware", "expected": false}
-    ]
-  },
-  {
-    "nl": "Anyone can view the company directory.",
-    "expected_tests": [
-      {"principal_id": "employee", "action": "directory:view", "resource_type": "Directory", "expected": true},
-      {"principal_id": "contractor", "action": "directory:view", "resource_type": "Directory", "expected": true}
-    ]
-  },
-  {
-    "nl": "Legal team can approve vendor contracts.",
-    "expected_tests": [
-      {"principal_id": "legal", "action": "contract:approve", "resource_type": "Contract", "expected": true},
-      {"principal_id": "procurement", "action": "contract:approve", "resource_type": "Contract", "expected": false}
-    ]
-  },
-  {
-    "nl": "Sales reps can view their own pipeline.",
-    "expected_tests": [
-      {"principal_id": "sales1", "action": "pipeline:view", "resource_type": "Pipeline", "expected": true},
-      {"principal_id": "sales2", "action": "pipeline:view", "resource_type": "Pipeline", "expected": false}
-    ]
-  },
-  {
-    "nl": "Marketing can publish blogs but cannot delete them.",
-    "expected_tests": [
-      {"principal_id": "marketing", "action": "blog:publish", "resource_type": "Blog", "expected": true},
-      {"principal_id": "marketing", "action": "blog:delete", "resource_type": "Blog", "expected": false}
-    ]
-  },
-  {
-    "nl": "Operations can restart services during the maintenance window.",
-    "expected_tests": [
-      {"principal_id": "ops", "action": "service:restart", "resource_type": "Service", "expected": true},
-      {"principal_id": "dev", "action": "service:restart", "resource_type": "Service", "expected": false}
-    ]
-  },
-  {
-    "nl": "Finance can view payroll data.",
-    "expected_tests": [
-      {"principal_id": "finance", "action": "payroll:view", "resource_type": "Payroll", "expected": true},
-      {"principal_id": "hr", "action": "payroll:view", "resource_type": "Payroll", "expected": false}
-    ]
-  },
-  {
-    "nl": "Only superadmins can change the root policy.",
-    "expected_tests": [
-      {"principal_id": "superadmin", "action": "policy:change", "resource_type": "Policy", "expected": true},
-      {"principal_id": "admin", "action": "policy:change", "resource_type": "Policy", "expected": false}
-    ]
-  },
-  {
-    "nl": "Auditors have read-only access to all resources.",
-    "expected_tests": [
-      {"principal_id": "auditor", "action": "resource:read", "resource_type": "Any", "expected": true},
-      {"principal_id": "auditor", "action": "resource:write", "resource_type": "Any", "expected": false}
-    ]
-  }
-]
+  "cases": [
+    {
+      "nl": "Any agent may read invoices.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:read\", resource);",
+      "tests": [
+        {"name": "worker_reads", "description": "unconditional read", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "senior_reads", "description": "role is irrelevant here", "operation": "invoice:read", "tool": "invoice_api", "role": "senior", "expected": true},
+        {"name": "other_scope_denied", "description": "nothing else was permitted", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Any agent may read vendor records.",
+      "reference_cedar": "permit(principal, action == Action::\"vendor:read\", resource);",
+      "tests": [
+        {"name": "worker_reads_vendor", "description": "unconditional", "operation": "vendor:read", "tool": "vendor_api", "role": "worker", "expected": true},
+        {"name": "invoice_read_not_granted", "description": "only vendor:read was asked for", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Only senior agents may write invoices.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:write\", resource) when { principal.role == \"senior\" };",
+      "tests": [
+        {"name": "senior_writes", "description": "role matches", "operation": "invoice:write", "tool": "invoice_api", "role": "senior", "expected": true},
+        {"name": "worker_cannot_write", "description": "role does not match", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Only senior agents may send email.",
+      "reference_cedar": "permit(principal, action == Action::\"email:send\", resource) when { principal.role == \"senior\" };",
+      "tests": [
+        {"name": "senior_sends", "description": "role matches", "operation": "email:send", "tool": "email_internal", "role": "senior", "expected": true},
+        {"name": "worker_cannot_send", "description": "role does not match", "operation": "email:send", "tool": "email_internal", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Auditor agents may read invoices and vendor records, and nothing else.",
+      "reference_cedar": "permit(principal, action in [Action::\"invoice:read\", Action::\"vendor:read\"], resource) when { principal.role == \"auditor\" };",
+      "tests": [
+        {"name": "auditor_reads_invoice", "description": "first permitted scope", "operation": "invoice:read", "tool": "invoice_api", "role": "auditor", "expected": true},
+        {"name": "auditor_reads_vendor", "description": "second permitted scope", "operation": "vendor:read", "tool": "vendor_api", "role": "auditor", "expected": true},
+        {"name": "auditor_cannot_write", "description": "outside the two scopes", "operation": "invoice:write", "tool": "invoice_api", "role": "auditor", "expected": false},
+        {"name": "worker_gets_nothing", "description": "wrong role", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may initiate payments of at most 500000.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource) when { context.amount.lessThanOrEqual(decimal(\"500000.0\")) };",
+      "tests": [
+        {"name": "small_payment", "description": "under the ceiling", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "1000", "expected": true},
+        {"name": "payment_at_the_ceiling", "description": "the boundary is inclusive", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "500000", "expected": true},
+        {"name": "payment_over_the_ceiling", "description": "above the ceiling", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "500001", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may initiate payments below 10000.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource) when { context.amount.lessThan(decimal(\"10000.0\")) };",
+      "tests": [
+        {"name": "under", "description": "strictly below", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "9999", "expected": true},
+        {"name": "exactly_at_the_bound", "description": "'below' excludes the bound", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "10000", "expected": false}
+      ]
+    },
+    {
+      "nl": "Only senior agents may initiate payments above 100000.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource) when { context.amount.lessThanOrEqual(decimal(\"100000.0\")) || principal.role == \"senior\" };",
+      "tests": [
+        {"name": "worker_small_payment", "description": "under the threshold, any role", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "50000", "expected": true},
+        {"name": "worker_large_payment", "description": "over the threshold, wrong role", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "200000", "expected": false},
+        {"name": "senior_large_payment", "description": "over the threshold, right role", "operation": "payment:initiate", "tool": "payment_api", "role": "senior", "amount": "200000", "expected": true}
+      ]
+    },
+    {
+      "nl": "Agents may read invoices, but may not initiate any payment.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:read\", resource);\nforbid(principal, action == Action::\"payment:initiate\", resource);",
+      "tests": [
+        {"name": "read_allowed", "description": "the permitted scope", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "payment_forbidden", "description": "explicitly forbidden", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "1", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may read invoices, but never through an external tool.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:read\", resource);\nforbid(principal, action, resource) when { resource.is_external };",
+      "tests": [
+        {"name": "internal_tool_allowed", "description": "invoice_api is internal", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "external_tool_forbidden", "description": "email_external is external", "operation": "invoice:read", "tool": "email_external", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may send email, but only through internal tools.",
+      "reference_cedar": "permit(principal, action == Action::\"email:send\", resource) when { !resource.is_external };",
+      "tests": [
+        {"name": "internal_email", "description": "email_internal is not external", "operation": "email:send", "tool": "email_internal", "role": "worker", "expected": true},
+        {"name": "external_email", "description": "email_external is external", "operation": "email:send", "tool": "email_external", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "No agent may use a tool whose sensitivity is critical unless the agent is senior.",
+      "reference_cedar": "permit(principal, action, resource);\nforbid(principal, action, resource) when { resource.sensitivity == \"critical\" && principal.role != \"senior\" };",
+      "tests": [
+        {"name": "worker_on_low_tool", "description": "not critical", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "worker_on_critical_tool", "description": "payment_api is critical", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "1", "expected": false},
+        {"name": "senior_on_critical_tool", "description": "senior is exempt", "operation": "payment:initiate", "tool": "payment_api", "role": "senior", "amount": "1", "expected": true}
+      ]
+    },
+    {
+      "nl": "Agents may read invoices only at delegation depth 2 or shallower.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:read\", resource) when { principal.depth <= 2 };",
+      "tests": [
+        {"name": "depth_one", "description": "shallow", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "depth": 1, "expected": true},
+        {"name": "depth_two", "description": "the boundary is inclusive", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "depth": 2, "expected": true},
+        {"name": "depth_three", "description": "too deep", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "depth": 3, "expected": false}
+      ]
+    },
+    {
+      "nl": "Sub-agents deeper than depth 1 may not initiate payments.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource) when { principal.depth <= 1 };",
+      "tests": [
+        {"name": "root_agent_pays", "description": "depth 1", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "depth": 1, "amount": "10", "expected": true},
+        {"name": "sub_agent_cannot_pay", "description": "depth 2", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "depth": 2, "amount": "10", "expected": false}
+      ]
+    },
+    {
+      "nl": "Only senior agents at depth 1 may write invoices.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:write\", resource) when { principal.role == \"senior\" && principal.depth == 1 };",
+      "tests": [
+        {"name": "senior_at_root", "description": "both conditions hold", "operation": "invoice:write", "tool": "invoice_api", "role": "senior", "depth": 1, "expected": true},
+        {"name": "senior_too_deep", "description": "depth fails", "operation": "invoice:write", "tool": "invoice_api", "role": "senior", "depth": 2, "expected": false},
+        {"name": "worker_at_root", "description": "role fails", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "depth": 1, "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may use the invoice API for reading and writing invoices.",
+      "reference_cedar": "permit(principal, action in [Action::\"invoice:read\", Action::\"invoice:write\"], resource == Tool::\"invoice_api\");",
+      "tests": [
+        {"name": "read_on_invoice_api", "description": "permitted pair", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "write_on_invoice_api", "description": "permitted pair", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "read_on_a_different_tool", "description": "resource is constrained", "operation": "invoice:read", "tool": "vendor_api", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Only the payment API may be used to initiate payments.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource == Tool::\"payment_api\");",
+      "tests": [
+        {"name": "payment_on_payment_api", "description": "correct tool", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "5", "expected": true},
+        {"name": "payment_on_invoice_api", "description": "wrong tool", "operation": "payment:initiate", "tool": "invoice_api", "role": "worker", "amount": "5", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may do anything except send email.",
+      "reference_cedar": "permit(principal, action, resource);\nforbid(principal, action == Action::\"email:send\", resource);",
+      "tests": [
+        {"name": "read_allowed", "description": "not the excluded scope", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "email_excluded", "description": "the excluded scope", "operation": "email:send", "tool": "email_internal", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Worker agents may read invoices; senior agents may also write them.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:read\", resource);\npermit(principal, action == Action::\"invoice:write\", resource) when { principal.role == \"senior\" };",
+      "tests": [
+        {"name": "worker_reads", "description": "granted to all", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "senior_reads", "description": "granted to all", "operation": "invoice:read", "tool": "invoice_api", "role": "senior", "expected": true},
+        {"name": "senior_writes", "description": "extra grant", "operation": "invoice:write", "tool": "invoice_api", "role": "senior", "expected": true},
+        {"name": "worker_cannot_write", "description": "not granted", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may initiate payments only when the request is elevated by an approver.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource) when { context.elevated };",
+      "tests": [
+        {"name": "elevated_payment", "description": "approver elevated it", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "10", "elevated": true, "expected": true},
+        {"name": "unelevated_payment", "description": "no approval", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "10", "elevated": false, "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may write invoices only in the production environment.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:write\", resource) when { context.environment == \"production\" };",
+      "tests": [
+        {"name": "in_production", "description": "environment matches", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "environment": "production", "expected": true},
+        {"name": "in_staging", "description": "environment does not match", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "environment": "staging", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may read invoices and vendor records, but may not write anything.",
+      "reference_cedar": "permit(principal, action in [Action::\"invoice:read\", Action::\"vendor:read\"], resource);\nforbid(principal, action == Action::\"invoice:write\", resource);",
+      "tests": [
+        {"name": "invoice_read", "description": "permitted", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "vendor_read", "description": "permitted", "operation": "vendor:read", "tool": "vendor_api", "role": "worker", "expected": true},
+        {"name": "invoice_write", "description": "forbidden", "operation": "invoice:write", "tool": "invoice_api", "role": "senior", "expected": false}
+      ]
+    },
+    {
+      "nl": "Senior agents may initiate payments of at most 1000000; everyone else at most 1000.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource) when { principal.role == \"senior\" && context.amount.lessThanOrEqual(decimal(\"1000000.0\")) };\npermit(principal, action == Action::\"payment:initiate\", resource) when { principal.role != \"senior\" && context.amount.lessThanOrEqual(decimal(\"1000.0\")) };",
+      "tests": [
+        {"name": "senior_large", "description": "within the senior ceiling", "operation": "payment:initiate", "tool": "payment_api", "role": "senior", "amount": "900000", "expected": true},
+        {"name": "senior_over", "description": "above the senior ceiling", "operation": "payment:initiate", "tool": "payment_api", "role": "senior", "amount": "1000001", "expected": false},
+        {"name": "worker_small", "description": "within the worker ceiling", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "900", "expected": true},
+        {"name": "worker_over", "description": "above the worker ceiling", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "1100", "expected": false}
+      ]
+    },
+    {
+      "nl": "No agent may use an external tool at all.",
+      "reference_cedar": "permit(principal, action, resource);\nforbid(principal, action, resource) when { resource.is_external };",
+      "tests": [
+        {"name": "internal_ok", "description": "invoice_api is internal", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "external_blocked", "description": "payment_api is external", "operation": "payment:initiate", "tool": "payment_api", "role": "senior", "amount": "1", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may send email only when the request is elevated and the tool is internal.",
+      "reference_cedar": "permit(principal, action == Action::\"email:send\", resource) when { context.elevated && !resource.is_external };",
+      "tests": [
+        {"name": "elevated_internal", "description": "both conditions hold", "operation": "email:send", "tool": "email_internal", "role": "worker", "elevated": true, "expected": true},
+        {"name": "elevated_external", "description": "tool is external", "operation": "email:send", "tool": "email_external", "role": "worker", "elevated": true, "expected": false},
+        {"name": "unelevated_internal", "description": "not elevated", "operation": "email:send", "tool": "email_internal", "role": "worker", "elevated": false, "expected": false}
+      ]
+    },
+    {
+      "nl": "Only senior agents may read vendor records.",
+      "reference_cedar": "permit(principal, action == Action::\"vendor:read\", resource) when { principal.role == \"senior\" };",
+      "tests": [
+        {"name": "senior_reads_vendor", "description": "role matches", "operation": "vendor:read", "tool": "vendor_api", "role": "senior", "expected": true},
+        {"name": "worker_cannot", "description": "role does not match", "operation": "vendor:read", "tool": "vendor_api", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may initiate payments at most 250000, and never at depth 3 or deeper.",
+      "reference_cedar": "permit(principal, action == Action::\"payment:initiate\", resource) when { context.amount.lessThanOrEqual(decimal(\"250000.0\")) && principal.depth < 3 };",
+      "tests": [
+        {"name": "within_both", "description": "amount and depth both fine", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "1000", "depth": 2, "expected": true},
+        {"name": "amount_too_big", "description": "amount fails", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "300000", "depth": 1, "expected": false},
+        {"name": "too_deep", "description": "depth fails", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "10", "depth": 3, "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may read invoices in any environment, but may write them only in production.",
+      "reference_cedar": "permit(principal, action == Action::\"invoice:read\", resource);\npermit(principal, action == Action::\"invoice:write\", resource) when { context.environment == \"production\" };",
+      "tests": [
+        {"name": "read_in_staging", "description": "reads are unrestricted", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "environment": "staging", "expected": true},
+        {"name": "write_in_production", "description": "writes allowed in production", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "environment": "production", "expected": true},
+        {"name": "write_in_staging", "description": "writes blocked elsewhere", "operation": "invoice:write", "tool": "invoice_api", "role": "worker", "environment": "staging", "expected": false}
+      ]
+    },
+    {
+      "nl": "Agents may use low sensitivity tools freely.",
+      "reference_cedar": "permit(principal, action, resource) when { resource.sensitivity == \"low\" };",
+      "tests": [
+        {"name": "low_tool", "description": "invoice_api is low", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "critical_tool", "description": "payment_api is critical", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "1", "expected": false},
+        {"name": "medium_tool", "description": "email_external is medium", "operation": "email:send", "tool": "email_external", "role": "worker", "expected": false}
+      ]
+    },
+    {
+      "nl": "Senior agents may do anything; every other agent may only read invoices.",
+      "reference_cedar": "permit(principal, action, resource) when { principal.role == \"senior\" };\npermit(principal, action == Action::\"invoice:read\", resource);",
+      "tests": [
+        {"name": "senior_pays", "description": "seniors are unrestricted", "operation": "payment:initiate", "tool": "payment_api", "role": "senior", "amount": "5", "expected": true},
+        {"name": "worker_reads", "description": "the one grant workers have", "operation": "invoice:read", "tool": "invoice_api", "role": "worker", "expected": true},
+        {"name": "worker_cannot_pay", "description": "outside the worker grant", "operation": "payment:initiate", "tool": "payment_api", "role": "worker", "amount": "5", "expected": false}
+      ]
+    }
+  ]
+}
