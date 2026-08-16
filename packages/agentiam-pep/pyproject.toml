@@ -23,6 +23,12 @@ dependencies = [
     # Subscribing to the `agentiam:revocations` pub/sub channel — spec 07 §5.1, ADR-042.
     # Never imported from the `decide()` hot path; only the background consumer touches it.
     "redis>=5.0",
+    # Rust-backed counting Bloom filter in front of the exact revocation set — T-039,
+    # ADR-044. Same "official Rust engine via PyO3" pattern already used for `cedarpy`
+    # above; a pure-Python counting Bloom filter (`pyprobables`) measured ~370x slower
+    # per lookup than a plain `set` at this sizing, which would make it a net loss rather
+    # than a performance layer (ADR-044).
+    "fastbloom-rs>=0.5",
 ]
 
 [build-system]

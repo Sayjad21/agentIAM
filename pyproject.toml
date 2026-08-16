@@ -112,6 +112,14 @@ module = ["tests.*"]
 # Test bodies stay strict, but pytest fixtures are noisy about decorator types.
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+# `fastbloom-rs` (T-039, ADR-044) is a Rust extension with no stub package and no
+# `py.typed` marker. `agentiam_pep.revocation` narrows every value it touches to
+# `CountingBloomFilter`/plain `bool`/`str` immediately, so the untyped surface does not
+# leak past that one module.
+module = ["fastbloom_rs.*"]
+ignore_missing_imports = true
+
 # ---------------------------------------------------------------------------
 # pytest
 # ---------------------------------------------------------------------------

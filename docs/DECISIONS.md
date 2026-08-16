@@ -1967,3 +1967,72 @@ route configs and reason codes is that they agree via `PLAN.md`/the specs, not v
 runtime import. Introducing a cross-package import for one string constant would be a new,
 narrower coupling than the rest of the codebase has, for a value that changes approximately
 never.
+
+---
+
+## ADR-044 — `fastbloom-rs` for T-039's counting Bloom filter, chosen by measurement, not by name
+
+**Date:** 2026-08-17
+**Status:** accepted
+**Affects:** `agentiam-pep` (`revocation.py`, `pyproject.toml`), root `pyproject.toml` (mypy
+override), T-039
+
+**Context:** `PLAN.md` line 1157 requires "a counting Bloom filter plus exact set" in front
+of `RedisRevocationSet`'s exact set, sized for EC-R10 (10,000 revocations), for O(1)
+negative answers (spec 07 §3.2). Rule 7 requires a written justification before a new
+dependency lands, the same as ADR-042 for `redis`.
+
+**The obvious first choice failed on measurement, not on features.** `pyprobables` is the
+conventional pure-Python counting Bloom filter (MIT, well-documented `CountingBloomFilter`
+API). Probed against 10,000 128-hex-char ids (the real shape of a biscuit revocation id,
+spec 07 §3.1) at `false_positive_rate=0.01`: **~92 µs per `check()` call, ~920 ms for 10,000
+lookups** — a plain Python `set.__contains__` over the same 10,000 ids took **~0.76 ms**
+for the same count, roughly **900–1,200x faster than the Bloom filter meant to sit in front
+of it**. A "performance layer" that is three orders of magnitude slower than the thing it
+guards is a net loss, not a win — it would make every `is_revoked()` call slower than
+skipping the Bloom filter entirely, directly contradicting spec 07 §3.2's stated purpose
+("O(1) negative answers at scale"). This is exactly the class of claim `CLAUDE.md`'s
+working notes ask to be checked against the running system before being written down, so it
+was probed rather than assumed from the package's popularity.
+
+**Decision:** `fastbloom-rs>=0.5` (Apache-2.0, Rust-backed via PyO3-style bindings, ships
+`cp37-abi3` wheels for `win_amd64` and `manylinux2014_x86_64` — the same wheel-availability
+bar this workspace already applies to `cedarpy`/`cryptography`, so neither the dev host nor
+CI builds from source). Its `CountingBloomFilter` (`FilterBuilder(...)
+.build_counting_bloom_filter()`) measured **~0.25 µs per lookup at the same 10,000-id
+sizing — ~370x faster than `pyprobables`, and close to the plain-`set` baseline** — while
+still being a real counting Bloom filter with `add_str`/`contains_str`/`remove_str`
+(verified: `remove_str` on an added id makes `contains_str` false again), so it satisfies
+`PLAN.md`'s literal wording, not just its intent, and keeps `remove` available for whenever
+spec 07 §8's pruning job lands (not this ticket — nothing calls `remove_str` yet, since
+nothing un-revokes an id per spec 07 §9).
+
+**Also benchmarked and rejected:** `rbloom` (Rust-backed, ~0.10 µs/op, fastest of all
+four, but a plain Bloom filter with no counting/removal — would have needed its own
+deviation-from-`PLAN.md` justification for the "counting" word) and `bloom-filter2`
+(pure Python, ~52 µs/op — same order-of-magnitude problem as `pyprobables`, just less bad).
+
+**Placement (mirrors the handoff note's own recommendation):** the filter lives *inside*
+`RedisRevocationSet`, not as a separate class — `is_revoked()` checks `_bloom` first; a
+negative returns immediately without touching `_revoked` at all; a positive falls through
+to the existing `_revoked` membership check, which stays authoritative. `_bloom` is kept in
+lockstep with `_revoked`, updated in both `_pull_once` and `_handle_push`. `bloom_capacity`
+defaults to 10,000 (EC-R10) and `bloom_false_positive_rate` to 0.01, both constructor
+parameters — exceeding `bloom_capacity` degrades the false-positive rate (more lookups pay
+the `_revoked` fallthrough) but never correctness, since every Bloom positive is still
+checked against `_revoked`.
+
+**mypy:** `fastbloom-rs` ships no stub package and no `py.typed` marker, so
+`[[tool.mypy.overrides]] module = ["fastbloom_rs.*"]` with `ignore_missing_imports = true`
+was added to the root `pyproject.toml`. `disallow_any_unimported` still flags the one place
+the resulting `Any` would otherwise leak into a typed signature (`self._bloom`'s
+annotation); silenced there with an explanatory `# type: ignore[no-any-unimported]` rather
+than by relaxing the strict-mypy config the ADR-042/043 dependencies already meet.
+
+**Consequences:** one more compiled (Rust) dependency in `agentiam-pep`, alongside
+`cedarpy` and `cryptography` — same wheel-availability guarantee, same trust model (audited,
+named crate). The 10,000-id property test (`tests/unit/test_pep_revocation.py
+::TestBloomFilterZeroFalseDenials`) and the NFR-4 measurement
+(`tests/integration/test_revocation_nfr4.py`, real Redis + real Postgres, 3
+`RedisRevocationSet` instances, 60 real propagation samples) both exercise this choice
+directly rather than trusting the vendor's own benchmarks.

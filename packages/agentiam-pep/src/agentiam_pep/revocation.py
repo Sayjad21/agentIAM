@@ -13,8 +13,17 @@ path plus a periodic full-set pull as a correctness backstop (spec 07 §5), feed
 shape `InMemoryRevocationSet` already has. The `RevocationOracle` protocol `decide()` is
 written against does not change — `is_revoked(revocation_id) -> bool`, synchronous, in
 memory, no network — which is why a background consumer can replace the source without
-`decision.py` changing at all. A Bloom filter in front of the exact set (T-039) is a later,
-purely additive performance layer over what this module builds.
+`decision.py` changing at all.
+
+**T-039** adds a counting Bloom filter as the *first* check inside `RedisRevocationSet
+.is_revoked()` (ADR-044): a negative answer returns `False` immediately, skipping the exact
+set entirely — the O(1)-at-scale win spec 07 §3.2 describes. A positive answer is never
+trusted on its own (a Bloom filter's positives include false positives by construction) —
+it falls through to the same exact-set membership check this class already had, which is
+authoritative. This is purely additive: nothing is revoked that would not have been
+revoked before, and every id the exact set alone would report is still reported, since a
+Bloom filter has zero false *negatives* by construction, and `_bloom` is updated everywhere
+`_revoked` is.
 """
 
 from __future__ import annotations
@@ -26,12 +35,15 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from fastbloom_rs import FilterBuilder
+
 from agentiam_core.decision import OracleUnavailable
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
     import httpx
+    from fastbloom_rs import CountingBloomFilter
     from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
@@ -107,6 +119,16 @@ class RedisRevocationSet:
     `staleness_limit_s`, `is_revoked()` raises `OracleUnavailable` rather than answer from a
     set it can no longer vouch for. `decide()` already turns that into
     `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED` (rule 6).
+
+    **Bloom filter (T-039, ADR-044):** `_bloom` is a Rust-backed counting Bloom filter
+    (`fastbloom_rs`) mirroring `_revoked` — every id added to one is added to the other, in
+    both `_pull_once` and `_handle_push`. `is_revoked()` checks `_bloom` first; a negative
+    answer is trusted outright (a Bloom filter has zero false negatives by construction) and
+    returned without touching `_revoked` at all. A positive answer is not proof — it falls
+    through to the real `_revoked` membership check, which is authoritative. `bloom_capacity`
+    should be sized to the expected number of live revocations (EC-R10: 10,000); past that
+    size the filter's false-positive rate degrades but correctness does not, since every
+    positive still falls through to `_revoked`.
     """
 
     def __init__(
@@ -117,6 +139,8 @@ class RedisRevocationSet:
         pull_interval_s: float = 3.0,
         staleness_limit_s: float = 9.0,
         resubscribe_delay_s: float = 1.0,
+        bloom_capacity: int = 10_000,
+        bloom_false_positive_rate: float = 0.01,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         """Hold the clients; nothing runs until `start()` is awaited.
@@ -130,6 +154,11 @@ class RedisRevocationSet:
                 stops answering. Spec 07 §5.3 proposes 3x `pull_interval_s` — a single missed
                 tick from ordinary jitter should not trip it, a stuck consumer should.
             resubscribe_delay_s: Backoff between a dropped push connection and retrying.
+            bloom_capacity: Expected number of live revocations (EC-R10's 10,000, by
+                default) — sizes the Bloom filter's bit array and hash count.
+            bloom_false_positive_rate: Tolerable Bloom false-positive rate at
+                `bloom_capacity`. Only affects how often a lookup pays the `_revoked`
+                fallthrough, never correctness (§ above).
             now: Injected clock, so staleness is testable without real sleeps.
         """
         self._redis = redis_client
@@ -140,6 +169,12 @@ class RedisRevocationSet:
         self._now = now
 
         self._revoked: set[str] = set()
+        # `CountingBloomFilter` itself resolves to `Any` under the `fastbloom_rs.*`
+        # `ignore_missing_imports` override above — the annotation still documents the
+        # real type for readers, `disallow_any_unimported` is what's being silenced.
+        self._bloom: CountingBloomFilter = FilterBuilder(  # type: ignore[no-any-unimported]
+            bloom_capacity, bloom_false_positive_rate
+        ).build_counting_bloom_filter()
         self._since_seq = 0
         self._last_pull_at: datetime | None = None
 
@@ -177,6 +212,10 @@ class RedisRevocationSet:
     def is_revoked(self, revocation_id: str) -> bool:
         """Whether this block id has been revoked, per the last successful pull.
 
+        The Bloom filter (T-039) is checked first: a negative is returned immediately, an
+        O(1) answer that skips `_revoked` entirely. A positive falls through to `_revoked`,
+        the authoritative check, since a Bloom filter's positives are not proof.
+
         Raises:
             OracleUnavailable: No pull has succeeded recently enough to trust the set
                 (spec 07 §5.3). `decide()` fails closed on this.
@@ -189,6 +228,8 @@ class RedisRevocationSet:
                 f"revocation data is {age.total_seconds():.1f}s stale, "
                 f"over the {self._staleness_limit_s}s limit"
             )
+        if not self._bloom.contains_str(revocation_id):
+            return False
         return revocation_id in self._revoked
 
     def __len__(self) -> int:
@@ -210,7 +251,9 @@ class RedisRevocationSet:
             logger.warning("revocation pull failed", exc_info=True)
             return
         for entry in body["entries"]:
-            self._revoked.add(entry["block_id"])
+            block_id = entry["block_id"]
+            self._revoked.add(block_id)
+            self._bloom.add_str(block_id)
         self._since_seq = body["next_seq"]
         self._last_pull_at = self._now()
 
@@ -253,6 +296,8 @@ class RedisRevocationSet:
     def _handle_push(self, raw: bytes | str) -> None:
         try:
             payload = json.loads(raw)
-            self._revoked.add(str(payload["block_id"]))
+            block_id = str(payload["block_id"])
+            self._revoked.add(block_id)
+            self._bloom.add_str(block_id)
         except (json.JSONDecodeError, KeyError, TypeError):
             logger.warning("malformed revocation push message: %r", raw)

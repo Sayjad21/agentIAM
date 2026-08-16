@@ -8,6 +8,7 @@ ship (ADR-027) — that one would have reported work it did not do.
 
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -205,6 +206,53 @@ class TestRedisRevocationSetPush:
         oracle._handle_push(b"not json")
         oracle._handle_push(b"{}")
         assert len(oracle) == 0
+
+
+class TestBloomFilterZeroFalseDenials:
+    """T-039, `PLAN.md` line 1157: 10,000 random non-revoked ids, none denied.
+
+    128 hex chars matches the real shape of a biscuit revocation id (spec 07 §3.1). Ids are
+    drawn from `secrets.token_hex`, not `hypothesis`: the property under test is a single
+    aggregate fact over one batch of 10,000 lookups (spec 07's own EC-R10 sizing), not a
+    per-example shrinkable claim — hypothesis's example-at-a-time model does not fit it.
+    """
+
+    async def test_zero_false_denials_and_zero_false_negatives_at_10k(self) -> None:
+        revoked_ids = [secrets.token_hex(64) for _ in range(10_000)]
+        probe_ids = [secrets.token_hex(64) for _ in range(10_000)]
+
+        oracle = _a_set(
+            http=_FakeControlPlaneClient(
+                [
+                    {
+                        "entries": [{"block_id": rid} for rid in revoked_ids],
+                        "next_seq": len(revoked_ids),
+                    }
+                ]
+            )
+        )
+        await oracle._pull_once()
+
+        # Safety first (INV-10): every id actually revoked must still be reported revoked.
+        false_negatives = [rid for rid in revoked_ids if not oracle.is_revoked(rid)]
+        assert false_negatives == []
+
+        # The property `PLAN.md` names: no unrevoked id is ever denied, regardless of the
+        # Bloom filter's own false-positive rate — every Bloom positive must fall through
+        # to the authoritative `_revoked` check.
+        false_denials = [pid for pid in probe_ids if oracle.is_revoked(pid)]
+        assert false_denials == []
+
+        # Reachability audit (matches `tests/property/test_strategies.py`'s own standard):
+        # prove this run actually exercised the Bloom-positive-but-not-revoked fallthrough
+        # path rather than passing vacuously because no collision ever occurred at this
+        # sizing. `_bloom.contains_str` alone would wrongly deny every one of these.
+        bloom_false_positives = [pid for pid in probe_ids if oracle._bloom.contains_str(pid)]
+        assert bloom_false_positives, (
+            "no Bloom false positive occurred among 10,000 probes — this run cannot tell "
+            "the fallthrough-to-_revoked path from a Bloom filter that trusts its own "
+            "positives, so the property above is not actually being tested"
+        )
 
 
 class TestRedisRevocationSetLifecycle:
