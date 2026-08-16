@@ -610,6 +610,11 @@ class DecisionRecord(BaseModel):
     budget_after: Budget
     reservation_id: UUID | None = None
     drift_score: Decimal | None = None
+    #: The feature vector behind `drift_score`, when one was computed (T-033, spec 06 §5).
+    #: Absent features are omitted rather than stored as null — recording `f1: null` would
+    #: claim an observation that never happened, and a deferred dataset built on that
+    #: cannot tell "not measured" from "measured as zero".
+    drift_features: dict[str, Decimal] | None = None
     latency_us: int = Field(ge=0)
     elevated_by: str | None = None
 
@@ -627,6 +632,17 @@ class DecisionRecord(BaseModel):
     @classmethod
     def _no_float_score(cls, value: object) -> object:
         return _reject_float(value)
+
+    @field_validator("drift_features", mode="before")
+    @classmethod
+    def _no_float_features(cls, value: object) -> object:
+        """Rule 4 reaches inside the dict too — a float here is still a float."""
+        if isinstance(value, dict):
+            for name, item in value.items():
+                _reject_float(item)
+                if not isinstance(name, str):
+                    raise ValueError("drift_features keys must be feature names")
+        return value
 
     @field_validator("timestamp")
     @classmethod

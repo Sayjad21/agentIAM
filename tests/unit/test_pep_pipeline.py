@@ -24,17 +24,20 @@ import httpx
 import pytest
 
 from agentiam_core.errors import ReasonCode
+from agentiam_core.hashing import hash_object
 from agentiam_core.models import (
     Budget,
     BudgetDimension,
     DecisionRecord,
     Mandate,
     Outcome,
+    RequestContext,
     ScopeSubset,
 )
 from agentiam_core.tokens import RootKeySet, generate_keypair, mint_root
 from agentiam_pep.app import create_app
 from agentiam_pep.config import PepSettings
+from agentiam_pep.drift import FeatureExtractor
 from agentiam_pep.emitter import BackPressure, DecisionEmitter, EmitterSettings
 from agentiam_pep.errors import ReservationInsufficientError
 from agentiam_pep.extractor import RouteTable
@@ -138,12 +141,54 @@ def principal_for(token: VerifiedToken) -> AgentPrincipal:
     )
 
 
+#: Names `inv_001` deliberately — the id the invoice route actually extracts. An earlier
+#: draft said `INV-2291`, and f5 correctly scored 0.0 because the argument really did not
+#: appear in the task. The feature was right and the fixture was wrong; worth a note,
+#: because a test whose task text and arguments disagree is testing drift, not plumbing.
+TASK_INTENT = "Read invoice inv_001 from vendor Rahman Textiles"
+
+
+class FakeDrift:
+    """A drift oracle with a fixed answer, so the pipeline's plumbing is what is tested."""
+
+    def __init__(self, score: Decimal | None) -> None:
+        """Report `score` for any request carrying both intent strings."""
+        self._score = score
+
+    def score_for(self, context: RequestContext) -> Decimal | None:
+        if not context.task_intent_text or not context.action_intent_text:
+            return None
+        return self._score
+
+
+def intent_headers(
+    mandate: Mandate | None = None, action: str = "Read invoice inv_001"
+) -> list[tuple[str, str]]:
+    """Bearer plus the two intent strings, with a task text that hash-matches the token.
+
+    The mandate defaults to one whose `intent_hash` **is** `hash_object(TASK_INTENT)`.
+    That is not decoration: spec 06 §1.1 has the PEP hash the asserted task text and
+    compare it against the token, so a mandate carrying an arbitrary hash denies with
+    `INTENT_MISMATCH` at step 3 and drift is never reached. Getting this wrong would make
+    every drift test below pass for the wrong reason — by never running drift at all.
+    """
+    if mandate is None:
+        mandate = a_mandate(intent_hash=hash_object(TASK_INTENT))
+    return [
+        *bearer(mandate),
+        ("AgentIAM-Task-Intent", TASK_INTENT),
+        ("AgentIAM-Action-Intent", action),
+    ]
+
+
 async def a_pipeline(
     *,
     emitter: DecisionEmitter | None = None,
     revoked: list[str] | None = None,
     policy_source: str = POLICY,
     granted: Decimal = Decimal(1000),
+    drift: FakeDrift | None = None,
+    features: FeatureExtractor | None = None,
 ) -> tuple[Pipeline, CollectingSink, LeasePool]:
     sink = CollectingSink()
     pool = LeasePool(
@@ -165,6 +210,8 @@ async def a_pipeline(
         revocation=InMemoryRevocationSet(revoked or []),
         settings=PipelineSettings(pep_id="pep-1"),
         now=lambda: NOW,
+        drift_oracle=drift,
+        features=features,
     )
     return pipeline, sink, pool
 
@@ -354,6 +401,126 @@ class TestRecording:
         await pipeline.authorize(method="GET", path="/invoices/inv_001")
         await emitter.flush()
         assert sink.records == []
+
+
+class TestDriftIsRecorded:
+    """A score that decides something and is then thrown away is not evidence.
+
+    `decide()` has populated `Decision.drift_score` since T-032, and `DecisionRecord` has
+    carried the field since T-019 — but the pipeline never read one into the other, so it
+    was `None` on every record, including on a `DRIFT_ESCALATION` denial where the score is
+    the entire justification. `log_only` mode was worse than useless: two embedding
+    round-trips per request producing nothing observable, which is exactly what spec 06 §3
+    says that mode is *for*.
+    """
+
+    async def test_the_score_reaches_the_record_on_an_allow(self) -> None:
+        pipeline, sink, _ = await a_pipeline(drift=FakeDrift(Decimal("0.25")))
+        emitter = pipeline._emitter
+        await emitter.start()
+        await pipeline.authorize(method="GET", path="/invoices/inv_001", headers=intent_headers())
+        await emitter.flush()
+        assert sink.records[0].drift_score == Decimal("0.25")  # type: ignore[attr-defined]
+
+    async def test_the_score_reaches_the_record_on_an_escalation(self) -> None:
+        """The case that matters: a denial's own justification must be auditable."""
+        pipeline, sink, _ = await a_pipeline(drift=FakeDrift(Decimal("0.9")))
+        emitter = pipeline._emitter
+        await emitter.start()
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=intent_headers()
+        )
+        await emitter.flush()
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.DRIFT_ESCALATION
+        assert sink.records[0].drift_score == Decimal("0.9")  # type: ignore[attr-defined]
+
+    async def test_an_unscored_request_records_no_score(self) -> None:
+        # Absent must stay distinguishable from 0.0 — a request nobody assessed is not a
+        # request assessed as perfectly aligned.
+        pipeline, sink, _ = await a_pipeline()
+        emitter = pipeline._emitter
+        await emitter.start()
+        await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        await emitter.flush()
+        assert sink.records[0].drift_score is None  # type: ignore[attr-defined]
+
+    async def test_features_reach_the_record(self) -> None:
+        pipeline, sink, _ = await a_pipeline(features=FeatureExtractor(None))
+        emitter = pipeline._emitter
+        await emitter.start()
+        await pipeline.authorize(method="GET", path="/invoices/inv_001", headers=intent_headers())
+        await emitter.flush()
+        # f5 needs no model, so it is present even with embeddings disabled.
+        assert sink.records[0].drift_features == {  # type: ignore[attr-defined]
+            "f5": Decimal("1.0000")
+        }
+
+    async def test_absent_features_are_omitted_rather_than_recorded_as_null(self) -> None:
+        pipeline, sink, _ = await a_pipeline(features=FeatureExtractor(None))
+        emitter = pipeline._emitter
+        await emitter.start()
+        # No intent headers, so there is no task text and nothing is computable.
+        await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        await emitter.flush()
+        assert sink.records[0].drift_features is None  # type: ignore[attr-defined]
+
+    async def test_f5_records_a_mismatch_when_the_argument_is_not_in_the_task(self) -> None:
+        """Found by getting a fixture wrong, and worth keeping.
+
+        The task authorises `inv_001`; the request fetches `inv_999`. f5 scores 0.0 — the
+        symbolic feature noticing an argument the task never mentioned. This is the shape
+        of the amount attack spec 06 §5.1 measured embeddings failing to see, and it is now
+        visible in the audit record rather than only inside the extractor.
+        """
+        pipeline, sink, _ = await a_pipeline(features=FeatureExtractor(None))
+        emitter = pipeline._emitter
+        await emitter.start()
+        await pipeline.authorize(method="GET", path="/invoices/inv_999", headers=intent_headers())
+        await emitter.flush()
+        assert sink.records[0].drift_features == {  # type: ignore[attr-defined]
+            "f5": Decimal("0.0000")
+        }
+
+    async def test_a_broken_extractor_does_not_break_the_request(self) -> None:
+        """Spec 06 §5.3: features are observational, so they must never deny.
+
+        `FeatureExtractor.extract` already swallows its own failures, so this exercises
+        the pipeline's second line of defence — the one that matters if a future extractor
+        forgets. No feature is worth failing a request policy and budget both allowed.
+        """
+
+        class BrokenExtractor(FeatureExtractor):
+            def extract(self, context: RequestContext) -> object:  # type: ignore[override]
+                raise RuntimeError("extractor exploded")
+
+        pipeline, sink, _ = await a_pipeline(features=BrokenExtractor(None))
+        emitter = pipeline._emitter
+        await emitter.start()
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=intent_headers()
+        )
+        await emitter.flush()
+        assert isinstance(result, Authorized)
+        assert sink.records[0].drift_features is None  # type: ignore[attr-defined]
+
+    async def test_the_digest_is_still_the_only_argument_trace(self) -> None:
+        """NFR-5: features must not smuggle argument values into the record."""
+        pipeline, sink, _ = await a_pipeline(features=FeatureExtractor(None))
+        emitter = pipeline._emitter
+        await emitter.start()
+        await pipeline.authorize(
+            method="POST",
+            path="/payments",
+            headers=intent_headers(),
+            body=b'{"amount": "250.0000", "recipient": {"account_id": "acct_secret"}}',
+        )
+        await emitter.flush()
+        assert "acct_secret" not in sink.records[0].model_dump_json()  # type: ignore[attr-defined]
 
 
 class TestEmitPrecedesForward:

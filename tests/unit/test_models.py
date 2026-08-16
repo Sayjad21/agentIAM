@@ -421,6 +421,25 @@ class TestValidationEdges:
         with pytest.raises(ValidationError, match="float"):
             a_decision(drift_score=0.8)
 
+    def test_decision_record_rejects_float_inside_drift_features(self) -> None:
+        """Rule 4 has to reach inside the dict — a float there is still a float."""
+        with pytest.raises(ValidationError, match="float"):
+            a_decision(drift_features={"f5": 1.0})
+
+    def test_decision_record_rejects_a_non_string_feature_name(self) -> None:
+        # The keys are feature names that land in an audit record and, later, a research
+        # dataset. A non-string key would serialize to something no reader can interpret.
+        with pytest.raises(ValidationError, match="feature names"):
+            a_decision(drift_features={5: Decimal("1.0")})
+
+    def test_decision_record_accepts_decimal_drift_features(self) -> None:
+        record = a_decision(drift_features={"f5": Decimal("1.0000")})
+        assert record.drift_features == {"f5": Decimal("1.0000")}
+
+    def test_drift_features_default_to_absent(self) -> None:
+        # Absent means not measured; it must not be confused with an empty measurement.
+        assert a_decision().drift_features is None
+
     def test_to_scaled_rejects_inexact_value(self) -> None:
         """Guarded upstream by decimal_places, so exercise the helper directly."""
         from agentiam_core.models import _to_scaled

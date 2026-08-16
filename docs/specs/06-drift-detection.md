@@ -101,10 +101,13 @@ cycle; T-033 delivers the **computation**, against the day one does.
 
 Three of the six are in scope. f3, f4 and f6 are deferred — see ADR-036.
 
-Persisting the vector is deliberately *not* part of T-033. `DecisionRecord` does not yet
-carry the drift score `decide()` already produces — the pipeline drops it — so there is no
-honest place to put a feature vector until that is fixed. Wiring both at once, on the ticket
-that fixes the record, is the smaller change.
+The vector is persisted on `DecisionRecord.drift_features`, alongside `drift_score`. Both
+were wired together, because until then the pipeline dropped the score `decide()` already
+produced — so there was no honest place to put a vector either.
+
+**Absent features are omitted from the dict, never stored as null.** A deferred dataset
+(T-034) has to be able to tell *not measured* from *measured as zero*, and f5 = 0.0 is a
+real observation: every argument was foreign to the task.
 
 | # | Feature | Type | Inputs |
 |---|---|---|---|
@@ -162,3 +165,17 @@ per the core purity rule (`PLAN.md` §5).
 Feature extraction is observational this cycle. §2.1 still governs: the v0 rule-based score is
 what escalates, features are recorded alongside it, and an extraction failure degrades to
 absent features rather than to a denial.
+
+This is defended twice — `FeatureExtractor.extract` swallows its own failures, and the
+pipeline swallows anything that escapes it. The second guard exists because the first is a
+convention a future extractor could forget, and no feature is worth failing a request that
+policy and budget both allowed. Both are tested by making an extractor raise.
+
+### 5.4 What f5 sees that the rest of the pipeline does not
+
+f5 compares argument values against the authenticated task text, so it notices an argument
+the task never mentioned — a payment to an unnamed vendor, or an invoice id that is not the
+one the operator approved. That is the same shape as the amount attack in §5.1, and it is
+now visible in the audit record rather than only inside the extractor.
+
+It is a *record*, not a gate. Nothing denies on f5 this cycle.

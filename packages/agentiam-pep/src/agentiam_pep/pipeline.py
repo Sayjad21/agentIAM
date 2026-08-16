@@ -19,6 +19,7 @@ Step 9 (settle) runs after the response, because only then is the real amount kn
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -39,11 +40,14 @@ if TYPE_CHECKING:
 
     from agentiam_core.models import Caveat, DecisionRecord
     from agentiam_core.tokens import RootKeySet, VerifiedToken
+    from agentiam_pep.drift import FeatureExtractor
     from agentiam_pep.emitter import DecisionEmitter
     from agentiam_pep.extractor import Extraction, RouteTable
     from agentiam_pep.lease import Reservation
     from agentiam_pep.policy import AgentPrincipal, CedarEngine
     from agentiam_pep.pool import LeasePool
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["Authorized", "Pipeline", "PipelineSettings", "Refused", "status_for"]
 
@@ -154,6 +158,7 @@ class Pipeline:
         now: Callable[[], datetime],
         caveats_for: Callable[[VerifiedToken], Sequence[Caveat]] | None = None,
         drift_oracle: DriftOracle | None = None,
+        features: FeatureExtractor | None = None,
     ) -> None:
         """Assemble the five oracles and the two adapters the steps need."""
         self._routes = routes
@@ -167,6 +172,7 @@ class Pipeline:
         self._now = now
         self._caveats_for = caveats_for or (lambda _token: ())
         self._drift_oracle = drift_oracle
+        self._features = features
 
     async def authorize(
         self,
@@ -254,6 +260,8 @@ class Pipeline:
             detail=decision.reason_detail,
             reservation=reservation,
             started=started,
+            drift_score=decision.drift_score,
+            context_for_features=context,
         )
 
         # --- step 10, deliberately before step 8 -----------------------------------
@@ -396,11 +404,14 @@ class Pipeline:
         detail: str,
         reservation: Reservation | None,
         started: float,
+        drift_score: Decimal | None = None,
+        context_for_features: RequestContext | None = None,
     ) -> DecisionRecord:
         from agentiam_core.models import Budget, DecisionRecord
 
         before = self._pool.remaining(BudgetDimension.SPEND_BDT)
         spent = reservation.amount if reservation is not None else Decimal(0)
+        features = self._feature_vector(context_for_features)
         return DecisionRecord(
             decision_id=decision_id,
             trace_id=trace_id,
@@ -421,5 +432,26 @@ class Pipeline:
             budget_before=Budget(spend_bdt=before + spent),
             budget_after=Budget(spend_bdt=before),
             reservation_id=reservation.id if reservation is not None else None,
+            drift_score=drift_score,
+            drift_features=features,
             latency_us=int((time.perf_counter() - started) * 1e6),
         )
+
+    def _feature_vector(self, context: RequestContext | None) -> dict[str, Decimal] | None:
+        """The drift feature vector for this request, or `None` if none was computed.
+
+        `None` rather than `{}`: an empty dict would read as *measured, and nothing was
+        found*, which is a different claim from *not measured* (spec 06 §5.3).
+
+        Extraction is observational and already swallows its own failures, but this is on
+        the audit path, so it is belt-and-braces: no feature is worth failing a request
+        that policy and budget both allowed.
+        """
+        if self._features is None or context is None:
+            return None
+        try:
+            computed = self._features.extract(context).as_dict()
+        except Exception:
+            logger.warning("drift feature extraction failed", exc_info=True)
+            return None
+        return computed or None
