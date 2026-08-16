@@ -41,6 +41,20 @@ from agentiam_core.policy_testing import PolicyTestCase, run_policy_tests, summa
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
+#: Seconds between cases. Two values were guessed before the constraint was actually
+#: read, and both were wrong, because the binding limit is **not** per-minute:
+#:
+#:   x-ratelimit-limit-tokens   12,000 per minute
+#:   TPD (from the 429 body)    100,000 per DAY
+#:   measured cost per compile  ~1,811 tokens
+#:
+#: So the free tier affords roughly **55 compiles per day**, and one 30-case evaluation
+#: run costs ~54,000 tokens — over half of it. Pacing keeps a run inside the per-minute
+#: window; nothing keeps it inside the daily one but restraint. Run the full evaluation
+#: deliberately, not casually, and use `--validate` (no model at all) while iterating on
+#: the dataset.
+PACING_S = 15.0
+
 DATASET = (
     Path(__file__).resolve().parent.parent
     / "packages"
@@ -124,6 +138,14 @@ async def evaluate(cases: list[dict[str, Any]]) -> None:
     for i, case in enumerate(cases, start=1):
         nl = case["nl"]
         logger.info("[%2d/%d] %s", i, total, nl)
+
+        # Pace the run rather than sprinting into the rate limit and clawing back with
+        # retries. Measured: an unpaced 30-case run returned HTTP 429 on 20 of 30
+        # requests, and paying the backoff on two thirds of the corpus takes longer than
+        # simply arriving more slowly. The retry logic in GroqClient still covers bursts;
+        # this keeps a *batch* from needing it on every request.
+        if i > 1:
+            await asyncio.sleep(PACING_S)
 
         started = time.perf_counter()
         try:

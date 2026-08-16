@@ -1739,3 +1739,42 @@ error can repeat the request content — the operator's policy text — into the
 
 **Resumption trigger for the migration:** funded inference hardware, or a customer whose
 data residency terms forbid the hop. Either flips `AGENTIAM_LLM_BACKEND` to `ollama`.
+
+### Addendum — the free tier's real limits, measured
+
+Read from the API rather than assumed, after two guessed pacing values both proved wrong:
+
+| | |
+|---|---|
+| tokens per minute (`x-ratelimit-limit-tokens`) | 12,000 |
+| **tokens per day** (from the 429 body) | **100,000** |
+| requests per day | 1,000 |
+| measured cost of one compile | **~1,811 tokens** |
+
+So the free tier affords roughly **55 policy compiles per day**, and a single 30-case
+evaluation run costs ~54,000 tokens — **more than half the daily budget**. Two runs
+exhaust it.
+
+Three consequences, all of which bear on the demo rather than just on tooling:
+
+1. **The demo is comfortably inside the limit.** Beat 5 is one compile, and a judge
+   experimenting might do five. That is a tenth of a day's budget.
+2. **The evaluation is a rationed resource.** `--validate` runs the whole dataset against
+   its reference policies with no model at all, so dataset iteration is free; only
+   measuring the *compiler* costs quota.
+3. **A rate-limited demo fails in a visible place.** `GroqClient` retries 429 with
+   `Retry-After`, which covers a burst, but nothing recovers an exhausted daily quota.
+   That is a concrete argument for un-deferring T-031's template fallback, or for the Dev
+   Tier, before the submission demo.
+
+**The quota is charged per organization, not per key — measured.** Three additional API
+keys were tested against the exhausted budget. A trivial `max_tokens: 1` request on each
+returned HTTP 200, which looks like fresh quota; a *real* 1,814-token compile on the same
+key returned 429 naming `org_01jtxk8hy9exf9p5kkghgbgfna` — the same organization as the
+original key. The 200s were headroom, not a new budget.
+
+So issuing more keys from one account buys nothing, and issuing them from several accounts
+would be multi-account circumvention of the free tier: against Groq's terms, detectable,
+and worst if the detection lands the week of a submission demo. **Dev Tier is the answer
+and it is cheap** — at roughly 54,000 tokens per full evaluation run, a run costs a few
+cents. Iterating on the dataset stays free either way, because `--validate` uses no model.

@@ -71,6 +71,31 @@ async def test_compile_nl_to_policy_validates_and_parses() -> None:
     assert kwargs["schema"]["title"] == "CompilerOutput"
 
 
+def test_the_prompt_does_not_contain_any_evaluation_prompt() -> None:
+    """The few-shot examples must not be drawn from the dataset.
+
+    Caught while tuning: two dataset prompts were pasted into `_SYSTEM_PROMPT` verbatim as
+    examples, which would have inflated the reported score by teaching to the test. The
+    examples are *structurally* representative — they have to be, since teaching Cedar
+    syntax means covering the same features — but no evaluation prompt may appear in them.
+
+    This is a guard rather than a note because the temptation recurs every time a case
+    fails: the quickest way to fix a failing case is to show the model that case.
+    """
+    import json
+    import pathlib
+
+    from agentiam_controlplane.nl_compiler.compiler import _SYSTEM_PROMPT
+
+    dataset = pathlib.Path(
+        "packages/agentiam-controlplane/src/agentiam_controlplane/nl_compiler/dataset.json"
+    )
+    cases = json.loads(dataset.read_text(encoding="utf-8"))["cases"]
+
+    leaked = [c["nl"] for c in cases if c["nl"].strip().lower() in _SYSTEM_PROMPT.lower()]
+    assert not leaked, f"evaluation prompts leaked into the system prompt: {leaked}"
+
+
 @pytest.mark.asyncio
 async def test_compile_nl_to_policy_handles_ambiguity() -> None:
     """Ensure the compiler surfaces a clarifying question when the input is ambiguous."""

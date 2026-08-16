@@ -89,19 +89,33 @@ vendor:read, payment:initiate, email:send.
 WRITE POLICIES ABOUT ROLES, NOT INDIVIDUALS. "Managers can approve expenses" is
 principal.role == "manager", never a named agent id.
 
-SYNTAX RULES — these are the mistakes to avoid:
-1. Leave a scope element unconstrained by writing it bare. Use `resource`, NEVER
+SYNTAX RULES — these are the exact mistakes measured on earlier runs. Read them twice.
+
+1. **Cedar uses `&&` and `||`. It has no `and` / `or` keywords.** Writing `and` is a
+   parse error and was the single largest cause of failure.
+   Wrong: when { principal.role == "senior" and context.amount.lessThan(decimal("10.0")) };
+   Right: when { principal.role == "senior" && context.amount.lessThan(decimal("10.0")) };
+2. **Only `context.amount` is a decimal.** Compare it with decimal methods. Everything
+   else — including `principal.depth` — is an ordinary number compared with < <= > >= ==.
+   Wrong: principal.depth.lessThan(3)
+   Right: principal.depth < 3
+3. Leave a scope element unconstrained by writing it bare. Use `resource`, NEVER
    `resource == Resource::*` or `resource in Tool::*`. There is no `::*` in Cedar.
-2. Every condition goes in a `when { }` clause after the scope, never inside the scope.
-   Wrong: permit(principal, action, resource == Tool::"x" and x.sensitivity == "low");
+4. Every condition goes in a `when { }` clause after the scope, never inside the scope.
+   Wrong: permit(principal, action, resource == Tool::"x" && x.sensitivity == "low");
    Right: permit(principal, action, resource) when { resource.sensitivity == "low" };
-3. Compare money with the decimal extension:
+5. Money comparisons:
    context.amount.lessThanOrEqual(decimal("500000.0"))   for "at most" / "up to"
    context.amount.lessThan(decimal("10000.0"))           for "below" / "under"
-4. Several actions: action in [Action::"invoice:read", Action::"vendor:read"].
-5. A `forbid` alone denies everything, because nothing permits. If the requirement is
-   "may do X but never Y", write a permit AND a forbid.
-6. Negate booleans with `!`, as in `!resource.is_external`.
+6. Several actions: action in [Action::"invoice:read", Action::"vendor:read"].
+7. **A `forbid` alone denies everything, because nothing permits.** "No agent may use an
+   external tool" still needs a permit for what remains allowed:
+   permit(principal, action, resource);
+   forbid(principal, action, resource) when { resource.is_external };
+8. Negate booleans with `!`, as in `!resource.is_external`.
+9. Every policy ends with a semicolon.
+10. Two different rules are two separate policies, not one policy with `||`. "Seniors up
+    to 1000000, everyone else up to 1000" is two permits.
 
 WHEN TO ASK INSTEAD OF COMPILING:
 Ask a `clarifying_question` ONLY if the requirement names no actor at all, or no action at
@@ -111,17 +125,27 @@ what, COMPILE IT.
 
 EXAMPLES
 
-Requirement: Only senior agents may write invoices.
-permit(principal, action == Action::"invoice:write", resource)
-when { principal.role == "senior" };
+Requirement: Auditor agents may send email.
+permit(principal, action == Action::"email:send", resource)
+when { principal.role == "auditor" };
 
-Requirement: Agents may initiate payments of at most 500000.
+Requirement: Agents may initiate payments of at most 7500.
 permit(principal, action == Action::"payment:initiate", resource)
-when { context.amount.lessThanOrEqual(decimal("500000.0")) };
+when { context.amount.lessThanOrEqual(decimal("7500.0")) };
 
-Requirement: Agents may read invoices, but never through an external tool.
-permit(principal, action == Action::"invoice:read", resource);
-forbid(principal, action, resource) when { resource.is_external };
+Requirement: Agents may read vendor records, but never on a critical tool.
+permit(principal, action == Action::"vendor:read", resource);
+forbid(principal, action, resource) when { resource.sensitivity == "critical" };
+
+Requirement: Auditor agents may read vendor records at depth 4 or shallower.
+permit(principal, action == Action::"vendor:read", resource)
+when { principal.role == "auditor" && principal.depth <= 4 };
+
+Requirement: Senior agents may send email anywhere; everyone else only internally.
+permit(principal, action == Action::"email:send", resource)
+when { principal.role == "senior" };
+permit(principal, action == Action::"email:send", resource)
+when { principal.role != "senior" && !resource.is_external };
 
 Put the policy in `cedar_source` and give `tests` covering both an allowed case
 (expected=true) and a denied case (expected=false).
