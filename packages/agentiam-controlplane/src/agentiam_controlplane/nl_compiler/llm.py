@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -79,27 +80,82 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 #: repository changing, which is how a benchmark quietly stops meaning anything. Retiring
 #: a pinned model fails loudly with a 404 instead — as `gemini-2.0-flash` did here, which
 #: is what prompted the note.
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+#: An alias, reluctantly, and the reluctance is the point.
+#:
+#: Pinning is the right instinct — a moving target changes the measurement basis between
+#: two runs with nothing in the repository changing. But measured on this account:
+#: `gemini-2.0-flash` is retired (404), `gemini-2.5-flash-lite` is "no longer available to
+#: new users" (404), and plain `gemini-2.5-flash` reports
+#: `generate_content_free_tier_requests, limit: 20` — too small to finish a 30-case
+#: evaluation on one key. `gemini-flash-lite-latest` is what actually answers.
+#:
+#: So the alias is used for availability and the **resolved** version is logged on every
+#: call (`modelVersion` in the response), which keeps a run attributable after the fact.
+#: On a paid tier, pin plain `gemini-2.5-flash` here instead.
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 
 _BACKEND_ENV = "AGENTIAM_LLM_BACKEND"
 _KEY_ENV = "GROQ_API_KEY"
 _GEMINI_KEY_ENV = "GEMINI_API_KEY"
 
 
-def _retry_delay(retry_after: str | None, attempt: int) -> float:
+def _limit_detail(body: str) -> str:
+    """The provider's own explanation of a rate limit, trimmed and de-secreted.
+
+    Worth extracting rather than discarding: Groq's 429 body was the only place the
+    binding limit appeared at all — a **daily** token cap that no response header
+    mentioned — and two pacing values were guessed wrong before anyone read it. Logging
+    this turns "429 again" into a number you can pace against.
+
+    Truncated because provider errors can be long, and scrubbed of anything key-shaped
+    because this reaches logs.
+
+    **Truncation starts from the useful part, not the beginning.** Gemini leads with two
+    documentation URLs and puts `Quota exceeded for <metric>, limit <n>` after them — a
+    naive first-300-characters cut threw away the only sentence worth logging, which is
+    exactly what happened on the first run that used this.
+    """
+    scrubbed = re.sub(r"(gsk_|AIzaSy)[A-Za-z0-9_-]+", "<redacted>", body)
+    flat = " ".join(scrubbed.split())
+
+    # Skip the preamble when the provider buries the metric behind boilerplate.
+    marker = flat.find("Quota exceeded")
+    if marker > 0:
+        flat = flat[marker:]
+    return flat[:400]
+
+
+#: Gemini reports its reset in the response *body* rather than a `Retry-After` header:
+#: `"Please retry in 28.660239155s."`. Measured consequence of missing it: the client fell
+#: back to a 1 s backoff, retried long before the window reopened, and **each premature
+#: retry spent another request against the very quota it was waiting on** — the retry loop
+#: amplified the throttle it existed to survive.
+_RETRY_IN_RE = re.compile(r"retry in ([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
+
+
+def _retry_delay(retry_after: str | None, attempt: int, body: str = "") -> float:
     """How long to wait before retry `attempt`, in seconds.
 
-    Prefers the provider's `Retry-After` — it knows when its own window resets — but
-    clamps it, so a malformed or hostile header cannot stall the console. Falls back to
-    exponential backoff from one second.
+    Precedence, most authoritative first: the `Retry-After` header, then a "retry in Xs"
+    hint in the body, then exponential backoff. The provider knows when its own window
+    reopens; guessing earlier is not merely wasteful, it is counterproductive when the
+    guess itself consumes quota.
+
+    Every source is clamped, so neither a hostile header nor a malformed body can stall
+    the console.
     """
     if retry_after:
         try:
             return min(float(retry_after), MAX_BACKOFF_S)
         except ValueError:
-            # Retry-After may also be an HTTP date. Not worth parsing: fall through to
-            # backoff, which is never wrong, only sometimes suboptimal.
+            # Retry-After may also be an HTTP date. Not worth parsing: fall through.
             pass
+
+    match = _RETRY_IN_RE.search(body)
+    if match:
+        # A second of slack: retrying at the exact boundary tends to land just inside it.
+        return min(float(match.group(1)) + 1.0, MAX_BACKOFF_S)
+
     return min(2.0**attempt, MAX_BACKOFF_S)
 
 
@@ -230,8 +286,15 @@ class GroqClient:
                         last = f"Groq returned HTTP {response.status_code}"
                         if attempt == self._max_retries:
                             break
-                        delay = _retry_delay(response.headers.get("retry-after"), attempt)
-                        logger.warning("%s; retrying in %.1fs", last, delay)
+                        delay = _retry_delay(
+                            response.headers.get("retry-after"), attempt, response.text
+                        )
+                        logger.warning(
+                            "%s; retrying in %.1fs — %s",
+                            last,
+                            delay,
+                            _limit_detail(response.text),
+                        )
                         await self._sleep(delay)
                         continue
 
@@ -320,6 +383,8 @@ class GeminiClient:
         self._timeout = timeout
         self._max_retries = max_retries
         self._sleep = sleep or asyncio.sleep
+        #: What the alias resolved to on the last successful call, for attribution.
+        self._resolved_model: str | None = None
 
     async def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
         """Generate JSON for `prompt`.
@@ -347,6 +412,14 @@ class GeminiClient:
         }
 
         data = await self._post_with_retry(payload)
+
+        # `DEFAULT_GEMINI_MODEL` is an alias, so record what it actually resolved to.
+        # Without this a measurement is unattributable the moment Google moves the alias,
+        # which is the whole objection to aliases — answered rather than ignored.
+        resolved = data.get("modelVersion")
+        if resolved and resolved != self._resolved_model:
+            self._resolved_model = str(resolved)
+            logger.info("Gemini %r resolved to %s", self._model, resolved)
 
         try:
             content = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -386,8 +459,15 @@ class GeminiClient:
                         last = f"Gemini returned HTTP {response.status_code}"
                         if attempt == self._max_retries:
                             break
-                        delay = _retry_delay(response.headers.get("retry-after"), attempt)
-                        logger.warning("%s; retrying in %.1fs", last, delay)
+                        delay = _retry_delay(
+                            response.headers.get("retry-after"), attempt, response.text
+                        )
+                        logger.warning(
+                            "%s; retrying in %.1fs — %s",
+                            last,
+                            delay,
+                            _limit_detail(response.text),
+                        )
                         await self._sleep(delay)
                         continue
 

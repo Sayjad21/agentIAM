@@ -24,6 +24,7 @@ from agentiam_controlplane.nl_compiler.llm import (
     GeminiClient,
     GroqClient,
     LLMError,
+    _limit_detail,
     client_from_env,
     load_dotenv,
 )
@@ -180,7 +181,7 @@ class TestGeminiClient:
             waited.append(seconds)
 
         client = GeminiClient(api_key="k", sleep=fake_sleep)
-        limited = MagicMock(status_code=429, headers={})
+        limited = MagicMock(status_code=429, headers={}, text='{"error":{"code":429}}')
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
             post.side_effect = [limited, a_gemini_response('{"ok": true}')]
             assert await client.generate_structured("p", SCHEMA) == {"ok": True}
@@ -354,6 +355,9 @@ class TestRateLimitRetry:
         response = MagicMock()
         response.status_code = code
         response.headers = headers or {}
+        # A real response always has a body, and the retry path now reads it — the
+        # provider's own explanation of the limit is the most useful thing in the log.
+        response.text = f'{{"error":{{"code":{code}}}}}'
         return response
 
     @pytest.mark.asyncio
@@ -424,6 +428,44 @@ class TestRateLimitRetry:
         assert len(waited) == 2
 
     @pytest.mark.asyncio
+    async def test_a_retry_hint_in_the_body_is_honoured(self) -> None:
+        """The fix for a retry loop that amplified the throttle it existed to survive.
+
+        Gemini puts its reset in the body — `"Please retry in 28.660239155s."` — not in a
+        `Retry-After` header. Missing it meant falling back to a 1 s backoff, retrying
+        long before the window reopened, and **spending another request against the very
+        quota being waited on**. Measured: 11 of 30 cases exhausted their retries this way.
+        """
+        client, waited = self._client()
+        limited = self._status(429)
+        limited.text = '{"error":{"message":"Quota exceeded. Please retry in 28.66s."}}'
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.side_effect = [limited, a_response('{"ok": true}')]
+            await client.generate_structured("p", SCHEMA)
+        # 28.66 plus a second of slack: retrying exactly at the boundary lands inside it.
+        assert waited == [29.66]
+
+    @pytest.mark.asyncio
+    async def test_a_header_still_outranks_a_body_hint(self) -> None:
+        client, waited = self._client()
+        limited = self._status(429, {"retry-after": "5"})
+        limited.text = '{"error":{"message":"Please retry in 28.66s."}}'
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.side_effect = [limited, a_response('{"ok": true}')]
+            await client.generate_structured("p", SCHEMA)
+        assert waited == [5.0]
+
+    @pytest.mark.asyncio
+    async def test_a_body_hint_is_clamped_like_everything_else(self) -> None:
+        client, waited = self._client()
+        limited = self._status(429)
+        limited.text = '{"error":{"message":"Please retry in 3600s."}}'
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.side_effect = [limited, a_response('{"ok": true}')]
+            await client.generate_structured("p", SCHEMA)
+        assert waited == [30.0]
+
+    @pytest.mark.asyncio
     async def test_transient_server_errors_are_retried_too(self) -> None:
         client, _ = self._client()
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
@@ -445,6 +487,61 @@ class TestRateLimitRetry:
             with pytest.raises(LLMError, match="401"):
                 await client.generate_structured("p", SCHEMA)
         assert waited == []
+
+
+class TestLimitDetailLogging:
+    """The provider's 429 body is the only place the real limit sometimes appears.
+
+    Groq's binding constraint was a **daily** token cap that no response header mentioned;
+    two pacing values were guessed wrong before anyone read the body. It is logged now,
+    and scrubbed, because it reaches logs.
+    """
+
+    def test_the_detail_is_extracted_and_flattened(self) -> None:
+        body = (
+            '{"error":{"message":"Rate limit reached ...\\n'
+            '  on tokens per day (TPD):\\n  Limit 100000"}}'
+        )
+        detail = _limit_detail(body)
+        assert "tokens per day" in detail
+        assert "\n" not in detail
+
+    def test_key_shaped_text_is_redacted(self) -> None:
+        # A provider error can echo the request, and this string lands in logs.
+        for key in ("gsk_abcdefghijklmnop1234", "AIzaSyAbCdEfGhIjKlMnOpQr"):
+            assert key not in _limit_detail(f'{{"error":"bad key {key} supplied"}}')
+            assert "<redacted>" in _limit_detail(f'{{"error":"bad key {key} supplied"}}')
+
+    def test_a_long_body_is_truncated(self) -> None:
+        assert len(_limit_detail("x" * 5000)) <= 400
+
+    def test_truncation_starts_at_the_useful_part(self) -> None:
+        # Found the hard way: Gemini leads with two documentation URLs and puts the
+        # metric after them, so a first-N-characters cut logged only boilerplate.
+        body = (
+            '{"error":{"message":"You exceeded your current quota. '
+            + "See https://ai.google.dev/gemini-api/docs/rate-limits " * 6
+            + 'Quota exceeded for metric generate_requests_per_model_per_day, limit 250"}}'
+        )
+        detail = _limit_detail(body)
+        assert detail.startswith("Quota exceeded")
+        assert "limit 250" in detail
+
+    @pytest.mark.asyncio
+    async def test_the_body_reaches_the_log_on_a_retry(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        async def fake_sleep(_seconds: float) -> None:
+            return None
+
+        client = GroqClient(api_key="k", sleep=fake_sleep)
+        limited = MagicMock(status_code=429, headers={})
+        limited.text = '{"error":{"message":"on tokens per day (TPD): Limit 100000"}}'
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.side_effect = [limited, a_response('{"ok": true}')]
+            with caplog.at_level("WARNING"):
+                await client.generate_structured("p", SCHEMA)
+        assert "tokens per day" in caplog.text
 
 
 class TestDotenvLoading:
