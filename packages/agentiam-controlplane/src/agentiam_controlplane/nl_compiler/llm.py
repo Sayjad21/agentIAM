@@ -73,7 +73,13 @@ _RETRYABLE = frozenset({429, 500, 502, 503, 504})
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 #: Fast, cheap, and strong enough for schema-constrained Cedar.
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+#:
+#: **Pinned deliberately, not `gemini-flash-latest`.** An alias that moves under you
+#: changes the measurement basis between two evaluation runs without anything in the
+#: repository changing, which is how a benchmark quietly stops meaning anything. Retiring
+#: a pinned model fails loudly with a 404 instead — as `gemini-2.0-flash` did here, which
+#: is what prompted the note.
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 _BACKEND_ENV = "AGENTIAM_LLM_BACKEND"
 _KEY_ENV = "GROQ_API_KEY"
