@@ -1775,6 +1775,31 @@ original key. The 200s were headroom, not a new budget.
 
 So issuing more keys from one account buys nothing, and issuing them from several accounts
 would be multi-account circumvention of the free tier: against Groq's terms, detectable,
-and worst if the detection lands the week of a submission demo. **Dev Tier is the answer
-and it is cheap** — at roughly 54,000 tokens per full evaluation run, a run costs a few
-cents. Iterating on the dataset stays free either way, because `--validate` uses no model.
+and worst if the detection lands the week of a submission demo. Iterating on the dataset
+stays free either way, because `--validate` uses no model.
+
+### Addendum 2 — a third backend, because the daily token cap is the wrong shape
+
+`GeminiClient` is added and becomes the preferred hosted option. The reason is the *shape*
+of the limit rather than its size:
+
+| | Groq free | Gemini free (`gemini-2.0-flash`) |
+|---|---|---|
+| requests / day | 1,000 | 1,500 |
+| **tokens / day** | **100,000** | no daily token cap |
+| tokens / minute | 12,000 | 1,000,000 |
+
+A 30-case evaluation costs ~54,000 tokens. Against Groq's free tier that is over half a
+day's budget; against Gemini's it is 30 of 1,500 requests. The measurement stops being
+rationed, which matters because an unmeasurable compiler is how STATUS gap 19 survived
+undetected for four tickets.
+
+**The privacy trade is different and must not be glossed.** Google's *unpaid* tier grants
+them the right to use submitted content to improve their products, and the submitted
+content here is the operator's policy text. That is acceptable for a prototype on exactly
+the reasoning already accepted above, unacceptable for a customer deployment, and avoided
+entirely by `AGENTIAM_LLM_BACKEND=ollama`. Both providers' paid tiers drop the clause.
+
+Selection order with nothing configured: Gemini, then Groq, then local. The key travels in
+the `x-goog-api-key` header rather than the query string, because a URL lands in proxy and
+server logs in a way a header does not.

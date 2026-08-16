@@ -32,7 +32,9 @@ import httpx
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_GEMINI_MODEL",
     "DEFAULT_GROQ_MODEL",
+    "GeminiClient",
     "GroqClient",
     "LLMClient",
     "LLMError",
@@ -63,8 +65,19 @@ MAX_BACKOFF_S = 30.0
 #: Statuses worth retrying: rate limiting, and transient upstream failures.
 _RETRYABLE = frozenset({429, 500, 502, 503, 504})
 
+#: Google's Gemini API. Chosen as the second hosted option because the limit that actually
+#: bites on Groq's free tier — 100,000 tokens per *day*, about 55 compiles — has no
+#: equivalent here: the free quota is metered in requests per day (1,500) with a
+#: 1,000,000 token-per-minute ceiling, so a 30-case evaluation costs 30 requests rather
+#: than half a day's budget.
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+#: Fast, cheap, and strong enough for schema-constrained Cedar.
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+
 _BACKEND_ENV = "AGENTIAM_LLM_BACKEND"
 _KEY_ENV = "GROQ_API_KEY"
+_GEMINI_KEY_ENV = "GEMINI_API_KEY"
 
 
 def _retry_delay(retry_after: str | None, attempt: int) -> float:
@@ -266,6 +279,135 @@ def load_dotenv(start: Path | None = None) -> None:
         return
 
 
+class GeminiClient:
+    """Hosted inference over Google's Gemini API.
+
+    Exists because of a measured limit rather than a preference: Groq's free tier caps at
+    100,000 tokens per **day**, which is roughly 55 compiles, and a single 30-case
+    evaluation run costs more than half of that (ADR-040). Gemini's free quota is metered
+    per request instead, so evaluation stops being rationed.
+
+    **Read the privacy trade before pointing production at this.** Google's *unpaid* tier
+    grants them the right to use submitted content to improve their products, and what is
+    submitted here is the operator's policy text. Acceptable for a prototype, on the same
+    reasoning as ADR-040; not acceptable for a customer deployment. The paid tier drops
+    that clause, and `AGENTIAM_LLM_BACKEND=ollama` avoids it entirely.
+    """
+
+    def __init__(
+        self,
+        model: str = DEFAULT_GEMINI_MODEL,
+        timeout: float = DEFAULT_TIMEOUT_S,
+        api_key: str | None = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+    ) -> None:
+        """Read the key from `GEMINI_API_KEY` unless one is supplied."""
+        key = api_key if api_key is not None else os.environ.get(_GEMINI_KEY_ENV)
+        if not key:
+            raise LLMError(
+                f"{_GEMINI_KEY_ENV} is not set. Export it, or set {_BACKEND_ENV} to "
+                f"'groq' or 'ollama'."
+            )
+        self._api_key = key
+        self._model = model
+        self._timeout = timeout
+        self._max_retries = max_retries
+        self._sleep = sleep or asyncio.sleep
+
+    async def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        """Generate JSON for `prompt`.
+
+        `responseMimeType` pins the output to JSON; the schema travels in the prompt
+        rather than in `responseSchema`, because Gemini's structured-output schema dialect
+        rejects the `$defs` and `anyOf` that Pydantic emits for optional fields. Pydantic
+        validates the result either way, so the weaker constraint costs nothing.
+        """
+        payload: dict[str, Any] = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": (
+                                "Reply with a single JSON object and nothing else, "
+                                f"conforming to this JSON schema:\n{json.dumps(schema)}\n\n"
+                                f"{prompt}"
+                            )
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+        }
+
+        data = await self._post_with_retry(payload)
+
+        try:
+            content = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError("Gemini returned an unexpected response shape") from exc
+
+        if not content:
+            raise LLMError("Gemini returned an empty response")
+
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"Gemini returned invalid JSON: {exc}") from exc
+
+        if not isinstance(parsed, dict):
+            raise LLMError("Gemini returned JSON that is not an object")
+        return parsed
+
+    async def _post_with_retry(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST the generation, retrying rate limits and transient upstream failures."""
+        last = "no attempt was made"
+        path = f"/models/{self._model}:generateContent"
+
+        for attempt in range(self._max_retries + 1):
+            try:
+                async with httpx.AsyncClient(
+                    base_url=GEMINI_BASE_URL, timeout=httpx.Timeout(self._timeout)
+                ) as client:
+                    response = await client.post(
+                        path,
+                        json=payload,
+                        # The key goes in a header, not the query string: a URL lands in
+                        # proxy and server logs in a way a header does not.
+                        headers={"x-goog-api-key": self._api_key},
+                    )
+                    if response.status_code in _RETRYABLE:
+                        last = f"Gemini returned HTTP {response.status_code}"
+                        if attempt == self._max_retries:
+                            break
+                        delay = _retry_delay(response.headers.get("retry-after"), attempt)
+                        logger.warning("%s; retrying in %.1fs", last, delay)
+                        await self._sleep(delay)
+                        continue
+
+                    response.raise_for_status()
+                    parsed: dict[str, Any] = response.json()
+                    return parsed
+
+            except httpx.TimeoutException as exc:
+                raise LLMError(f"Gemini generation timed out after {self._timeout}s") from exc
+            except httpx.HTTPStatusError as exc:
+                raise LLMError(f"Gemini returned HTTP {exc.response.status_code}") from exc
+            except httpx.RequestError as exc:
+                raise LLMError(f"Gemini network error: {exc}") from exc
+
+        raise LLMError(f"{last} after {self._max_retries} retries")
+
+    async def warm(self) -> bool:
+        """Reachability check. Hosted inference has no model to load."""
+        try:
+            await self.generate_structured("Reply with {}", {"type": "object"})
+        except LLMError as exc:
+            logger.warning("Gemini did not respond to the warm-up: %s", exc)
+            return False
+        return True
+
+
 def client_from_env() -> LLMClient:
     """The configured backend.
 
@@ -285,10 +427,16 @@ def client_from_env() -> LLMClient:
         return OllamaClient()
     if backend == "groq":
         return GroqClient()
+    if backend == "gemini":
+        return GeminiClient()
     if backend:
-        raise LLMError(f"{_BACKEND_ENV} must be 'groq' or 'ollama', got {backend!r}")
+        raise LLMError(f"{_BACKEND_ENV} must be 'groq', 'gemini' or 'ollama', got {backend!r}")
 
+    # Gemini first among the hosted options: its free quota is metered per request rather
+    # than by a daily token budget, so it is the one that survives an evaluation run.
+    if os.environ.get(_GEMINI_KEY_ENV):
+        return GeminiClient()
     if os.environ.get(_KEY_ENV):
         return GroqClient()
-    logger.info("No %s set; falling back to the local Ollama backend.", _KEY_ENV)
+    logger.info("No hosted API key set; falling back to the local Ollama backend.")
     return OllamaClient()

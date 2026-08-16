@@ -21,6 +21,7 @@ import pytest
 
 from agentiam_controlplane.nl_compiler.llm import (
     DEFAULT_GROQ_MODEL,
+    GeminiClient,
     GroqClient,
     LLMError,
     client_from_env,
@@ -68,11 +69,28 @@ class TestBackendSelection:
         monkeypatch.setenv("GROQ_API_KEY", "test-key")
         assert isinstance(client_from_env(), GroqClient)
 
+    def test_gemini_is_selected_explicitly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AGENTIAM_LLM_BACKEND", "gemini")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        assert isinstance(client_from_env(), GeminiClient)
+
+    def test_gemini_is_preferred_when_both_keys_are_present(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Groq's free tier caps at 100,000 tokens per day — about 55 compiles, and one
+        # evaluation run spends half of it. Gemini's quota is per request, so when both
+        # are available the one that survives a batch wins.
+        monkeypatch.delenv("AGENTIAM_LLM_BACKEND", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+        monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+        assert isinstance(client_from_env(), GeminiClient)
+
     def test_no_key_falls_back_to_local(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # A machine with no key must still run, on the local model, rather than failing
         # at import — which is what makes "production moves to local" a config flip.
         monkeypatch.delenv("AGENTIAM_LLM_BACKEND", raising=False)
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         assert isinstance(client_from_env(), OllamaClient)
 
     def test_an_unknown_backend_is_refused_rather_than_guessed(
@@ -89,6 +107,102 @@ class TestBackendSelection:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
         with pytest.raises(LLMError, match="GROQ_API_KEY"):
             client_from_env()
+
+
+def a_gemini_response(content: str) -> MagicMock:
+    response = MagicMock()
+    response.status_code = 200
+    response.headers = {}
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(
+        return_value={"candidates": [{"content": {"parts": [{"text": content}]}}]}
+    )
+    return response
+
+
+class TestGeminiClient:
+    """The second hosted backend.
+
+    Added because Groq's 100,000-token *daily* cap made evaluation a rationed resource;
+    Gemini's free quota is metered per request instead (ADR-040 addendum 2).
+    """
+
+    def test_a_missing_key_fails_at_construction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        with pytest.raises(LLMError, match="GEMINI_API_KEY"):
+            GeminiClient()
+
+    @pytest.mark.asyncio
+    async def test_the_key_travels_in_a_header_not_the_url(self) -> None:
+        # A key in the query string lands in proxy and server logs; a header does not.
+        client = GeminiClient(api_key="secret-key")
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.return_value = a_gemini_response('{"ok": true}')
+            await client.generate_structured("p", SCHEMA)
+            args, kwargs = post.call_args
+            assert kwargs["headers"]["x-goog-api-key"] == "secret-key"
+            assert "secret-key" not in args[0]
+
+    @pytest.mark.asyncio
+    async def test_json_output_is_requested_deterministically(self) -> None:
+        client = GeminiClient(api_key="k")
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.return_value = a_gemini_response('{"ok": true}')
+            await client.generate_structured("p", SCHEMA)
+            _, kwargs = post.call_args
+            config = kwargs["json"]["generationConfig"]
+            assert config["temperature"] == 0
+            assert config["responseMimeType"] == "application/json"
+
+    @pytest.mark.asyncio
+    async def test_the_schema_reaches_the_model(self) -> None:
+        client = GeminiClient(api_key="k")
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.return_value = a_gemini_response('{"ok": true}')
+            await client.generate_structured("compile this", SCHEMA)
+            _, kwargs = post.call_args
+            text = kwargs["json"]["contents"][0]["parts"][0]["text"]
+            assert json.dumps(SCHEMA) in text
+            assert "compile this" in text
+
+    @pytest.mark.asyncio
+    async def test_the_parsed_object_is_returned(self) -> None:
+        client = GeminiClient(api_key="k")
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.return_value = a_gemini_response('{"ok": true}')
+            assert await client.generate_structured("p", SCHEMA) == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_a_rate_limit_is_retried(self) -> None:
+        waited: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            waited.append(seconds)
+
+        client = GeminiClient(api_key="k", sleep=fake_sleep)
+        limited = MagicMock(status_code=429, headers={})
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.side_effect = [limited, a_gemini_response('{"ok": true}')]
+            assert await client.generate_structured("p", SCHEMA) == {"ok": True}
+        assert waited == [1.0]
+
+    @pytest.mark.asyncio
+    async def test_an_unexpected_shape_is_an_llm_error(self) -> None:
+        client = GeminiClient(api_key="k")
+        response = MagicMock(status_code=200, headers={})
+        response.raise_for_status = MagicMock()
+        response.json = MagicMock(return_value={"promptFeedback": {"blockReason": "SAFETY"}})
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=response):
+            with pytest.raises(LLMError, match="unexpected response shape"):
+                await client.generate_structured("p", SCHEMA)
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_is_an_llm_error(self) -> None:
+        client = GeminiClient(api_key="k")
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.return_value = a_gemini_response("not json")
+            with pytest.raises(LLMError, match="invalid JSON"):
+                await client.generate_structured("p", SCHEMA)
 
 
 class TestGroqClient:
