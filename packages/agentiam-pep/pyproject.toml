@@ -20,6 +20,9 @@ dependencies = [
     "opentelemetry-api>=1.30",
     "prometheus-client>=0.21",
     "uvicorn[standard]>=0.32",
+    # Subscribing to the `agentiam:revocations` pub/sub channel — spec 07 §5.1, ADR-042.
+    # Never imported from the `decide()` hot path; only the background consumer touches it.
+    "redis>=5.0",
 ]
 
 [build-system]

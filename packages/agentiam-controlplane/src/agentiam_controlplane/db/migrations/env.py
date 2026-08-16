@@ -24,6 +24,7 @@ from agentiam_controlplane.db.models import (  # noqa: F401  (registers on Base.
     LeaseRow,
     ReconciliationAnomalyRow,
     ReservationRow,
+    RevocationRow,
 )
 
 config = context.config

@@ -1884,3 +1884,86 @@ A sweeper that persists `EXPIRED` onto a stale `pending` row is not built either
 (`db/escalations.list_by_state` excludes an unswept-expired row from a `pending` query for
 the same reason), and the schema's `CHECK` already allows the `expired` state so adding a
 sweeper later needs no migration.
+
+---
+
+## ADR-042 — `redis` (redis-py, async client) is added as a real dependency for T-038
+
+**Date:** 2026-08-17
+**Status:** accepted
+**Affects:** `agentiam-controlplane`, `agentiam-pep`, T-038, `docker-compose.yml`
+
+**Context:** Redis has been running in `docker-compose.yml` since T-001 ("Cache/leases/gossip
+| Redis 7 ... Also pub/sub for revocation gossip", `PLAN.md` §7), but no package in this
+workspace has ever imported a Redis client — `import redis` fails against the venv as of this
+ticket. Spec 07 §5 requires it for two things: the control plane publishing revocations to
+`agentiam:revocations` on write, and every PEP subscribing to that channel for the fast path
+(spec 07 §5.1). Rule 7 requires this entry before the import lands.
+
+**Decision:** `redis>=5.0` (the official `redis-py` package; `redis.asyncio` has shipped
+pub/sub and connection pooling natively since 4.2, so no separate `aioredis` package is
+needed — that project merged into `redis-py` upstream). Added to both
+`agentiam-controlplane` (publish + the `GET /v1/revocations` pull endpoint's server side
+needs no Redis client at all, only Postgres — but the *revoke* write path does) and
+`agentiam-pep` (subscribe). Not added to `agentiam-core`: the purity rule (rule 3) forbids
+any I/O import there, and `RevocationOracle.is_revoked()` (spec 07 §3.2) stays a synchronous
+in-memory lookup regardless of what feeds it — `agentiam_core` never imports `redis`.
+
+**Why this doesn't weaken NFR-1 or the core-purity guarantee:** the hot path
+(`decide()`) never touches Redis. Only a background consumer inside the PEP process
+(spec 07 §4.3) does, updating the same in-memory `set[str]` `InMemoryRevocationSet` already
+used — `decide()`'s call to `is_revoked()` is unchanged, still zero I/O, still on the
+`agentiam_core` side of the purity boundary the CI check enforces.
+
+**Alternative considered:** polling Postgres directly from every PEP instead of Redis
+pub/sub, and dropping the push path entirely. Rejected: spec 07 §5.2 already establishes pull
+as the correctness backstop and push as the latency optimization that makes NFR-4 (< 2 s p99)
+realistic — pull alone, at a `pull_interval` of a few seconds, could not hit that bar. Redis
+is already provisioned infrastructure (T-001), so this is wiring a client to a service that
+exists, not standing up a new one.
+
+---
+
+## ADR-043 — T-038 implementation choices spec 07 left open
+
+**Date:** 2026-08-17
+**Status:** accepted
+**Affects:** `agentiam_controlplane.{revocations_api,db.models,db.revocations}`,
+`agentiam_pep.revocation`, T-038
+
+**Context:** spec 07 fixed the mechanism and the safety argument; a few concrete choices were
+left to whichever ticket implements it (its own §12 says so for two of these). Recorded here
+rather than silently decided in code.
+
+**1. `POST /v1/revocations` reuses `ControlPlaneSettings.approvers` for authorization.**
+Neither `PLAN.md` §8 nor spec 07 specifies who may revoke. Rather than invent a third
+stopgap alongside the root-key-in-env-var and approver-config-list ones ADR-041 already
+named for escalation approve/deny, the revoke endpoint checks `revoked_by` against the same
+`approvers` set. One config list, one meaning ("identities this deployment trusts to make
+irreversible-in-effect authority decisions"), covering both escalation resolution and
+revocation — not two things to keep in sync by hand.
+
+**2. `revocations.seq` is a database `IDENTITY` column, separate from the UUID `id` primary
+key.** Spec 07 §3.1 specifies the split but not the mechanism. `sqlalchemy.Identity()` (a
+`GENERATED ... AS IDENTITY` column in Postgres) was chosen over a manually-assigned counter
+(the way `audit_records.seq` is assigned under an explicit row lock, spec 08 §4) because
+`revocations` has no equivalent single-row lock to assign it under — `block_id UNIQUE` is
+already the entire concurrency-correctness mechanism (§9), and `seq` only has to be
+*monotonic and unique*, not *contiguous*, for the pull cursor to work. A database identity
+column gives that for free without adding a second lock.
+
+**3. The staleness boundary in `RedisRevocationSet.is_revoked()` is inclusive**
+(`age >= staleness_limit_s` raises, not `>`). Spec 07 §5.3 doesn't fix the boundary; made
+consistent with `agentiam_core.escalation.Escalation.is_expired()`'s existing convention
+(`now >= self.expires_at`) rather than introduce a second, opposite convention for what is
+conceptually the same kind of question — "has this deadline passed."
+
+**4. The revocation channel name (`agentiam:revocations`) is a literal string duplicated in
+both `agentiam_controlplane.db.revocation_publisher.CHANNEL` and
+`agentiam_pep.revocation.CHANNEL`, not imported from one package into the other.** The two
+packages are separate deployables (control plane and PEP run as different processes, T-018's
+own framing) that have never imported from each other; the pattern already established by
+route configs and reason codes is that they agree via `PLAN.md`/the specs, not via a shared
+runtime import. Introducing a cross-package import for one string constant would be a new,
+narrower coupling than the rest of the codebase has, for a value that changes approximately
+never.

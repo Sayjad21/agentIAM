@@ -18,6 +18,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.redis import RedisContainer
 
 from agentiam_controlplane.db.base import make_engine, make_session_factory
 from agentiam_controlplane.db.models import BudgetRow
@@ -48,6 +49,21 @@ def postgres_url() -> Generator[str]:
         dbname="agentiam",
     ) as container:
         yield container.get_connection_url()
+
+
+@pytest.fixture
+def redis_container() -> Generator[RedisContainer]:
+    """A fresh Redis container, function-scoped so a test can stop it mid-test (EC-R07)."""
+    with RedisContainer(image="redis:7-alpine") as container:
+        yield container
+
+
+@pytest.fixture
+def redis_url(redis_container: RedisContainer) -> str:
+    """`redis://host:port` for `redis.asyncio.Redis.from_url()`."""
+    host = redis_container.get_container_host_ip()
+    port = redis_container.get_exposed_port(redis_container.port)
+    return f"redis://{host}:{port}"
 
 
 @pytest.fixture

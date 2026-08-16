@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-025.
+**Last updated:** after T-038.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · **M8 started (T-037 done)** · spec 07 outstanding |
-| **Tickets** | 33 done · 19 remaining · 9 deferred · **61 defined, 52 in scope** |
-| **Tests** | 1919 passing (1786 in `make test`; 121 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · **M8 started (T-037, T-038 done)** |
+| **Tickets** | 34 done · 18 remaining · 9 deferred · **61 defined, 52 in scope** |
+| **Tests** | 1966 passing (1817 in `make test`; 137 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
 | **Coverage** | **`agentiam-core` 100% statements** (the rule that is kept). Whole tree 98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86%. See §3 gap 14 |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
-| **Specs** | 9 written — `06-drift-detection` added with T-032/T-033; only `07-revocation` outstanding |
-| **ADRs** | 41 |
+| **Specs** | **10 written — every spec named in `PLAN.md` now exists.** `07-revocation` closes the last gap |
+| **ADRs** | 43 |
 
 ---
 
@@ -65,23 +65,20 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-036 | Drift modes wiring (`off`, `log_only`, `strict`) — Extractor configuration parsing, pipeline context integration, drift score evaluation | — |
 | **T-033** | `drift_features.py` + `EmbeddingClient` — f1/f2/f5 and a startup warm-up. **Probing found two defects in T-032**: a 14,244 ms cold embedding against a 2 s timeout (drift was *absent*, not slow, on a cold PEP), and a 724 ms `httpx.Client` built per cache miss on the event loop — 748 ms → 83 ms per miss. f3/f4/f6 deferred (ADR-036, ADR-037) | — |
 | **T-037** | `escalation.py` (pure workflow: request/approve/deny, EC-A07…EC-A10) + `escalations` table, `SELECT ... FOR UPDATE` for exactly-once resolution under real concurrency, `/v1/escalations` (open/list/approve/deny), a read-only console queue page, and the PEP wiring that opens one automatically on an `ESCALATE` outcome and puts its id in the response body (spec 09 §11). Root key and approver set are both config-list stopgaps ahead of an issuance service and T-043 (ADR-041) | — |
+| **T-038** | `specs/07-revocation.md` (closes the last spec gap) + `revocations` table (`db.revocations`: persist-then-publish, idempotent on `block_id`) + `/v1/revocations` (revoke/pull) + `RedisRevocationSet` — the PEP-side consumer that keeps `decide()`'s synchronous `is_revoked()` fed by a Redis pub/sub fast path and an HTTP pull backstop. **EC-R06 and EC-R07 proven against real Redis**, not mocked: one integration test points the consumer's push connection at a dead port and shows pull alone still converges; another actually stops the Redis container mid-revoke and shows the row still persists. `redis` added as a real dependency for the first time (ADR-042); T-039's Bloom filter and T-040's e2e subtree-propagation measurement build on this | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-038** | Revocation service + gossip. `PLAN.md` §1627 lists T-038/T-039 among the must-keep core | M8 |
-| T-039…T-040 | PEP revocation cache, subtree revocation e2e | M8 |
+| **T-039** | PEP revocation cache — Bloom filter in front of `RedisRevocationSet`'s exact set (10k revocations, zero false denials) | M8 |
+| T-040 | Subtree revocation e2e — depth-4 tree, 3 PEPs, NFR-4 measured (< 2 s p99) | M8 |
 | T-045…T-050 | Console, D3 identity tree, live decision stream, Grafana | M10 |
 | T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7/M11 |
 
 **Carrying forward, unticketed:** the audit-record gap below (gap 15) blocks persisting both
 the drift score and the T-033 feature vector, and should be the next thing fixed on the drift
 path — spec 06 §5 says so explicitly.
-
-**Also outstanding from M2:** specs `05`–`09` (policy, drift, revocation, audit, decision
-record). They gate the tickets that implement them, so spec `06-revocation` and
-`09-decision-record` are wanted before M4 rather than before M3.
 
 ### Deferred — 9 tickets
 
@@ -116,7 +113,7 @@ Real debt, not speculation. Each has a home.
 | 2 | **No Datalog→caveat parser.** The SDK now carries the caveats *it* minted, so `attenuate()` catches re-widening along a chain it built. A token received from elsewhere still folds to an upper bound | For a chain this process built, closed. For a received token, the console cannot show a true effective bound. Never understates a restriction — biscuit's append-only structure sees to that | Needed by T-019 (naming the failing caveat) and T-045 (identity tree). **Note:** whatever parses block source must not trust it — see TM-24 |
 | 3 | **No LICENSE file.** README and every package declare Apache-2.0; the text is absent | Weakens the §14.4 IP claim for a submission judged on IP ownership | Add via GitHub's license picker — verbatim text matters |
 | 4 | **`mutmut` not yet run.** T-009 asks for ≤10% surviving mutants on `attenuation.py` and `caveats.py` | Coverage says the lines run; mutation says the assertions bite. Untested claim | M7, one run (ROADMAP Part 1) |
-| ~~5~~ | ~~**Specs 05–09 unwritten**~~ — 05, 06, 08 and 09 now exist. **Only `07-revocation` remains**, and it gates T-038 | Its ticket cannot start spec-first, which is the rule that caught seven design errors | Before T-038 |
+| ~~5~~ | ~~**Specs 05–09 unwritten**~~ — closed. `07-revocation` (the last one) written and read back before T-038 started, per the spec-first rule | Its ticket cannot start spec-first, which is the rule that caught seven design errors | Closed |
 | 6 | **A1 re-verification is manual.** The security rests on biscuit scoping block facts; nothing fails if a library upgrade changes it | Silent collapse of INV-1 on a dependency bump | Should become a test — see §4 |
 | 7 | **`budgets.mandate_id` carries no foreign key.** No `mandates` SQL table exists yet — T-005 built `Mandate` as a pure Pydantic model, no persistence (ADR-014) | A budget row can reference a mandate id that was never issued; nothing in the schema catches it | Whichever ticket first persists mandates (issuance service, `PLAN.md` §8 — not yet its own ticket) |
 | 8 | **`ACQUIRE` does not clamp by `max_fraction`.** Spec 04 §4.1's clamp is mathematically incompatible with T-013's own acceptance test, applied to a fixed caller-`requested` amount (ADR-015, measured) | No single-PEP-crash blast-radius bound beyond `ttl` — a PEP can be granted more than a quarter of the pool in one `ACQUIRE` | T-015 (adaptive lease sizing, deferred) — that's where the formula actually applies |

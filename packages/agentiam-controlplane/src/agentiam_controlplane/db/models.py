@@ -17,6 +17,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Numeric,
     String,
@@ -309,3 +310,43 @@ class EscalationRow(Base):
     resolved_by: Mapped[str | None] = mapped_column(nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_reason: Mapped[str | None] = mapped_column(nullable=True)
+
+
+_REVOCATION_SCOPES_SQL = ", ".join(f"'{s}'" for s in ("token", "subtree", "mandate"))
+
+
+class RevocationRow(Base):
+    """One revoked biscuit block id — T-038, spec 07 §3.1.
+
+    `block_id UNIQUE` is the whole idempotency mechanism (spec 07 §9): a second revoke of the
+    same id is a conflict this table absorbs rather than errors on. `seq` is a separate
+    monotonic column from `id` for the same reason `audit_records.seq` is separate from
+    `audit_records.decision_id` (spec 08 §3) — `id` is identity, `seq` is purely the ordering
+    cursor `GET /v1/revocations?since=seq` walks, and conflating them would let a future need
+    for one constrain the other.
+
+    `scope` is descriptive only (spec 07 §2) — every revocation is mechanically the same
+    operation, "add this block id to the revoked set"; `scope` records what the caller meant
+    for audit and console display, nothing reads it to decide behaviour.
+
+    `expires_at` is the *original token's* expiry (spec 07 §3.1), not this row's own — that is
+    what makes the row safe to prune once passed (spec 07 §8): past that point the token could
+    not authorize anything even unrevoked.
+    """
+
+    __tablename__ = "revocations"
+    __table_args__ = (
+        UniqueConstraint("block_id", name="uq_revocations_block_id"),
+        CheckConstraint(f"scope IN ({_REVOCATION_SCOPES_SQL})", name="ck_revocations_scope"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True, nullable=False)
+    block_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope: Mapped[str] = mapped_column(nullable=False)
+    reason: Mapped[str] = mapped_column(nullable=False)
+    revoked_by: Mapped[str] = mapped_column(nullable=False)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
