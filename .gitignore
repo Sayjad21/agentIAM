@@ -1,6 +1,8 @@
 # --- Local tooling / editor scratch (never committed) ---
-CLAUDE.md
-CONTEXT.md
+# Globbed rather than named: a copy saved as `CLAUDE (2).md` slipped past the exact
+# names once and reached the tree, which the §14.4 IP claim cannot afford.
+CLAUDE*.md
+CONTEXT*.md
 .claude/
 .cursor/
 .aider*
