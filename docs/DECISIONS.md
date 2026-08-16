@@ -2036,3 +2036,50 @@ named crate). The 10,000-id property test (`tests/unit/test_pep_revocation.py
 (`tests/integration/test_revocation_nfr4.py`, real Redis + real Postgres, 3
 `RedisRevocationSet` instances, 60 real propagation samples) both exercise this choice
 directly rather than trusting the vendor's own benchmarks.
+
+---
+
+## ADR-045 — T-040's tree shape and measurement scope, where `PLAN.md` left both open
+
+**Date:** 2026-08-17
+**Status:** accepted
+**Affects:** `tests/integration/test_subtree_revocation.py`, T-040
+
+**Context:** `PLAN.md` line 1160 names the acceptance criterion ("revoke root → a depth-4
+tree of 12 agents all fail within 2 s; a sibling subtree is unaffected") but not the tree's
+shape, how many oracle instances measure it, or which layer proves "fail" — none of that is
+in spec 07 either (§11's EC-R02/EC-R03 rows name the two scenarios, not their shape). Three
+choices were made rather than left implicit.
+
+**1. Shape: three independent depth-4 chains of 4 agents each, not one branching tree.**
+`agt-a1→a2→a3→a4`, `agt-b1→…→b4`, `agt-c1→…→c4`, all under one root mandate — 12 agents,
+each subtree reaching exactly depth 4. This satisfies "depth-4 tree of 12 agents" (`12 = 3
+× 4`) while making the sibling-isolation test unambiguous: subtree B and C share **no**
+block id with subtree A below the root, so "unaffected" has only one meaning to verify. A
+single branching tree (e.g. a binary tree to depth 4, 15 nodes trimmed to 12) would still
+demonstrate ancestor-walk correctness but makes picking a clean sibling pair — one whose
+*only* shared id is the root's — a matter of choosing the right two branches rather than
+true by construction.
+
+**2. One `RedisRevocationSet` oracle, not T-039's three.** T-039's NFR-4 test already
+proved propagation holds across 3 independent PEP instances against synthetic block ids;
+repeating that with three oracles here would re-prove push/pull convergence, not extend it.
+This module's job is different — proving a *real* `attenuate()`-built chain's
+`revocation_ids` tuple has the ancestor ordering `decide()` depends on (spec 07 §2), and
+that sibling subtrees really do share no id — so one oracle is enough to carry that proof,
+and the multi-instance claim stays where it was measured.
+
+**3. Proof runs at `agentiam_core.decide()`, not through the full PEP HTTP stack.** T-040's
+own dependencies are T-039 (the cache) and T-011 (the SDK's `attenuate()`) — not T-018/T-023
+(the gateway/pipeline). `test_thin_slice.py` already proves a token reaching `decide()`
+through the full stack works end-to-end; wiring 12 agents through Cedar policy and the
+lease pool here would mostly test policy authoring for 12 scopes, not revocation
+propagation. `decide()` is called directly with a real `RedisRevocationSet` and a real
+chain, and `policy`/`budget` are stubbed to always allow — so a deny can only come from
+revocation, and the test proves exactly the mechanism the ticket names.
+
+**Consequences:** measured propagation on this run was **11–79 µs** for both the root
+revoke (12/12 agents) and the mid-tree revoke (4/4 in the revoked subtree) — push-path,
+loopback-only, same caveat T-039's NFR-4 number carries: this is not a network-separated
+deployment figure, and should be re-measured in a less friendly environment before the
+evidence pack cites it as final (T-053, per the standing note in `CLAUDE.md`).
