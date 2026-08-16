@@ -55,14 +55,66 @@ def test_test_policy_endpoint_handles_parse_errors() -> None:
     assert "unexpected token `is`" in response.text or "parse error" in response.text.lower()
 
 
-def test_activate_policy_endpoint_updates_store() -> None:
-    """The /policy/activate endpoint should accept the new policy."""
-    old_source = store.current_source
-    new_source = old_source + "\n// A new comment"
+class TestActivationIsGated:
+    """`PLAN.md` §907 and T-030: *never activatable without passing tests* (409).
 
-    response = client.post("/policy/activate", data={"source": new_source})
-    assert response.status_code == 200
-    assert 'div class="alert success">Policy Activated' in response.text
+    The endpoint previously assigned `store.current_source` and returned 200 with no
+    corpus run, no auto-tests and not even a parse — `can_activate` was computed and
+    handed to the template, so the gate existed only in the UI. A direct POST installed
+    whatever it was given, including Cedar that does not parse.
+
+    ADR-030 and ADR-034 both describe a gate that nothing enforced. These tests are the
+    enforcement.
+    """
+
+    def setup_method(self) -> None:
+        self._saved = store.current_source
+
+    def teardown_method(self) -> None:
+        # The store is module-global; leaking a mutation between tests makes the next
+        # failure depend on execution order.
+        store.current_source = self._saved
+
+    def test_a_passing_policy_activates(self) -> None:
+        new_source = CORPUS_SOURCE + "\n// A new comment"
+        response = client.post("/policy/activate", data={"source": new_source})
+        assert response.status_code == 200
+        assert "Policy Activated" in response.text
+        assert store.current_source == new_source
+
+    def test_a_policy_failing_the_corpus_is_refused_with_409(self) -> None:
+        # Breaks beat 4's payment limit, exactly as the diff test does.
+        broken = CORPUS_SOURCE.replace('decimal("500000.0")', 'decimal("1000.0")')
+
+        response = client.post("/policy/activate", data={"source": broken})
+        assert response.status_code == 409
+        assert store.current_source != broken, "a refused bundle must not become current"
+
+    def test_the_refusal_names_what_failed(self) -> None:
+        broken = CORPUS_SOURCE.replace('decimal("500000.0")', 'decimal("1000.0")')
+        response = client.post("/policy/activate", data={"source": broken})
+        assert "corpus" in response.text.lower() or "failed" in response.text.lower()
+
+    def test_unparseable_cedar_is_refused(self) -> None:
+        response = client.post("/policy/activate", data={"source": "this is not cedar"})
+        assert response.status_code == 409
+        assert store.current_source != "this is not cedar"
+
+    def test_an_empty_policy_is_refused_rather_than_silently_permitting_nothing(self) -> None:
+        # An empty policy denies everything, so it would sail past a parse-only check and
+        # take the whole demo down. The corpus is what catches it.
+        #
+        # `source` defaults to "" rather than being required, deliberately: an empty
+        # policy is a thing to *refuse* (409), not a malformed request (422). httpx drops
+        # an empty form value where a browser would send `source=`, so a required field
+        # here would make the two disagree — and the browser is the one that matters.
+        assert client.post("/policy/activate", data={"source": ""}).status_code == 409
+        assert client.post("/policy/activate", data={}).status_code == 409
+
+    def test_the_previous_policy_keeps_serving_after_a_refusal(self) -> None:
+        original = store.current_source
+        client.post("/policy/activate", data={"source": "this is not cedar"})
+        assert store.current_source == original
 
 
 @patch("agentiam_controlplane.app.compile_nl_to_policy")

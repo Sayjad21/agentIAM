@@ -102,6 +102,16 @@ def evaluate_case(engine: cedarpy.PolicySet, case: PolicyTestCase) -> PolicyVerd
     )
 
 
+def _refuse_activation(detail: str) -> HTMLResponse:
+    """A refused activation — 409, and the current policy untouched.
+
+    409 rather than 400 or 403: the request is well-formed and the caller is permitted;
+    what fails is the *state transition*. ADR-030 sets this out, and spec 05 §5.5 fixes
+    the same status for the PEP-side gate, so the two surfaces answer alike.
+    """
+    return HTMLResponse(content=f'<div class="alert danger">{detail}</div>', status_code=409)
+
+
 def create_app() -> FastAPI:
     """Create the FastAPI application for the Control Plane."""
     app = FastAPI(title="AgentIAM Control Plane")
@@ -286,11 +296,46 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/policy/activate", response_class=HTMLResponse)
-    async def activate_policy(request: Request, source: str = Form(...)) -> HTMLResponse:
-        """Sign and commit the new policy bundle."""
+    async def activate_policy(request: Request, source: str = Form("")) -> HTMLResponse:
+        """Commit the new policy bundle — but only if it earns it.
+
+        `PLAN.md` §907 and T-030's acceptance criterion both say a policy is *never*
+        activatable while a test fails, and ADR-030 fixes the status as 409. This endpoint
+        previously assigned the source and returned 200 unconditionally: `can_activate` was
+        computed for the template, so the gate lived in the UI and any direct POST walked
+        straight past it — unparseable Cedar included.
+
+        The gate here mirrors `agentiam_pep.activation.activate_bundle`: parse, then the
+        full corpus, and the previous policy keeps serving on refusal (spec 05 §5.5). It
+        cannot *call* that function yet, because that path also verifies an Ed25519
+        signature and a monotonic serial, and the console has no bundle signing — the store
+        is still a stub. Those two gates arrive with real bundle publication; the corpus
+        gate is the one that has something to check today, and it is the one that was
+        missing.
+        """
+        try:
+            candidate_engine = cedarpy.PolicySet.from_str(source)
+        except Exception as exc:
+            return _refuse_activation(f"Generated Cedar does not parse: {exc}")
+
+        def eval_candidate(case: PolicyTestCase) -> PolicyVerdict:
+            return evaluate_case(candidate_engine, case)
+
+        summary = summarize(run_policy_tests(CORPUS, eval_candidate))
+        if not summary.all_passed:
+            failed = ", ".join(r.case.name for r in summary.failures[:5])
+            more = "" if summary.failed <= 5 else f" (and {summary.failed - 5} more)"
+            return _refuse_activation(
+                f"Refused: {summary.failed} of {summary.total} corpus tests failed "
+                f"&mdash; {failed}{more}. The previous policy is still serving."
+            )
+
         store.current_source = source
         return HTMLResponse(
-            content='<div class="alert success">Policy Activated Successfully!</div>',
+            content=(
+                f'<div class="alert success">Policy Activated Successfully! '
+                f"{summary.passed}/{summary.total} corpus tests passed.</div>"
+            ),
             status_code=200,
         )
 

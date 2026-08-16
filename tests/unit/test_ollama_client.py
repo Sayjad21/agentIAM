@@ -95,6 +95,67 @@ async def test_bad_json_response_raises_ollama_error(client: OllamaClient) -> No
             await client.generate_structured("prompt", schema={})
 
 
+class TestTimeoutBudget:
+    """The 30 s default was below the *warm* median. Measured, not guessed.
+
+    Against `qwen2.5:7b-instruct-q4_0` on the development machine, resident in 5.32 GB of
+    VRAM: cold generation (model load + inference) 216.3 s; warm generation over five
+    prompts, median 45.2 s, min 24.5 s, max 233.7 s.
+
+    A 30 s budget therefore failed the *first* call always, and the median warm call too.
+    ADR-038 records the numbers and the new default.
+    """
+
+    def test_the_default_timeout_clears_the_measured_warm_median(self) -> None:
+        # 45.2 s median warm, 233.7 s worst warm observed. A default under that is a
+        # client that mostly reports its own timeout as an Ollama failure.
+        assert OllamaClient()._timeout >= 240.0
+
+    @pytest.mark.asyncio
+    async def test_keep_alive_is_sent_so_the_model_stays_resident(self) -> None:
+        # 216.3 s cold vs 45.2 s warm: the difference between a usable demo beat and an
+        # unusable one is whether the model is still in VRAM. Same lesson as ADR-037.
+        client = OllamaClient(timeout=1.0)
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+
+            class MockResponse:
+                def raise_for_status(self) -> None:
+                    pass
+
+                def json(self) -> dict[str, Any]:
+                    return {"response": "{}"}
+
+            mock_post.return_value = MockResponse()
+            await client.generate_structured("prompt", schema={})
+
+            _, kwargs = mock_post.call_args
+            assert kwargs["json"]["keep_alive"] == client.keep_alive
+
+
+class TestWarmUp:
+    @pytest.mark.asyncio
+    async def test_warm_reports_success(self) -> None:
+        client = OllamaClient(timeout=1.0)
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+
+            class MockResponse:
+                def raise_for_status(self) -> None:
+                    pass
+
+                def json(self) -> dict[str, Any]:
+                    return {"response": "{}"}
+
+            mock_post.return_value = MockResponse()
+            assert await client.warm() is True
+
+    @pytest.mark.asyncio
+    async def test_warm_never_raises_when_ollama_is_down(self) -> None:
+        # The console must start whether or not a 4 GB model happens to be loadable.
+        client = OllamaClient(timeout=1.0)
+        with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("refused")):
+            assert await client.warm() is False
+
+
 @pytest.mark.asyncio
 async def test_http_status_error_raises_ollama_error(client: OllamaClient) -> None:
     """Non-200 HTTP responses must be caught and raised as OllamaError."""

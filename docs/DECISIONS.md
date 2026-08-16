@@ -1606,3 +1606,77 @@ transient outage into a permanent one.
 (748 ms → 83 ms per miss, and 0 ms on a hit). The sync client still blocks the loop inside an
 `async` pipeline. Making the oracle async is its own change, on the ticket that wires
 features into the decision record.
+
+---
+
+## ADR-038 — The compiler's timeout was below its own warm median
+
+**Date:** 2026-08-16
+**Status:** accepted
+**Affects:** `agentiam_controlplane.nl_compiler.ollama_client`, T-028, STATUS gap 18
+
+**Context:** `OllamaClient` shipped with a hardcoded 30 s timeout (ADR-032). The model it
+names, `qwen2.5:7b-instruct-q4_0`, was not installed on the development machine, so until
+now the number had never met a real generation.
+
+Measured once it was, with the model resident in 5.32 GB of VRAM (`ollama ps` confirms GPU,
+so this is not a CPU-fallback artefact):
+
+| | measured |
+|---|---|
+| cold generation (model load + inference) | **216.3 s** |
+| warm generation, n=5 — median | **45.2 s** |
+| warm — min / max | 24.5 s / 233.7 s |
+
+The 30 s budget was below the **warm median**. It failed every first call and most
+subsequent ones, and reported each failure as `OllamaError("timed out")` — indistinguishable
+from Ollama actually being down.
+
+**Decision:** default timeout **300 s**, and `keep_alive: "30m"` on every request so the
+model stays resident. `warm()` is added, mirroring ADR-037, and returns a bool rather than
+raising — the console has plenty to do that does not involve the compiler.
+
+**Rationale:** this is the operator-initiated authoring path, not a request path. NFR-1
+governs `decide()`, not this. A timeout that actually covers the work is worth more than a
+number that looks responsive and produces false failures. 300 s clears the worst warm case
+observed (233.7 s) with margin, and the cold path (216.3 s) too.
+
+**What this does not fix:** 45 s median is still poor for a live demo beat, and it is the
+*floor* — not something a longer timeout improves. `DEMO.md` beat 5 is now honest about the
+latency rather than silently failing at 30 s, but the underlying cost is the model's. T-031
+(the template fallback, deferred) is the mitigation the plan already identified, and this
+measurement strengthens the case for un-deferring it.
+
+---
+
+## ADR-039 — The activation gate is enforced server-side, and refusal is 409 not 422
+
+**Date:** 2026-08-16
+**Status:** accepted
+**Affects:** `agentiam_controlplane.app`, T-030, ADR-030, ADR-034, STATUS gap 16
+
+**Context:** ADR-034 decided that both the auto-generated tests and the 51-case master
+corpus must pass before a generated policy is activated. ADR-030 fixed the refusal status
+at 409. Neither was enforced: `POST /policy/activate` assigned `store.current_source` and
+returned 200 unconditionally — no corpus, no auto-tests, not even a Cedar parse.
+`can_activate` was computed and passed to the template, so the gate existed **only in the
+UI**, and a direct POST installed anything, unparseable Cedar included.
+
+The test that existed asserted the endpoint *accepted* a new policy, which documented the
+missing gate as correct behaviour.
+
+**Decision:** the endpoint parses the candidate and runs the full corpus before assigning.
+On failure it returns **409** with the failing case names, and the previous policy keeps
+serving (spec 05 §5.5).
+
+It does **not** call `agentiam_pep.activation.activate_bundle`, though it mirrors it. That
+function also verifies an Ed25519 signature and a monotonic serial, and the console has no
+bundle signing — `DummyBundleStore` is still a stub. Those two gates arrive with real bundle
+publication. The corpus gate is the one with something to check today, and it is the one
+that was missing.
+
+**Sub-decision — `source` defaults to `""` rather than being required.** An empty policy
+denies everything and would take the demo down, so it must be *refused* (409), not rejected
+as a malformed request (422). Measured: httpx drops an empty form value, so a required field
+yields 422, while a browser sends `source=` and would reach the gate. Defaulting to `""`
+makes both paths agree on 409, and the browser is the path that matters.
