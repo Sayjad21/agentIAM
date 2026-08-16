@@ -37,6 +37,7 @@ _KEY_PAIR = generate_keypair()
 _SETTINGS = ControlPlaneSettings(
     root_private_key=_KEY_PAIR.private_key,
     approvers=frozenset({"kc:manager"}),
+    session_secret_key="test-session-secret",  # noqa: S106 — throwaway test signing key
 )
 
 #: 20 revokes x 3 oracles = 60 real samples. `PLAN.md`'s own measurement method for NFR-4

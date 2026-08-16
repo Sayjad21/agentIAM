@@ -15,7 +15,9 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
+from agentiam_controlplane.auth import build_router as build_auth_router
 from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
@@ -36,7 +38,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from agentiam_controlplane.db.revocations import RevocationPublisher
-    from agentiam_controlplane.settings import ControlPlaneSettings
+    from agentiam_controlplane.settings import ControlPlaneSettings, OIDCSettings
 
 # Set up paths for templates and static assets
 BASE_DIR = pathlib.Path(__file__).parent / "console"
@@ -130,6 +132,7 @@ def create_app(
     *,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     escalation_settings: ControlPlaneSettings | None = None,
+    oidc_settings: OIDCSettings | None = None,
     revocation_publisher: RevocationPublisher | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
@@ -142,6 +145,16 @@ def create_app(
     fail to start. `escalation_settings` is shared between the two: T-038's revoke endpoint
     reuses its `approvers` set (ADR-041's stopgap) rather than inventing a second one.
 
+    Whenever those two are supplied, `SessionMiddleware` is installed too (keyed by
+    `escalation_settings.session_secret_key`) — `POST /v1/escalations/.../approve` and
+    `.../deny` require a real session unconditionally as of T-043 (ADR-046), independent of
+    whether login itself is wired up. `oidc_settings` is what wires login up: supplying it
+    additionally mounts `/auth/login`, `/auth/callback`, `/auth/logout` against a real
+    Keycloak realm. Without it, the escalation routes still demand a session — a test (or an
+    operator) has to produce one some other way, e.g. a signed cookie built directly with the
+    same secret — the same "wired means it does the thing, unwired means it visibly doesn't"
+    shape as the PEP's `enforcing` flag.
+
     `revocation_publisher` is independently optional (spec 07 §5.2): a `None` publisher still
     lets `POST /v1/revocations` persist and `GET /v1/revocations` serve pulls — a deployment
     without Redis wired up is correct, only slower.
@@ -151,6 +164,11 @@ def create_app(
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     if session_factory is not None and escalation_settings is not None:
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=escalation_settings.session_secret_key,
+            same_site="lax",
+        )
         app.include_router(
             build_escalations_router(
                 session_factory=session_factory, settings=escalation_settings, now=now
@@ -164,6 +182,8 @@ def create_app(
                 now=now,
             )
         )
+        if oidc_settings is not None:
+            app.include_router(build_auth_router(settings=oidc_settings))
 
     @app.get("/escalations", response_class=HTMLResponse)
     async def escalation_queue(
@@ -171,15 +191,19 @@ def create_app(
     ) -> HTMLResponse:
         """The pending-approval queue — T-037's console acceptance criterion.
 
-        Read-only: narrowing an approval and the richer approve/deny screen are T-050's job.
-        This page exists so a pending escalation is visible somewhere before that ticket
-        lands, and posts straight to the JSON API for approve/deny.
+        Approve/deny still post straight to the JSON API; T-050 owns the richer inline
+        screen. Viewing the queue stays open to anyone who can reach the console (T-037's
+        original scope) — only the approve/deny *actions* require a session (T-043).
         """
         pending: list[dict[str, object]] = []
         error: str | None = None
+        principal_id: str | None = None
+        display_name: str | None = None
         if session_factory is None:
             error = "the escalation queue has no database configured"
         else:
+            principal_id = request.session.get("principal_id")
+            display_name = request.session.get("display_name")
             try:
                 parsed_state = EscalationState(state)
             except ValueError:
@@ -202,7 +226,14 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="escalations.html",
-            context={"pending": pending, "error": error, "state": state},
+            context={
+                "pending": pending,
+                "error": error,
+                "state": state,
+                "principal_id": principal_id,
+                "display_name": display_name,
+                "login_wired": oidc_settings is not None,
+            },
         )
 
     @app.get("/policy", response_class=HTMLResponse)

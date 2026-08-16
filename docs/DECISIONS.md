@@ -2083,3 +2083,103 @@ revoke (12/12 agents) and the mid-tree revoke (4/4 in the revoked subtree) — p
 loopback-only, same caveat T-039's NFR-4 number carries: this is not a network-separated
 deployment figure, and should be re-measured in a less friendly environment before the
 evidence pack cites it as final (T-053, per the standing note in `CLAUDE.md`).
+
+---
+
+## ADR-046 — T-043's Keycloak OIDC integration: library choice, session wiring, and four
+## things the running system disagreed with the plan on
+
+**Date:** 2026-08-16
+**Status:** accepted
+**Affects:** `agentiam_controlplane.{auth,settings,app,escalations_api}`, `docker-compose.yml`,
+`deploy/keycloak/realm-export.json`, `PLAN.md` §8, ADR-041 point 2
+
+**Context:** `PLAN.md` line 1174 fixes T-043's accept criterion as "human login; task
+approval requires a valid session; `principal_id` from the OIDC `sub` flows into the
+mandate and appears in the custody chain." No spec file governs OIDC (all ten named specs
+are about the token/policy/revocation/audit core, not console auth), and no "task approval"
+workflow distinct from *escalation* approval exists anywhere in the codebase — grepped,
+confirmed absent. ADR-041 point 2 already named the target this ticket closes: `POST
+/v1/escalations/.../approve` and `.../deny` trusted a request-body `approver` field because
+"no session identity exists yet (T-043)." This ADR is that closure.
+
+**1. Library: `authlib`, not a hand-rolled authorization-code flow.** Rule 1 forbids writing
+crypto; verifying an ID token's signature against a JWKS, and getting state/nonce/PKCE
+right, is exactly that kind of code. `authlib.integrations.starlette_client.OAuth` does
+discovery (`{issuer}/.well-known/openid-configuration`), the redirect, the code exchange,
+and JWKS-based ID-token verification. `authlib` ships no `py.typed` marker; `types-authlib`
+is added as a mypy-only dev dependency rather than blanket `ignore_missing_imports`, the
+same choice already made for `fastbloom-rs` (ADR-044) for a different reason (no stubs
+exist at all there; here they exist but one method — `OAuth.create_client` — is untyped,
+documented with a `# type: ignore[no-untyped-call]` rather than suppressed module-wide.
+
+**2. Session mechanism is a separate concern from login, and is wired unconditionally.**
+`ControlPlaneSettings` gained `session_secret_key` (signs the cookie) as a *required* field
+— `SessionMiddleware` is installed whenever `session_factory` + `escalation_settings` are
+both supplied, exactly the same condition that already mounts the escalation router. A new
+`OIDCSettings` (`issuer`, `client_id`, `client_secret`) is independently optional and only
+controls whether `/auth/login`, `/auth/callback`, `/auth/logout` are mounted. The effect:
+`POST .../approve` and `.../deny` demand a real session **unconditionally** as of this
+ticket — there is no code path left that reads `approver` from the body — but a deployment
+(or a test) can produce that session by any means that yields a validly-signed cookie,
+without needing a running Keycloak. This is the same "wired means it does the thing,
+unwired means it visibly doesn't" shape ADR-041 used for the approver list itself, applied
+one layer up.
+
+**3. No `principals` table.** `PLAN.md` §7 sketches `principals(id PK, oidc_sub UNIQUE,
+display_name, email, created_at)`, but nothing before this ticket built it — spec 07 §2.1
+already noted `agents`/`mandates` don't exist as tables either, only as pure Pydantic
+models, for the same reason: nothing in the ticket sequence reads from them. `principal_id`
+is derived as `kc:<sub>` directly from the verified ID token at login time and stored only
+in the session — matching how every other `principal_id` in the codebase is already a
+caller-supplied string (spec 01 line 73, `tests/fixtures/tokens.py`'s `"kc:9f2c1e40-..."`).
+Confirmed against `PLAN.md` §6 and §8 before writing any code (per the handoff note this
+ticket started from): §8's sketch of `POST /v1/tasks/{id}/approve` is a *different*,
+never-built endpoint (no `/v1/tasks` routes exist anywhere in the codebase, grepped) — it
+does not contradict treating "task approval" as escalation approval, it just confirms the
+plan's `tasks` schema was aspirational in the same way `agents`/`mandates` was.
+
+**4. Revocation's `revoked_by` stopgap is deliberately untouched.** `revocations_api.py`
+also reuses `settings.approvers` (ADR-041) with the caller naming who revoked in the
+request body — the same shape T-043 just replaced for escalations. It stays as-is: T-043's
+accept criterion is "task approval requires a valid session," and grepping the codebase
+found exactly one human-approval surface that title could mean (escalation approve/deny).
+Widening the ticket to also gate revocation was not asked for and is not implied by
+anything in `PLAN.md` §6 or §8; a future ticket can point at this paragraph.
+
+**Four things found by running Keycloak rather than assuming its behaviour (the habit
+`CLAUDE.md` names):**
+
+- The testcontainers Keycloak module (`testcontainers.community.keycloak`) was already
+  present in the venv but **not usable** — `from keycloak import KeycloakAdmin` raised
+  `ModuleNotFoundError` because `python-keycloak` was never installed. Fixed by adding the
+  `testcontainers[keycloak]` extra rather than `python-keycloak` directly, so the version
+  testcontainers itself is tested against is the one installed.
+- Keycloak 26 marks its own login-flow cookies (`AUTH_SESSION_ID`, `KC_RESTART`) `Secure;
+  SameSite=None` **unconditionally** — setting the realm's `sslRequired: none` (needed
+  anyway, dev has no TLS terminator) does not change this, measured directly. A real
+  browser on `http://localhost` still sends them back — the W3C Secure Contexts spec treats
+  loopback as trustworthy, and every major browser implements that exception — so the
+  console's actual login flow is unaffected. A bare `httpx` client does not implement that
+  exception, which only matters for `tests/integration/test_oidc_login.py`'s test harness
+  (worked around there by threading the two cookies through by hand — see that module's
+  docstring — not by changing anything `auth.py` does).
+- `KeycloakAdmin.create_user` does not honor a caller-supplied `id` — Keycloak always
+  server-generates one, confirmed by probing. Only a realm-*import* JSON pins a user's
+  `sub` to a known value. `deploy/keycloak/realm-export.json` is therefore how the demo's
+  two approvers (`manager`, `cfo`) get deterministic ids that `AGENTIAM_CONTROLPLANE
+  _APPROVERS` can name in advance, rather than something built through the Admin API.
+- `httpx.ASGITransport` implements `AsyncBaseTransport`, not `BaseTransport` — it cannot be
+  mounted into a sync `httpx.Client`, only `httpx.AsyncClient`. `test_oidc_login.py` drives
+  one client across both the in-process app and real Keycloak (via `mounts`), so every
+  request in that module is awaited, including the ones that hit the real container.
+
+**Consequences:** `ApproveRequest`/`DenyRequest` no longer accept an `approver` field —
+this is a breaking change to T-037's API contract, not an addition; every caller
+(`tests/integration/test_escalations_api.py`, the console's JS) was updated in the same
+commit. `docker-compose.yml` gains a `keycloak` service (`start-dev --import-realm`,
+healthcheck against its management port), matching ROADMAP §5e's "export the realm to JSON
+as soon as it works." `tests/integration/test_oidc_login.py` is the one place a real
+Keycloak container is required for a test to pass; every other escalation test fabricates a
+session cookie signed with the same secret the app would use, which is enough to prove the
+escalation contract without paying for a container per test.

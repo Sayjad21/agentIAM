@@ -1,8 +1,8 @@
 # AgentIAM — development infrastructure.
 #
-# Services are introduced per-ticket rather than all at once (ADR-001). Right now that
-# means Postgres and Redis only. Ollama and Keycloak arrive in M5, the observability
-# stack in M6 via docker-compose.observability.yml.
+# Services are introduced per-ticket rather than all at once (ADR-001). Postgres, Redis
+# and now Keycloak (T-043, ADR-046). Ollama and the observability stack (M6) still arrive
+# via their own compose files.
 #
 #   docker compose up -d --wait     # or: make up
 #
@@ -53,6 +53,35 @@ services:
       retries: 30
       start_period: 2s
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: agentiam-keycloak
+    restart: unless-stopped
+    # `sslRequired: none` lives in the realm import itself (deploy/keycloak/realm-export.json)
+    # rather than here — dev has no TLS terminator (ADR-046). The demo user passwords in
+    # that file are throwaway dev-only values for a container nothing depends on once torn
+    # down; they are not secrets in the gitleaks sense.
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+    command: ["start-dev", "--import-realm"]
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      # Keycloak 26 splits health checks onto the management port (9000), same reasoning
+      # `testcontainers.community.keycloak.KeycloakContainer._readiness_probe` uses — but
+      # the management port is not published here, so probe from inside the container.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
 volumes:
   postgres-data:
   redis-data:
+  keycloak-data:

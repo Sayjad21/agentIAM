@@ -248,8 +248,9 @@ correctness work.
 | T-030 | Verify-before-deploy loop: generated Cedar → tests → decision diff → activate | End-to-end flow, which is demo Beat 5 |
 | T-031 | 10 pattern-matched fallback templates | Compiler failure or timeout actually triggers the fallback (this is failure drill F-2) |
 
-**5e — T-043 Keycloak OIDC**, last: it gates only the console login flow.
-Export the realm to JSON as soon as it works.
+**5e — T-043 Keycloak OIDC**, last: it gates only the console login flow. **Done** — the
+realm is exported to `deploy/keycloak/realm-export.json` (ADR-046), and `POST
+/v1/escalations/.../approve`/`.../deny` require the resulting session unconditionally.
 
 **Exit gate:** Cedar evaluates in the hot path · NL→Cedar works with template fallback ·
 revocation reaches 3 PEPs in < 2 s · escalation completes end to end without mutating a token ·

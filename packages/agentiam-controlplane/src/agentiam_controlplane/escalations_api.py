@@ -5,11 +5,15 @@
 for a denial). Actually minting and persisting needs more than that — `task_id`, `agent_id`,
 `principal_id` and `intent_hash` are what `Mandate` requires (spec 01 §4) and nothing upstream
 of this router can supply them on the caller's behalf. `POST /v1/escalations`'s body is
-extended to carry them; `POST .../approve` and `.../deny` both add `approver`, because no
-session identity exists yet (T-043) and the request has to name who is acting. Recorded in
-`docs/DECISIONS.md`.
+extended to carry them. Recorded in `docs/DECISIONS.md`.
 
-No FastAPI app in this package has touched a database before this ticket (`app.py`'s
+`POST .../approve` and `.../deny` do **not** take `approver` in the body (ADR-041 point 2's
+stopgap, superseded by ADR-046/T-043): the acting identity is `agentiam_controlplane.auth
+.require_session_principal` — a real OIDC session's `kc:<sub>`, or a 401. A body-supplied
+approver name was never authenticated; nothing about that stopgap was worth keeping once a
+real session exists.
+
+No FastAPI app in this package has touched a database before T-037 (`app.py`'s
 `DummyBundleStore` is deliberately in-memory). `build_router` takes the session factory and
 settings explicitly rather than reading them from app state, so `create_app()` can keep
 building the console without a database when neither is supplied — the same "wired means it
@@ -24,10 +28,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from agentiam_controlplane.auth import require_session_principal
 from agentiam_controlplane.db import escalations as store
 from agentiam_controlplane.errors import EscalationNotFoundError
 from agentiam_core.errors import TokenTooLargeError
@@ -85,18 +90,20 @@ class OpenEscalationRequest(BaseModel):
 
 
 class ApproveRequest(BaseModel):
-    """`POST /v1/escalations/{id}/approve`."""
+    """`POST /v1/escalations/{id}/approve`.
 
-    approver: str
+    No `approver` field (ADR-046/T-043) — the acting identity comes from the caller's
+    session, not from anything the request body claims.
+    """
+
     elevation_ttl_s: float = 300.0
     narrowed_scopes: list[str] | None = None
     max_amount: Decimal | None = Field(default=None, ge=Decimal(0))
 
 
 class DenyRequest(BaseModel):
-    """`POST /v1/escalations/{id}/deny`."""
+    """`POST /v1/escalations/{id}/deny`. No `approver` field — see `ApproveRequest`."""
 
-    approver: str
     reason: str
 
 
@@ -168,14 +175,18 @@ def build_router(
         return JSONResponse([_serialize(e, now=instant) for e in found])
 
     @router.post("/{escalation_id}/approve")
-    async def approve_escalation(escalation_id: uuid.UUID, body: ApproveRequest) -> JSONResponse:
+    async def approve_escalation(
+        escalation_id: uuid.UUID,
+        body: ApproveRequest,
+        approver: str = Depends(require_session_principal),
+    ) -> JSONResponse:
         instant = now()
         async with session_factory() as session:
             try:
                 _resolved, grant = await store.resolve_approve(
                     session,
                     escalation_id,
-                    approver=body.approver,
+                    approver=approver,
                     authorized=settings.approvers,
                     now=instant,
                     elevation_ttl=_seconds(body.elevation_ttl_s),
@@ -222,14 +233,18 @@ def build_router(
         )
 
     @router.post("/{escalation_id}/deny")
-    async def deny_escalation(escalation_id: uuid.UUID, body: DenyRequest) -> JSONResponse:
+    async def deny_escalation(
+        escalation_id: uuid.UUID,
+        body: DenyRequest,
+        approver: str = Depends(require_session_principal),
+    ) -> JSONResponse:
         instant = now()
         async with session_factory() as session:
             try:
                 resolved = await store.resolve_deny(
                     session,
                     escalation_id,
-                    approver=body.approver,
+                    approver=approver,
                     authorized=settings.approvers,
                     now=instant,
                     reason=body.reason,

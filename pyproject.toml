@@ -37,7 +37,12 @@ dev = [
     "pytest-benchmark>=5.1",
     "pytest-cov>=6.0",
     "ruff>=0.8",
-    "testcontainers[postgres]>=4.8",
+    # `authlib` ships no `py.typed` marker (T-043, ADR-046) — stubs only, mypy-time.
+    "types-authlib>=1.7",
+    # `keycloak` extra pulls `python-keycloak`, required by
+    # `testcontainers.community.keycloak` (T-043) — importing that module without it is a
+    # `ModuleNotFoundError`, not a lazy-optional feature.
+    "testcontainers[postgres,keycloak]>=4.8",
 ]
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,53 @@
+{
+  "realm": "agentiam",
+  "enabled": true,
+  "sslRequired": "none",
+  "clients": [
+    {
+      "clientId": "agentiam-console",
+      "name": "AgentIAM Control Plane Console",
+      "secret": "dev-console-secret-change-me",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/auth/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:8000"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "username": "manager",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "manager@agentiam.test",
+      "firstName": "Demo",
+      "lastName": "Manager",
+      "credentials": [
+        { "type": "password", "value": "manager-pw", "temporary": false }
+      ],
+      "requiredActions": []
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "username": "cfo",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "cfo@agentiam.test",
+      "firstName": "Demo",
+      "lastName": "CFO",
+      "credentials": [
+        { "type": "password", "value": "cfo-pw", "temporary": false }
+      ],
+      "requiredActions": []
+    }
+  ]
+}

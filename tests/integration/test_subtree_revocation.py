@@ -176,7 +176,9 @@ class _Harness:
         factory = make_session_factory(migrated_engine)
         self._publish_redis = redis_asyncio.Redis.from_url(redis_url)
         settings = ControlPlaneSettings(
-            root_private_key=_KEY.private_key, approvers=frozenset({"kc:manager"})
+            root_private_key=_KEY.private_key,
+            approvers=frozenset({"kc:manager"}),
+            session_secret_key="test-session-secret",  # noqa: S106 — throwaway test signing key
         )
         app = create_app(
             session_factory=factory,

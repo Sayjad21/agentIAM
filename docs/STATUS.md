@@ -2,7 +2,7 @@
 
 What is built, what remains, and what is worth improving.
 
-**Last updated:** after T-040.
+**Last updated:** after T-043.
 Keep this current at every milestone boundary — a stale status page is worse than none.
 
 ---
@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · **M8 complete (T-037…T-040 done)** |
-| **Tickets** | 36 done · 16 remaining · 9 deferred · **61 defined, 52 in scope** |
-| **Tests** | 1974 passing (1822 in `make test`; 140 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · **M8 complete (T-037…T-040 done)** · **M9 started (T-043 done)** |
+| **Tickets** | 37 done · 15 remaining · 9 deferred · **61 defined, 52 in scope** |
+| **Tests** | 1990 passing (1831 in `make test`; 147 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
 | **Coverage** | **`agentiam-core` 100% statements** (the rule that is kept). Whole tree 98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86%. See §3 gap 14 |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
 | **Specs** | **10 written — every spec named in `PLAN.md` now exists.** `07-revocation` closes the last gap |
-| **ADRs** | 45 |
+| **ADRs** | 46 |
 
 ---
 
@@ -68,12 +68,12 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | **T-038** | `specs/07-revocation.md` (closes the last spec gap) + `revocations` table (`db.revocations`: persist-then-publish, idempotent on `block_id`) + `/v1/revocations` (revoke/pull) + `RedisRevocationSet` — the PEP-side consumer that keeps `decide()`'s synchronous `is_revoked()` fed by a Redis pub/sub fast path and an HTTP pull backstop. **EC-R06 and EC-R07 proven against real Redis**, not mocked: one integration test points the consumer's push connection at a dead port and shows pull alone still converges; another actually stops the Redis container mid-revoke and shows the row still persists. `redis` added as a real dependency for the first time (ADR-042); T-039's Bloom filter and T-040's e2e subtree-propagation measurement build on this | — |
 | **T-039** | PEP revocation cache — a Rust-backed counting Bloom filter (`fastbloom-rs`, ADR-044) as the first check inside `RedisRevocationSet.is_revoked()`; a negative returns immediately, a positive falls through to the existing exact set, which stays authoritative. **The obvious pure-Python choice (`pyprobables`) was probed and rejected**: ~92 µs/lookup at 10k ids, ~900x slower than a plain `set`, which would have made the "performance layer" a net loss — `fastbloom-rs` measured ~0.25 µs/lookup at the same sizing. Zero-false-denial property test at 10,000 ids (`test_pep_revocation.py::TestBloomFilterZeroFalseDenials`, includes a reachability audit proving real Bloom collisions occurred rather than passing vacuously). **NFR-4 measured**: 3 real `RedisRevocationSet` instances against real Redis + Postgres, 60 propagation samples per run (`test_revocation_nfr4.py`). Across five runs, p99 ranged **~11 µs to ~16 ms** (one run's slowest sample hit ~12 ms; the rest stayed single-digit-µs) — push (Redis pub/sub, loopback) wins almost every sample, with occasional scheduler jitter, not a full `pull_interval_s` wait. Loopback-only, not a network-separated deployment number, but 100–180,000x inside the 2 s budget across every run | — |
 | **T-040** | Subtree revocation e2e (closes M8) — `tests/integration/test_subtree_revocation.py` mints a real 12-agent tree with `attenuate()` (T-011): three independent depth-4 chains under one mandate, not a single branching tree, so a sibling pair shares **no** block id below the root by construction (ADR-045). Revoking the root denies all 12 through the real `decide()` pipeline (`ANCESTOR_REVOKED`); revoking subtree A's own block denies its 4 agents (`TOKEN_REVOKED` for itself, `ANCESTOR_REVOKED` for its descendants) while subtrees B and C — 8 agents — stay `ALLOW` throughout, the explicit negative test `PLAN.md` calls out ("over-revocation is also a bug"). One `RedisRevocationSet` oracle, not three: T-039's NFR-4 test already proved the multi-instance claim: **propagation measured 11–79 µs** for both scenarios, loopback-only (same caveat as T-039's number) | — |
+| **T-043** | Keycloak OIDC integration (M9 started) — `auth.py`'s `/auth/login` `/auth/callback` `/auth/logout` against real Keycloak via `authlib`, `principal_id` derived as `kc:<sub>` from the verified ID token, stored only in a signed session cookie (`SessionMiddleware`, new `ControlPlaneSettings.session_secret_key`). `POST /v1/escalations/.../approve` and `.../deny` now require that session unconditionally — ADR-041 point 2's request-body `approver` field is gone, not just superseded (ADR-046). `docker-compose.yml` gains a `keycloak` service; `deploy/keycloak/realm-export.json` pins two demo users' `sub` so `AGENTIAM_CONTROLPLANE_APPROVERS` can name them in advance — Keycloak's Admin REST API cannot pin a user id, only a realm import can (measured). `tests/integration/test_oidc_login.py` drives the real authorization-code flow against a real container, including a wrong-user 403 and a real-signature-verified session | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-043** | Keycloak OIDC integration — human login, task approval requires a valid session, `principal_id` from the OIDC `sub` flows into the mandate and the custody chain (T-041/T-042 deferred, T-044 optional-deferred — see below) | M9 |
 | T-045…T-050 | Console, D3 identity tree, live decision stream, Grafana | M10 |
 | T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7/M11 |
 

@@ -47,7 +47,7 @@ Requires [uv](https://docs.astral.sh/uv/), Python 3.12, and Docker.
 uv sync                  # create the virtualenv and install the workspace
 uv run pre-commit install
 
-make up                  # start Postgres and Redis, wait for healthy
+make up                  # start Postgres, Redis and Keycloak, wait for healthy
 make check               # lint, type check, test — everything CI runs
 make down
 ```
@@ -96,8 +96,9 @@ this project makes is a claim about that package.
 ## Stack
 
 Python 3.12 · uv · FastAPI · Pydantic v2 · SQLAlchemy 2.0 (async) · Alembic · PostgreSQL 16 ·
-Redis 7 · biscuit-python · cedarpy · Ollama (Qwen2.5-7B, open weights, self-hosted) ·
-pytest · hypothesis · testcontainers · ruff · mypy --strict · OpenTelemetry · Grafana
+Redis 7 · Keycloak (OIDC) · biscuit-python · cedarpy · Ollama (Qwen2.5-7B, open weights,
+self-hosted) · pytest · hypothesis · testcontainers · ruff · mypy --strict · OpenTelemetry ·
+Grafana
 
 **Every dependency is free and open source.** There is no paid service and no proprietary
 black-box API anywhere in this system, and all model weights are open-weight and self-hosted.

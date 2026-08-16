@@ -10,7 +10,14 @@
     <div class="container">
         <header>
             <h1>AgentIAM Control Plane</h1>
-            <p>Escalation Queue (T-037) &mdash; read-only list; the rich approve/deny screen is T-050</p>
+            <p>Escalation Queue &mdash; the rich approve/deny screen is T-050</p>
+            {% if principal_id %}
+            <p class="muted">Signed in as {{ display_name or principal_id }} ({{ principal_id }}) &middot; <a href="/auth/logout">Sign out</a></p>
+            {% elif login_wired %}
+            <p class="muted">Not signed in &middot; <a href="/auth/login?next=/escalations">Sign in</a> to approve or deny</p>
+            {% else %}
+            <p class="muted">Login is not configured on this deployment &mdash; approve/deny will 401</p>
+            {% endif %}
         </header>
 
         <main>
@@ -53,17 +60,21 @@
     </div>
 
     <script>
+        // T-043: the acting approver comes from the session cookie (already attached by
+        // the browser to same-origin fetch calls) — never from anything typed here.
         async function approve(id) {
-            const approver = prompt("Approver id (must be in AGENTIAM_CONTROLPLANE_APPROVERS):");
-            if (!approver) return;
             const res = await fetch(`/v1/escalations/${id}/approve`, {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({approver}),
+                body: JSON.stringify({}),
             });
             const body = await res.json();
             if (!res.ok) {
-                alert("Approve failed: " + (body.detail || res.status));
+                if (res.status === 401) {
+                    alert("Sign in first: " + (body.detail || "login required"));
+                } else {
+                    alert("Approve failed: " + (body.detail || res.status));
+                }
                 return;
             }
             alert("Approved. Elevated token minted; see the network tab for the full response.");
@@ -71,18 +82,20 @@
         }
 
         async function deny(id) {
-            const approver = prompt("Approver id (must be in AGENTIAM_CONTROLPLANE_APPROVERS):");
-            if (!approver) return;
             const reason = prompt("Reason for denial:");
             if (!reason) return;
             const res = await fetch(`/v1/escalations/${id}/deny`, {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({approver, reason}),
+                body: JSON.stringify({reason}),
             });
             const body = await res.json();
             if (!res.ok) {
-                alert("Deny failed: " + (body.detail || res.status));
+                if (res.status === 401) {
+                    alert("Sign in first: " + (body.detail || "login required"));
+                } else {
+                    alert("Deny failed: " + (body.detail || res.status));
+                }
                 return;
             }
             document.getElementById(`row-${id}`)?.remove();
