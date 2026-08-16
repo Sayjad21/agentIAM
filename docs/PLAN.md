@@ -1116,8 +1116,10 @@ Accept: for each of 30 curated English policy statements, the compiler produces 
 **T-030 · Verify-before-deploy loop**
 Deps: T-029, T-026. Accept: compiled policy is *never* activatable without passing tests; the UI shows the generated Cedar, the generated tests, the pass/fail table, and the decision diff; a deliberately ambiguous English input surfaces a clarifying question instead of guessing.
 
-**T-031 · Template fallback**
+**T-031 · Template fallback** `[DEFERRED — see §21]`
 Deps: T-029. Accept: on model failure, timeout, or low confidence, fall back to pattern-matched templates covering the 10 most common policy shapes. **Demo insurance — the compiler must never hang on stage.**
+
+*Rationale: the compiler path is demonstrable without it. **Cost, stated:** failure drill F-2 (`DEMO.md`) names this ticket as the automatic fallback when Ollama is slow or down, so F-2 currently has no implementation — beat 5 hangs for the `OllamaClient` timeout and then errors. That is a live demo risk, not a neutral deferral, and it is sharpened by the model `ollama_client.py` names not being installed (STATUS §3 gap 18). Resumption trigger: preparing the F-2 drill for real, which M7/T-058 requires.*
 
 ---
 

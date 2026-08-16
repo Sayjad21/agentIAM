@@ -1744,6 +1744,81 @@ grace window, stated once instead of twice.
 
 ---
 
+### T-033 · Drift features, and three numbers that changed the design
+
+Scoped down before it started. `PLAN.md` asks for six features feeding a calibrated logistic
+regression, but T-034 (the dataset) and T-035 (the classifier) are both deferred — so the
+model those six features feed will not exist for the submission. Three of the six also need
+per-task history the PEP deliberately does not hold, against a statelessness choice that
+ADR-035's whole intent binding rests on. So T-033 ships **f1, f2 and f5**, and ADR-036
+records what deferring the other three costs.
+
+The alternative — compute all six, with f3/f4/f6 returning a neutral constant — was rejected
+because a recorded constant is indistinguishable in a dataset from a real observation of
+zero. A missing feature is honest; a fabricated one is not.
+
+#### Probing the embedding model found two defects in T-032
+
+The habit paid again, and this time on shipped code rather than on a spec.
+
+**Measured:** a cold embedding call against `nomic-embed-text` takes **14,244 ms**. The
+oracle T-032 shipped has a 2 s timeout. So the first scored request after the model is
+evicted does not run slowly — it times out and fails open, every time. Ollama drops an idle
+model after roughly five minutes, so this is not a startup curiosity; it recurs all day.
+And because `lru_cache` does not memoize exceptions, every request in that window re-paid
+the full 2 s.
+
+Drift, on a cold PEP, was not slow. It was **absent** — and nothing in the suite could see
+that, because every drift test mocks the transport.
+
+**Measured, and worse in aggregate:** constructing an `httpx.Client` costs a median
+**724.7 ms** (p95 1,603.5 ms). T-032 built one inside every cache miss, on the asyncio event
+loop, inside `decide()`. That is 37% of its own 2 s timeout spent before a byte went out,
+and at p95 the construction alone nearly exhausts the budget. Hoisting it to one client per
+process took a cache miss from 747.9 ms to **83.3 ms** — about 9x, for a change that looks
+like tidying.
+
+Neither number was guessable. "Cache the model at startup" reads like an optimisation in the
+ticket; it is a correctness requirement, and the ticket does not say so.
+
+#### f5 exists because of a measurement, not a hunch
+
+The interesting result was negative. Against the task *"Pay invoice INV-2291 from vendor
+Rahman Textiles for 45000 BDT"*, inflating the payment to 9,500,000 BDT — 211x — moved f2 by
+**0.0102**, from 0.8139 to 0.8037. Aligned and drifted cases are separated by roughly 0.32.
+The inflation is inside the noise.
+
+**Semantic embeddings are near-blind to numeric magnitude.** No cosine feature can catch an
+amount attack, however many of them are stacked. That is what makes f5 — plain symbolic
+overlap between argument values and the task text, no model involved — the only one of the
+three that sees it. The test named `test_f5_sees_the_amount_attack_f2_cannot` is the one that
+justifies the feature's existence, so it carries the measurement in its docstring.
+
+f5 also had to be careful in a way the one-line sketch in `PLAN.md` does not suggest. Numbers
+compare by **value**, so the ledger's 10⁴ scaling and a thousands separator do not cause a
+false mismatch — but `4500` must not match a task that says `45000`, which a naive substring
+check would allow, and that is precisely the direction an attacker would push. Strings
+compare as folded substrings, which is what keeps an account id of `"0012"` from matching a
+task that says `12`.
+
+#### A test for homoglyphs that tried to smuggle homoglyphs
+
+Small, but the right kind of small. The NFKC test was written with literal fullwidth
+characters, and `ruff` rejected it under RUF001. It was right to: this repository lost 232
+characters to an encoding accident once, and a test *for* invisible-codepoint evasion is the
+last file that should carry invisible codepoints. The string is now built with `chr(ord(c) +
+0xFEE0)`, so the source stays ASCII and the comment says why.
+
+#### What was deliberately left undone
+
+Features are computed but not persisted. `DecisionRecord` already has a `drift_score` field
+that `decide()` populates and the pipeline silently drops, so there is no honest place to put
+a feature vector yet. Wiring both at once, on the ticket that fixes the record, is the smaller
+change — and pretending the features are recorded when they evaporate would be exactly the
+kind of claim this journal exists to catch.
+
+---
+
 
 ## What the numbers look like
 

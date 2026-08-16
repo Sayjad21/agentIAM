@@ -1517,3 +1517,92 @@ operator's fix is identical either way, and `max_staleness` is already the knob;
 **Decision:** The SDK will transmit the plain English task intent via the `AgentIAM-Task-Intent` HTTP header, alongside the `AgentIAM-Action-Intent`. The PEP will hash the task intent using `agentiam_core.hashing.hash_object` and assert it matches the token's `intent_hash`.
 
 **Rationale:** This solves the stateless verification problem for drift. The PEP avoids querying the control plane for the original task string. If the hashes match, the PEP knows the provided English text is authentic and can use it in the Drift Oracle to query semantic embeddings.
+
+---
+
+## ADR-036 — Drift features f3, f4 and f6 are deferred; T-033 ships f1, f2 and f5
+
+**Date:** 2026-08-16
+**Status:** accepted
+**Affects:** `agentiam_core.drift_features`, `agentiam_pep.drift`, T-033, spec 06 §5
+
+**Context:** `PLAN.md` §6.6 defines six drift features feeding a calibrated logistic
+regression. T-033's acceptance criterion asks for all six.
+
+Two facts change what that criterion is worth. First, **T-034 (the labelled dataset) and
+T-035 (the classifier) are both deferred**, so nothing consumes a feature vector this cycle
+— the six features feed a model that will not exist for the submission. Second, three of
+the six need state the PEP deliberately does not hold:
+
+* **f3** scope-in-task-plan prior — needs per-task-type priors.
+* **f4** step position / sequence anomaly — needs the request's position in a trace.
+* **f6** historical frequency of `(task_type, scope)` — needs history.
+
+Spec 06 §1.1 makes statelessness the load-bearing design choice, and ADR-035's whole
+stateless intent binding rests on it. `PLAN.md` sketches a `drift_observations` table to
+hold this history; it exists nowhere — no model, no migration, no writer.
+
+**Decision:** T-033 delivers **f1, f2 and f5** — the three computable from the request
+alone. f3, f4 and f6 are deferred, with T-034 as the resumption trigger, since the dataset
+work is where per-task history first has to exist anyway.
+
+**Cost, stated plainly:** the drift feature vector is half a vector. If T-034 is ever taken
+up, the classifier starts from three features rather than six, and the three missing ones
+are exactly the *temporal* signals — which is where the slow-drift evasion named in
+`PLAN.md` §20 (A-27) would show up. Rule-based v0 already cannot see slow drift; this does
+not make that worse, but it does not help either.
+
+**Rejected alternative:** computing all six with f3/f4/f6 returning a neutral constant. That
+satisfies "six features computed" literally while shipping three features that measure
+nothing, and a recorded constant is indistinguishable in the dataset from a real
+observation of zero. A missing feature is honest; a fabricated one is not.
+
+---
+
+## ADR-037 — The embedding client is per-process and warms itself, because cold start is 14 s
+
+**Date:** 2026-08-16
+**Status:** accepted
+**Affects:** `agentiam_pep.drift.EmbeddingClient`, spec 06 §4.1-§4.2, T-033
+
+**Context:** T-033 asks for the "embedding model cached at startup". That reads like an
+optimisation. Measuring it showed it is not.
+
+Against `nomic-embed-text` (768 dimensions) on the development machine:
+
+| | measured |
+|---|---|
+| cold embedding call (model not resident) | **14,244 ms** |
+| warm call, median / p95 (n=20) | 17.8 ms / 83.4 ms |
+| `httpx.Client` construction alone, median / p95 (n=20) | **724.7 ms** / 1,603.5 ms |
+| cache miss, client-per-call — T-032 as shipped | 747.9 ms |
+| cache miss, shared client — T-033 | **83.3 ms** |
+
+Two separate defects in T-032's shipped oracle fall out of this:
+
+1. A cold call takes 7x the oracle's own 2 s timeout, so the **first** scored request after
+   the model is evicted always times out and fails open. Drift was not slow on a cold PEP;
+   it was absent. Ollama evicts an idle model after roughly five minutes, so this recurs in
+   normal operation, not only at boot. `lru_cache` does not memoize exceptions, so every
+   request in the cold window re-paid the full timeout.
+2. Constructing an `httpx.Client` per cache miss cost a median 724 ms of **blocking work on
+   the asyncio event loop**, inside `decide()` — 37% of the 2 s budget spent before a byte
+   was sent, and at p95 approaching the timeout on its own.
+
+**Decision:** `EmbeddingClient` holds one `httpx.Client` for the process, caches vectors by
+text, and exposes `warm()` — which uses a separate 60 s timeout (the hot-path 2 s cannot
+load a cold model) and sets Ollama's `keep_alive` so the model stays resident rather than
+being re-warmed one request at a time.
+
+**Rationale:** `warm()` returns a bool and never raises. Startup must not fail because an
+advisory heuristic is unavailable (spec 06 §2.1), but the operator should be told, so the
+outcome is logged and returned rather than swallowed.
+
+Failures are deliberately **not** cached. The cold window is exactly when calls fail, and
+remembering a failure would keep drift dead until the process restarted — converting a
+transient outage into a permanent one.
+
+**Note:** this does not fix the blocking-call-on-the-event-loop problem, only its magnitude
+(748 ms → 83 ms per miss, and 0 ms on a hit). The sync client still blocks the loop inside an
+`async` pipeline. Making the oracle async is its own change, on the ticket that wires
+features into the decision record.

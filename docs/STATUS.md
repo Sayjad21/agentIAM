@@ -11,13 +11,13 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-036 done) · specs 06–07 outstanding |
-| **Tickets** | 31 done · 21 remaining · 9 deferred · **61 defined, 52 in scope** |
-| **Tests** | 1676 passing (1558 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 3 in `make bench`) |
-| **Coverage** (`agentiam-core`, `-sdk`, `-pep`, `-controlplane`) | 100% statements · 99%+ branches |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · spec 07 outstanding |
+| **Tickets** | 32 done · 20 remaining · 9 deferred · **61 defined, 52 in scope** |
+| **Tests** | 1758 passing (1639 in `make test`; 103 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
+| **Coverage** | **`agentiam-core` 100% statements** (the rule that is kept). Whole tree 98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86%. See §3 gap 14 |
 | **CI** | green — five jobs: lint/types/tests + **NFR-1 benchmark**, integration against real Postgres, **the end-to-end slice**, core purity, compose health |
-| **Specs** | 8 written — `08-audit-chain` added with the audit work; `06`–`07` outstanding |
-| **ADRs** | 29 |
+| **Specs** | 9 written — `06-drift-detection` added with T-032/T-033; only `07-revocation` outstanding |
+| **ADRs** | 37 |
 
 ---
 
@@ -63,15 +63,20 @@ Keep this current at every milestone boundary — a stale status page is worse t
 | T-030 | Verify-before-deploy loop — Integrated compiler into Admin Console UI with ambiguity handling and dual gating (auto-tests + corpus) | — |
 | T-032 | `specs/06-drift-detection.md` + `drift.py` — Stateless Intent Binding via headers (`AgentIAM-Task-Intent`), Semantic drift oracle using local Ollama | — |
 | T-036 | Drift modes wiring (`off`, `log_only`, `strict`) — Extractor configuration parsing, pipeline context integration, drift score evaluation | — |
+| **T-033** | `drift_features.py` + `EmbeddingClient` — f1/f2/f5 and a startup warm-up. **Probing found two defects in T-032**: a 14,244 ms cold embedding against a 2 s timeout (drift was *absent*, not slow, on a cold PEP), and a 724 ms `httpx.Client` built per cache miss on the event loop — 748 ms → 83 ms per miss. f3/f4/f6 deferred (ADR-036, ADR-037) | — |
 
 ### Next
 
 | Ticket | Delivers | Milestone |
 |---|---|---|
-| **T-023** | **End-to-end thin slice.** Where enforcement turns on — the first ticket with all five of `decide()`'s inputs. Needs a deliberate answer for `PolicyEngine` (an allow-all stub would report that policy was evaluated when none exists) | M4 |
-| T-024…T-043 | Cedar, revocation, escalation, drift, NL compiler, Keycloak | M5 |
-| T-045…T-057 | Console, D3 identity tree, Grafana, demo scenarios | M6 |
-| T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7 |
+| **T-037/T-038** | Escalation workflow, then revocation service + gossip. `PLAN.md` §1627 lists T-038/T-039 among the must-keep core | M8 |
+| T-039…T-040 | PEP revocation cache, subtree revocation e2e | M8 |
+| T-045…T-050 | Console, D3 identity tree, live decision stream, Grafana | M10 |
+| T-051…T-059 | Load, chaos, red-team, evidence pack, submission, drills | M7/M11 |
+
+**Carrying forward, unticketed:** the audit-record gap below (gap 15) blocks persisting both
+the drift score and the T-033 feature vector, and should be the next thing fixed on the drift
+path — spec 06 §5 says so explicitly.
 
 **Also outstanding from M2:** specs `05`–`09` (policy, drift, revocation, audit, decision
 record). They gate the tickets that implement them, so spec `06-revocation` and
@@ -85,7 +90,7 @@ them explicitly is part of the submission's honesty story, not an omission to hi
 | Ticket | Why | Resumption trigger |
 |---|---|---|
 | T-010 | Token reference for oversized chains. **Measured unreachable**: at `max_depth = 8` a token is 4,940 base64 chars — 60% of the 8 KB limit (ADR-006) | `max_depth` above ~16 |
-| T-031 | Template fallback for NL compiler (Failure Drill F-2). Rule-based drift handles core demo features. | Mandatory requirement for offline F-2 drill |
+| T-031 | Template fallback for NL compiler. The compiler path demonstrates without it — but **F-2 has no implementation while it is deferred**, so beat 5 hangs if Ollama is down. Cost stated in `PLAN.md` §T-031 | Preparing the F-2 drill for real (T-058) |
 | T-015 | Adaptive lease sizing. Fixed leases behave identically for the demo; the algorithm is specified in spec 04 §12 | Production traffic with variable rate |
 | T-034 | Drift dataset — 2,000+ labelled pairs, weeks of irreducible human labelling | Research phase |
 | T-035 | Calibrated ML drift classifier. Rule-based v0 gives the same demo experience | After T-034 |
@@ -110,7 +115,7 @@ Real debt, not speculation. Each has a home.
 | 2 | **No Datalog→caveat parser.** The SDK now carries the caveats *it* minted, so `attenuate()` catches re-widening along a chain it built. A token received from elsewhere still folds to an upper bound | For a chain this process built, closed. For a received token, the console cannot show a true effective bound. Never understates a restriction — biscuit's append-only structure sees to that | Needed by T-019 (naming the failing caveat) and T-045 (identity tree). **Note:** whatever parses block source must not trust it — see TM-24 |
 | 3 | **No LICENSE file.** README and every package declare Apache-2.0; the text is absent | Weakens the §14.4 IP claim for a submission judged on IP ownership | Add via GitHub's license picker — verbatim text matters |
 | 4 | **`mutmut` not yet run.** T-009 asks for ≤10% surviving mutants on `attenuation.py` and `caveats.py` | Coverage says the lines run; mutation says the assertions bite. Untested claim | M7, one run (ROADMAP Part 1) |
-| 5 | **Specs 05–09 unwritten** | Their tickets cannot start spec-first, which is the rule that caught seven design errors | M2 tail / M5 |
+| ~~5~~ | ~~**Specs 05–09 unwritten**~~ — 05, 06, 08 and 09 now exist. **Only `07-revocation` remains**, and it gates T-038 | Its ticket cannot start spec-first, which is the rule that caught seven design errors | Before T-038 |
 | 6 | **A1 re-verification is manual.** The security rests on biscuit scoping block facts; nothing fails if a library upgrade changes it | Silent collapse of INV-1 on a dependency bump | Should become a test — see §4 |
 | 7 | **`budgets.mandate_id` carries no foreign key.** No `mandates` SQL table exists yet — T-005 built `Mandate` as a pure Pydantic model, no persistence (ADR-014) | A budget row can reference a mandate id that was never issued; nothing in the schema catches it | Whichever ticket first persists mandates (issuance service, `PLAN.md` §8 — not yet its own ticket) |
 | 8 | **`ACQUIRE` does not clamp by `max_fraction`.** Spec 04 §4.1's clamp is mathematically incompatible with T-013's own acceptance test, applied to a fixed caller-`requested` amount (ADR-015, measured) | No single-PEP-crash blast-radius bound beyond `ttl` — a PEP can be granted more than a quarter of the pool in one `ACQUIRE` | T-015 (adaptive lease sizing, deferred) — that's where the formula actually applies |
@@ -119,6 +124,11 @@ Real debt, not speculation. Each has a home.
 | ~~11~~ | ~~**The PEP enforces nothing.**~~ — **closed in T-023.** `/readyz` reports `enforcing: true`, and the flag is derived from the wiring rather than declared, so an app built without a pipeline still reports `false` | Was the single most misleading state in the repo | Closed. The estimate moved four times (T-019 → T-020 → T-021 → T-023); three were guesses written before reading `decide()`'s signature, and the fourth was the decision to build T-024 first (ADR-027) |
 | 12 | **No HTTP trailer support, and none available.** Measured across httpx, Starlette and uvicorn: no layer exposes trailers (ADR-020) | One T-018 acceptance criterion consciously unmet. Costs nothing for the demo; trailers are rare on HTTP/1.1 | Only reopens if T-041 (MCP, deferred) needs them — and the fix would be in the ASGI server, not here |
 | 10 | **`tests/integration/test_budget_schema.py` duplicates `conftest.py`'s fixtures.** T-012 predates the shared conftest; noted in its header and left alone | Two copies of the container and migration fixtures drift apart | Same cleanup as §4.3 |
+| 14 | **Coverage is reported but never gated.** No `fail_under` in `pyproject.toml`, and CI's `quality` job uploads `coverage.xml` without asserting on it. This page claimed 100% across four packages while the tree measured 98% | The "core stays at 100%" rule is discipline, not a check. It has already slipped once — `agentiam-core` dropped to 96% during T-033 and was caught by hand, not by CI | One line in `[tool.coverage.report]`, plus a per-package floor for `agentiam-core` |
+| 15 | **`DecisionRecord.drift_score` is never written.** `decide()` populates `Decision.drift_score`; `pipeline._record()` does not read it, so the field is always `None` — **including on a `DRIFT_ESCALATION` denial**, where the score is the entire justification. Verified by probe across all three drift modes | `log_only` mode pays two embedding round-trips and produces nothing observable, which is spec 06 §3's stated purpose unimplemented. A strict escalation leaves no record of why. And T-033's feature vector has nowhere honest to go until this is fixed | The next drift ticket. Spec 06 §5 names it as the blocker |
+| 16 | **`POST /policy/activate` gates nothing.** It assigns `store.current_source` and returns 200 — no corpus, no auto-tests, not even a Cedar parse. `can_activate` is computed and passed to the template, so the gate is UI-only. `agentiam_pep.activation.activate_bundle` — T-026's gate, correct and tested — has **no production caller** | Contradicts ADR-034, T-030's acceptance criterion (*"never activatable without passing tests"*) and `PLAN.md` §907 (`409 if tests failing`). A direct POST installs unparseable Cedar | Wire `activate_bundle` into the endpoint and map `ActivationFailed` to 409, as ADR-030 already describes |
+| 17 | **`scripts/evaluate_compiler.py` measures nothing.** It passes dataset fields straight to cedarpy as principal/action/resource, but the dataset holds bare names (`"admin"`), not entity uids. `app.py` formats them as `User::"admin"`; this script does not. Every request returns `NoDecision` — measured: **0/30 even with a hand-written correct policy** | ADR-033 and this page both said T-029 was "evaluated against a 30-case corpus". No such number was ever produced, and the tool would report 0/30 regardless of compiler quality. Same shape as T-024's *benchmark that was measuring a stub* | Format the uids, then actually run it and record the number |
+| 18 | **The NL compiler's model is not installed.** `ollama_client.py` hardcodes `qwen2.5:7b-instruct-q4_0`; the dev machine has `nomic-embed-text`, `llama3.2`, `gemma3`, `mistral` — not that one | Demo beat 5 cannot run as configured, and T-031 (the template fallback that would have covered it) is deferred | Pull the model, or make it configurable and record what was actually measured against |
 
 ---
 

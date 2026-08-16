@@ -80,7 +80,7 @@ def test_fails_open_if_oracle_is_down(
     )
     mock_post.side_effect = httpx.RequestError("Connection refused")
 
-    with pytest.raises(OracleUnavailable, match="Network error"):
+    with pytest.raises(OracleUnavailable, match="network error"):
         drift_oracle.score_for(context)
 
 
@@ -97,7 +97,7 @@ def test_fails_open_if_oracle_returns_error(
         "Server error", request=MagicMock(), response=response
     )
 
-    with pytest.raises(OracleUnavailable, match="HTTP error"):
+    with pytest.raises(OracleUnavailable, match="HTTP 500"):
         drift_oracle.score_for(context)
 
 
