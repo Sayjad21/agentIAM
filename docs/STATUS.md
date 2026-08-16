@@ -11,7 +11,7 @@ Keep this current at every milestone boundary — a stale status page is worse t
 
 | | |
 |---|---|
-| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · **M8 complete (T-037…T-040 done)** · **M9 started (T-043 done)** |
+| **Milestone** | **M1–M4 complete** · M5 started (T-024, T-025, T-026, T-027 done) · M6 (T-028, T-029, T-030 done) · M7 started (T-032, T-033, T-036 done) · **M8 complete (T-037…T-040 done)** · **M9 resolved (T-043 done; T-041/T-042/T-044 deferred — nothing left undeferred)** |
 | **Tickets** | 37 done · 15 remaining · 9 deferred · **61 defined, 52 in scope** |
 | **Tests** | 1990 passing (1831 in `make test`; 147 in `make test-integration`; 12 in `make test-e2e`; 4 in `make bench`) |
 | **Coverage** | **`agentiam-core` 100% statements** (the rule that is kept). Whole tree 98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86%. See §3 gap 14 |
