@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentIAM Control Plane - Live Decisions</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: rgba(30, 41, 59, 0.7);
+            --surface-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        body, html {
+            margin: 0; padding: 0; width: 100%;
+            background: var(--bg-color); color: var(--text-main);
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+        .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+        h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+        .sub { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
+        .filters {
+            display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+            background: var(--surface-color); border: 1px solid var(--surface-border);
+            border-radius: 10px; padding: 16px; margin-bottom: 16px;
+        }
+        .filters label { display: block; font-size: 11px; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+        .filters input, .filters select {
+            background: rgba(15, 23, 42, .8); color: var(--text-main);
+            border: 1px solid var(--surface-border); border-radius: 6px;
+            padding: 8px 10px; font-size: 13px; font-family: inherit; min-width: 150px;
+        }
+        button {
+            background: var(--primary); color: #fff; border: 0; border-radius: 6px;
+            padding: 9px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
+            font-family: inherit;
+        }
+        .status { display: flex; align-items: center; gap: 8px; font-size: 12px;
+            color: var(--text-muted); margin-bottom: 12px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+        .dot.live { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .dot.down { background: var(--danger); }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th {
+            text-align: left; font-size: 11px; text-transform: uppercase;
+            letter-spacing: .04em; color: var(--text-muted); font-weight: 500;
+            padding: 8px 10px; border-bottom: 1px solid var(--surface-border);
+        }
+        td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+        tr.new { animation: flash 1.2s ease-out; }
+        @keyframes flash { from { background: rgba(59,130,246,.25); } to { background: transparent; } }
+        .pill {
+            display: inline-block; padding: 2px 8px; border-radius: 999px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+        }
+        .allow { background: rgba(16,185,129,.15); color: var(--success); }
+        .deny { background: rgba(239,68,68,.15); color: var(--danger); }
+        .escalate { background: rgba(245,158,11,.15); color: var(--warning); }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+        .why { color: var(--text-main); }
+        .why.refused { color: #fca5a5; }
+        .caveat {
+            display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 4px;
+            background: rgba(239,68,68,.18); color: #fca5a5; font-size: 11px; font-weight: 600;
+        }
+        .empty { color: var(--text-muted); padding: 32px; text-align: center; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Live decisions</h1>
+    <div class="sub">Every authorization decision as it happens. A refusal names the caveat that caused it.</div>
+
+    <form class="filters" method="get" action="/decisions">
+        <div>
+            <label for="outcome">Outcome</label>
+            <select id="outcome" name="outcome">
+                <option value=""{% if not outcome %} selected{% endif %}>All</option>
+                <option value="allow"{% if outcome == 'allow' %} selected{% endif %}>Allow</option>
+                <option value="deny"{% if outcome == 'deny' %} selected{% endif %}>Deny</option>
+                <option value="escalate"{% if outcome == 'escalate' %} selected{% endif %}>Escalate</option>
+            </select>
+        </div>
+        <div>
+            <label for="agent_id">Agent</label>
+            <input id="agent_id" name="agent_id" value="{{ agent_id }}" placeholder="agt-1">
+        </div>
+        <div>
+            <label for="scope">Scope</label>
+            <input id="scope" name="scope" value="{{ scope }}" placeholder="payment:initiate">
+        </div>
+        <button type="submit">Apply</button>
+    </form>
+
+    <div class="status">
+        <span class="dot" id="dot"></span><span id="state">connecting…</span>
+        <span id="count"></span>
+    </div>
+
+    <table>
+        <thead>
+        <tr>
+            <th>Time</th><th>Outcome</th><th>Agent</th><th>Scope</th>
+            <th>Tool</th><th>Why</th><th>Latency</th>
+        </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty">Waiting for the first decision…</div>
+</div>
+
+<script>
+// The filters are applied server-side, in SQL — the audit chain grows without bound, so
+// filtering in the browser would mean shipping the whole chain to it.
+const params = new URLSearchParams();
+{% if outcome %}params.set("outcome", {{ outcome | tojson }});{% endif %}
+{% if agent_id %}params.set("agent_id", {{ agent_id | tojson }});{% endif %}
+{% if scope %}params.set("scope", {{ scope | tojson }});{% endif %}
+
+const rows = document.getElementById("rows");
+const empty = document.getElementById("empty");
+const dot = document.getElementById("dot");
+const state = document.getElementById("state");
+const count = document.getElementById("count");
+let total = 0;
+
+// Newest on top, and capped: a long-running demo would otherwise grow the DOM until the
+// page stutters, which on stage reads as the product being slow.
+const MAX_ROWS = 200;
+
+function cell(text) {
+    const td = document.createElement("td");
+    td.textContent = text ?? "";
+    return td;
+}
+
+function render(d, isNew) {
+    const tr = document.createElement("tr");
+    if (isNew) tr.className = "new";
+
+    const time = document.createElement("td");
+    time.className = "mono";
+    time.textContent = (d.timestamp || "").replace("T", " ").slice(11, 23);
+    tr.appendChild(time);
+
+    const out = document.createElement("td");
+    const pill = document.createElement("span");
+    pill.className = "pill " + (d.outcome || "");
+    pill.textContent = d.outcome || "?";
+    out.appendChild(pill);
+    tr.appendChild(out);
+
+    tr.appendChild(cell(d.agent_id));
+    const scope = cell(d.scope); scope.className = "mono"; tr.appendChild(scope);
+    const tool = cell(d.tool_id); tool.className = "mono"; tr.appendChild(tool);
+
+    // T-046's point: the refusal explains itself inline, naming the exact caveat, rather
+    // than saying "denied by policy".
+    const why = document.createElement("td");
+    why.className = "why" + (d.outcome === "allow" ? "" : " refused");
+    if (d.failing_caveat_kind) {
+        const tag = document.createElement("span");
+        tag.className = "caveat";
+        tag.textContent = d.failing_caveat_kind
+            + (d.failing_caveat_block !== null ? " @" + d.failing_caveat_block : "");
+        why.appendChild(tag);
+    }
+    why.appendChild(document.createTextNode(d.explanation || d.reason_code || ""));
+    tr.appendChild(why);
+
+    const lat = cell(d.latency_us ? (d.latency_us / 1000).toFixed(2) + " ms" : "");
+    lat.className = "mono";
+    tr.appendChild(lat);
+
+    rows.prepend(tr);
+    while (rows.children.length > MAX_ROWS) rows.lastChild.remove();
+
+    total += 1;
+    count.textContent = "· " + total + " decision" + (total === 1 ? "" : "s");
+    empty.style.display = "none";
+}
+
+{% if streaming %}
+const source = new EventSource("/v1/decisions/stream?" + params.toString());
+
+source.addEventListener("snapshot", (e) => {
+    // Oldest first from the server, so render in order and let each `prepend` invert it.
+    for (const d of JSON.parse(e.data)) render(d, false);
+    dot.className = "dot live";
+    state.textContent = "live";
+});
+source.addEventListener("decision", (e) => render(JSON.parse(e.data), true));
+source.addEventListener("heartbeat", () => { dot.className = "dot live"; state.textContent = "live"; });
+source.onerror = () => {
+    // EventSource reconnects on its own; say so rather than implying the feed is gone.
+    dot.className = "dot down";
+    state.textContent = "reconnecting…";
+};
+{% else %}
+dot.className = "dot down";
+state.textContent = "no database configured — streaming disabled";
+empty.textContent = "The control plane was started without a database, so there is nothing to stream.";
+{% endif %}
+</script>
+</body>
+</html>

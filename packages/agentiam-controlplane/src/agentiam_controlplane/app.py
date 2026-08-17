@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from agentiam_controlplane.auth import build_router as build_auth_router
 from agentiam_controlplane.db.escalations import list_by_state
+from agentiam_controlplane.decisions_api import build_router as build_decisions_router
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
 from agentiam_controlplane.revocations_api import build_router as build_revocations_router
@@ -187,6 +188,34 @@ def create_app(
             app.include_router(build_auth_router(settings=oidc_settings))
 
     app.include_router(build_tree_router(session_factory=session_factory, now=now))
+
+    # T-046. Mounted unconditionally, like the tree: both routes answer 503 without a
+    # database, which is visibly "not wired" rather than a boot failure.
+    app.include_router(build_decisions_router(session_factory=session_factory))
+
+    @app.get("/decisions", response_class=HTMLResponse)
+    async def decisions_console(
+        request: Request,
+        outcome: str | None = Query(default=None),
+        agent_id: str | None = Query(default=None),
+        scope: str | None = Query(default=None),
+    ) -> HTMLResponse:
+        """The live decision stream — T-046's console surface.
+
+        The filters are read here only to seed the form and the initial `EventSource` URL;
+        the filtering itself happens in SQL (`db/decisions.py`), because the audit chain
+        grows without bound.
+        """
+        return templates.TemplateResponse(
+            request=request,
+            name="decisions.html",
+            context={
+                "outcome": outcome or "",
+                "agent_id": agent_id or "",
+                "scope": scope or "",
+                "streaming": session_factory is not None,
+            },
+        )
 
     @app.get("/identity-tree", response_class=HTMLResponse)
     async def identity_tree(
