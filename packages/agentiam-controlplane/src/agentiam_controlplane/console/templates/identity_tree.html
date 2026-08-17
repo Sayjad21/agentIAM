@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentIAM Control Plane - Identity Tree</title>
+    <!-- Modern Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- D3.js -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: rgba(30, 41, 59, 0.7);
+            --surface-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --primary-glow: rgba(59, 130, 246, 0.5);
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            background: radial-gradient(circle at 50% 0%, #1e293b 0%, #0f172a 100%);
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        header {
+            padding: 1.5rem 2rem;
+            background: var(--surface-color);
+            border-bottom: 1px solid var(--surface-border);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.025em;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Form Overlay for missing task_id */
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(12px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+        }
+
+        .form-card {
+            background: var(--surface-color);
+            border: 1px solid var(--surface-border);
+            padding: 2.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--surface-border);
+            border-radius: 0.5rem;
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin-bottom: 1rem;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input[type="text"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        button.btn-primary {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+        }
+
+        button.btn-primary:hover {
+            background: #2563eb;
+        }
+
+        button.btn-primary:active {
+            transform: scale(0.98);
+        }
+
+        /* Tree Area */
+        #tree-container {
+            flex: 1;
+            position: relative;
+        }
+
+        /* Caveat Side Panel */
+        #side-panel {
+            width: 400px;
+            background: var(--surface-color);
+            border-left: 1px solid var(--surface-border);
+            backdrop-filter: blur(10px);
+            padding: 2rem;
+            overflow-y: auto;
+            transform: translateX(100%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            z-index: 20;
+            box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+        }
+
+        #side-panel.open {
+            transform: translateX(0);
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1.5rem;
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            transition: color 0.2s;
+        }
+
+        .close-btn:hover {
+            color: var(--text-main);
+        }
+
+        .caveat-block {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--surface-border);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .caveat-block pre {
+            margin: 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .status-active { background: rgba(16, 185, 129, 0.1); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .status-revoked { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.2); }
+        .status-escalated { background: rgba(245, 158, 11, 0.1); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.2); }
+
+        /* SVG Styles */
+        .node circle {
+            fill: var(--surface-color);
+            stroke: var(--primary);
+            stroke-width: 2px;
+            transition: all 0.3s ease;
+        }
+
+        .node.revoked circle { stroke: var(--danger); }
+        .node.escalated circle { stroke: var(--warning); fill: rgba(245, 158, 11, 0.2); }
+
+        .node text {
+            font-family: 'Inter', sans-serif;
+            fill: var(--text-main);
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        .node text.subtitle {
+            fill: var(--text-muted);
+            font-size: 10px;
+        }
+
+        .link {
+            fill: none;
+            stroke: var(--surface-border);
+            stroke-width: 2px;
+            transition: stroke 0.3s;
+        }
+        
+        .node {
+            cursor: pointer;
+        }
+        .node:hover circle {
+            fill: var(--primary-glow);
+            stroke-width: 3px;
+        }
+
+        /* Pulse animation for active tasks */
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.5); opacity: 0; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+        
+        .pulse-ring {
+            fill: none;
+            stroke: var(--primary);
+            stroke-width: 2px;
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        .node.revoked .pulse-ring { stroke: var(--danger); }
+        .node.escalated .pulse-ring { stroke: var(--warning); }
+        
+        .budget-bar-bg {
+            fill: rgba(255, 255, 255, 0.1);
+            rx: 2;
+        }
+        .budget-bar-fg {
+            fill: var(--primary);
+            rx: 2;
+            transition: width 0.5s ease;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Identity Tree</h1>
+                <div class="subtitle" id="task-id-display">Task ID: {{ task_id or 'Not Set' }}</div>
+            </div>
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <div id="connection-status" style="font-size: 0.875rem; color: var(--text-muted);">
+                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--warning); margin-right:6px;"></span>
+                    Connecting...
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div id="tree-container">
+                <svg width="100%" height="100%"></svg>
+            </div>
+            
+            <div id="side-panel">
+                <button class="close-btn" onclick="closePanel()">&times;</button>
+                <h2 id="panel-agent-id" style="margin-top: 0;">Agent ID</h2>
+                <div id="panel-status"></div>
+                <div id="panel-budget"></div>
+                <h3 style="font-size: 1rem; margin-top: 2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--surface-border); padding-bottom: 0.5rem;">Token Chain &amp; Caveats</h3>
+                <div id="panel-caveats">
+                    <p class="muted">Loading block sources...</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    {% if not task_id %}
+    <div class="overlay">
+        <div class="form-card">
+            <h2 style="margin-top:0;">Visualize Task</h2>
+            <p style="color: var(--text-muted); margin-bottom: 2rem; font-size: 0.875rem;">Enter a Task ID to render its dynamic identity tree.</p>
+            <form action="/identity-tree" method="GET">
+                <input type="text" name="task_id" placeholder="00000000-0000-0000-0000-000000000000" required>
+                <button type="submit" class="btn-primary">View Tree</button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    <script>
+        const taskId = "{{ task_id }}";
+        
+        let nodesData = [];
+        let treeMap = new Map();
+
+        // D3 setup
+        const container = document.getElementById('tree-container');
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        const svg = d3.select("svg")
+            .call(d3.zoom().on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            }))
+            .append("g")
+            .attr("transform", "translate(50, 0)");
+
+        const g = svg.append("g").attr("transform", `translate(50, ${height / 2})`);
+
+        const treeLayout = d3.tree().nodeSize([80, 250]);
+        
+        function updateTree(data) {
+            // Build hierarchy
+            // For now, we assume agent root is depth 0 and children fall underneath
+            // Because the API returns flat nodes, we need to stratify them.
+            // But we don't have direct 'parent_id', we have 'depth'. 
+            // In a block chain, depth implies hierarchy. 
+            // Let's infer parent by finding the node with depth - 1 that shares the same block prefix.
+            // Since `block_ids` is a list representing the chain, the parent's block_ids is a prefix of the child's.
+            
+            // Build hierarchy map
+            const rootNode = data.find(n => n.depth === 0);
+            if (!rootNode) return; // Wait for root
+
+            data.forEach(n => {
+                n.id = n.agent_id;
+                // Find parent: the node with depth == n.depth - 1 whose block_ids is a prefix of n.block_ids
+                if (n.depth > 0) {
+                    const parent = data.find(p => p.depth === n.depth - 1 && 
+                        p.block_ids.every((val, index) => val === n.block_ids[index]));
+                    n.parentId = parent ? parent.id : null;
+                } else {
+                    n.parentId = null;
+                }
+            });
+
+            const stratify = d3.stratify()
+                .id(d => d.id)
+                .parentId(d => d.parentId);
+
+            let root;
+            try {
+                root = stratify(data);
+            } catch(e) {
+                console.error("Stratify error", e);
+                return;
+            }
+
+            const treeData = treeLayout(root);
+
+            // Links
+            const link = g.selectAll(".link")
+                .data(treeData.links(), d => d.target.id);
+
+            link.enter().insert("path", "g")
+                .attr("class", "link")
+                .attr("d", d3.linkHorizontal()
+                    .x(d => d.source.y)
+                    .y(d => d.source.x))
+                .attr("opacity", 0)
+                .merge(link)
+                .transition().duration(500)
+                .attr("d", d3.linkHorizontal()
+                    .x(d => d.y)
+                    .y(d => d.x))
+                .attr("opacity", 1);
+
+            link.exit().transition().duration(500).attr("opacity", 0).remove();
+
+            // Nodes
+            const node = g.selectAll(".node")
+                .data(treeData.descendants(), d => d.id);
+
+            const nodeEnter = node.enter().append("g")
+                .attr("class", d => `node ${d.data.revoked ? 'revoked' : ''} ${d.data.has_pending_escalation ? 'escalated' : ''}`)
+                .attr("transform", d => `translate(${d.y},${d.x})`)
+                .attr("opacity", 0)
+                .on("click", (event, d) => openPanel(d.data));
+
+            nodeEnter.append("circle")
+                .attr("class", "pulse-ring")
+                .attr("r", 15);
+
+            nodeEnter.append("circle")
+                .attr("r", 15);
+
+            nodeEnter.append("text")
+                .attr("dy", -25)
+                .attr("x", 0)
+                .style("text-anchor", "middle")
+                .text(d => d.data.agent_id);
+
+            nodeEnter.append("text")
+                .attr("class", "subtitle")
+                .attr("dy", 35)
+                .attr("x", 0)
+                .style("text-anchor", "middle")
+                .text(d => {
+                    if (d.data.revoked) return "REVOKED";
+                    if (d.data.has_pending_escalation) return "ESCALATING";
+                    return d.data.role || "active";
+                });
+                
+            // Budget bars
+            const budgetGroup = nodeEnter.append("g")
+                .attr("transform", "translate(-25, 45)");
+                
+            budgetGroup.append("rect")
+                .attr("class", "budget-bar-bg")
+                .attr("width", 50)
+                .attr("height", 4);
+                
+            budgetGroup.append("rect")
+                .attr("class", "budget-bar-fg")
+                .attr("width", d => {
+                    if (!d.data.budget || d.data.budget.length === 0) return 0;
+                    const b = d.data.budget[0];
+                    if (b.total <= 0) return 0;
+                    return (b.available / b.total) * 50;
+                })
+                .attr("height", 4);
+
+            nodeEnter.transition().duration(500)
+                .attr("opacity", 1);
+
+            // Update existing
+            const nodeUpdate = node.merge(nodeEnter)
+                .attr("class", d => `node ${d.data.revoked ? 'revoked' : ''} ${d.data.has_pending_escalation ? 'escalated' : ''}`);
+                
+            nodeUpdate.transition().duration(500)
+                .attr("transform", d => `translate(${d.y},${d.x})`);
+
+            nodeUpdate.select(".budget-bar-fg").transition().duration(500)
+                .attr("width", d => {
+                    if (!d.data.budget || d.data.budget.length === 0) return 0;
+                    const b = d.data.budget[0];
+                    if (b.total <= 0) return 0;
+                    return (b.available / b.total) * 50;
+                });
+
+            nodeUpdate.select("text.subtitle")
+                .text(d => {
+                    if (d.data.revoked) return "REVOKED";
+                    if (d.data.has_pending_escalation) return "ESCALATING";
+                    return d.data.role || "active";
+                });
+
+            node.exit().transition().duration(500).attr("opacity", 0).remove();
+        }
+
+        // SSE Client
+        if (taskId) {
+            const eventSource = new EventSource(`/v1/tree/${taskId}/stream`);
+            const statusIndicator = document.getElementById('connection-status');
+
+            eventSource.onopen = () => {
+                statusIndicator.innerHTML = '<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--success); margin-right:6px; box-shadow: 0 0 8px var(--success);"></span>Connected';
+            };
+
+            eventSource.onerror = () => {
+                statusIndicator.innerHTML = '<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--danger); margin-right:6px;"></span>Disconnected';
+            };
+
+            eventSource.addEventListener('snapshot', (e) => {
+                const data = JSON.parse(e.data);
+                nodesData = data.nodes;
+                updateTree(nodesData);
+            });
+
+            eventSource.addEventListener('diff', (e) => {
+                const diff = JSON.parse(e.data);
+                
+                // apply diff
+                diff.added.forEach(node => {
+                    const idx = nodesData.findIndex(n => n.agent_id === node.agent_id);
+                    if (idx < 0) nodesData.push(node);
+                });
+                
+                diff.changed.forEach(node => {
+                    const idx = nodesData.findIndex(n => n.agent_id === node.agent_id);
+                    if (idx >= 0) nodesData[idx] = node;
+                });
+                
+                diff.removed.forEach(node => {
+                    nodesData = nodesData.filter(n => n.agent_id !== node.agent_id);
+                });
+
+                updateTree(nodesData);
+                
+                // If side panel is open for a changed node, refresh it
+                const openAgentId = document.getElementById('panel-agent-id').dataset.agentId;
+                if (openAgentId) {
+                    const updatedNode = nodesData.find(n => n.agent_id === openAgentId);
+                    if (updatedNode) renderPanelState(updatedNode);
+                }
+            });
+            
+            eventSource.addEventListener('heartbeat', (e) => {
+                console.log("Heartbeat received");
+            });
+        }
+
+        function closePanel() {
+            document.getElementById('side-panel').classList.remove('open');
+            document.getElementById('panel-agent-id').dataset.agentId = "";
+        }
+
+        function renderPanelState(node) {
+            document.getElementById('panel-agent-id').innerText = node.agent_id;
+            document.getElementById('panel-agent-id').dataset.agentId = node.agent_id;
+            
+            let statusHtml = '';
+            if (node.revoked) {
+                statusHtml = `<div class="status-badge status-revoked">Revoked: ${node.revocation_reason}</div>`;
+            } else if (node.has_pending_escalation) {
+                statusHtml = `<div class="status-badge status-escalated">Pending Escalation</div>`;
+            } else {
+                statusHtml = `<div class="status-badge status-active">Active</div>`;
+            }
+            document.getElementById('panel-status').innerHTML = statusHtml;
+            
+            let budgetHtml = '';
+            if (node.budget && node.budget.length > 0) {
+                budgetHtml = `<div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.5rem;">Budgets</div>`;
+                node.budget.forEach(b => {
+                    budgetHtml += `
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 0.25rem; font-size: 0.875rem;">
+                            <span>${b.dimension}</span>
+                            <span style="color:var(--text-main); font-family:monospace;">${b.available} / ${b.total}</span>
+                        </div>
+                    `;
+                });
+            }
+            document.getElementById('panel-budget').innerHTML = budgetHtml;
+        }
+
+        async function openPanel(node) {
+            renderPanelState(node);
+            document.getElementById('side-panel').classList.add('open');
+            
+            const caveatsContainer = document.getElementById('panel-caveats');
+            caveatsContainer.innerHTML = '<p class="muted">Loading block sources...</p>';
+            
+            try {
+                const resp = await fetch(`/v1/tree/${taskId}/blocks/${node.agent_id}`);
+                if (!resp.ok) throw new Error('Failed to fetch caveats');
+                const data = await resp.json();
+                
+                if (data.blocks && data.blocks.length > 0) {
+                    caveatsContainer.innerHTML = data.blocks.map(b => `
+                        <div class="caveat-block">
+                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Block ${b.index} • ${b.block_id.substring(0,8)}...</div>
+                            <pre>${b.source}</pre>
+                        </div>
+                    `).join('');
+                } else {
+                    caveatsContainer.innerHTML = '<p class="muted">No token chain blocks found.</p>';
+                }
+            } catch (e) {
+                caveatsContainer.innerHTML = `<p style="color:var(--danger)">Error loading block sources.</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

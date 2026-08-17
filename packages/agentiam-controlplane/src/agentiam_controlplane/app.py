@@ -22,6 +22,7 @@ from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
 from agentiam_controlplane.revocations_api import build_router as build_revocations_router
+from agentiam_controlplane.tree_api import build_router as build_tree_router
 from agentiam_core.corpus import CORPUS, CORPUS_SOURCE, CORPUS_TOOLS
 from agentiam_core.decision import PolicyVerdict
 from agentiam_core.escalation import EscalationState
@@ -184,6 +185,19 @@ def create_app(
         )
         if oidc_settings is not None:
             app.include_router(build_auth_router(settings=oidc_settings))
+
+    app.include_router(build_tree_router(session_factory=session_factory, now=now))
+
+    @app.get("/identity-tree", response_class=HTMLResponse)
+    async def identity_tree(
+        request: Request, task_id: str | None = Query(default=None)
+    ) -> HTMLResponse:
+        """The agent delegation tree visualizer — T-045's console acceptance criterion."""
+        return templates.TemplateResponse(
+            request=request,
+            name="identity_tree.html",
+            context={"task_id": task_id},
+        )
 
     @app.get("/escalations", response_class=HTMLResponse)
     async def escalation_queue(
