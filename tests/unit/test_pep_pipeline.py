@@ -15,6 +15,7 @@ Two classes carry the weight:
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -56,6 +57,8 @@ from agentiam_pep.pool import LeaseGrant, LeasePool, PoolSettings
 from agentiam_pep.revocation import InMemoryRevocationSet
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from agentiam_core.tokens import VerifiedToken
 
 NOW = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
@@ -917,6 +920,121 @@ class TestCheckThenReserveRace:
 
         assert isinstance(result, Refused)
         assert result.reason_code is ReasonCode.LEASE_UNAVAILABLE
+
+
+class TestRequestSpanDelegation:
+    """`Pipeline.request_span`/`child_span` (T-049) delegate to the emitter.
+
+    Pins the delegation itself, separately from `test_pep_emitter.py`'s coverage of the
+    underlying on/off behaviour.
+    """
+
+    async def test_both_are_open_by_default(self) -> None:
+        pipeline, _, _ = await a_pipeline()
+        with pipeline.request_span() as span:
+            assert span is not None
+        with pipeline.child_span("agentiam.upstream_call") as span:
+            assert span is not None
+
+    async def test_both_respect_tracing_off(self) -> None:
+        sink = CollectingSink()
+        emitter = DecisionEmitter(sink, EmitterSettings(capacity=64, tracing=False))
+        pipeline, _, _ = await a_pipeline(emitter=emitter)
+        with pipeline.request_span() as span:
+            assert span is None
+        with pipeline.child_span("agentiam.upstream_call") as span:
+            assert span is None
+
+
+class RecordingSpan:
+    """A fake `Span` that just remembers what was set on it — no OTEL SDK involved.
+
+    Standing in for a real span lets `TestTracingLinksTheUpstreamCall` assert on
+    `app.py`'s wiring (which attributes land on which span, and when) without mutating the
+    process-global `TracerProvider` — installing a real one would leak into every other
+    test in the session, including `test_pep_emitter.py`'s benchmark of the documented
+    "no SDK attached" case.
+    """
+
+    def __init__(self, name: str) -> None:
+        """Start with no attributes recorded."""
+        self.name = name
+        self.attributes: dict[str, object] = {}
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+
+class TestTracingLinksTheUpstreamCall:
+    """T-049's actual point: a decision span and its upstream call, linked.
+
+    Verified by monkeypatching `request_span`/`child_span` to hand back `RecordingSpan`s
+    and checking what `app.py` put on each — the real OTEL context-nesting behaviour is
+    the SDK's own job, already exercised by `opentelemetry`'s own test suite, not this
+    project's to re-prove.
+    """
+
+    @staticmethod
+    def _wire_fake_spans(pipeline: Pipeline) -> tuple[list[RecordingSpan], list[RecordingSpan]]:
+        request_spans: list[RecordingSpan] = []
+        upstream_spans: list[RecordingSpan] = []
+
+        @contextlib.contextmanager
+        def fake_request_span() -> Iterator[RecordingSpan]:
+            span = RecordingSpan("agentiam.decision")
+            request_spans.append(span)
+            yield span
+
+        @contextlib.contextmanager
+        def fake_child_span(name: str) -> Iterator[RecordingSpan]:
+            span = RecordingSpan(name)
+            upstream_spans.append(span)
+            yield span
+
+        pipeline.request_span = fake_request_span  # type: ignore[assignment]
+        pipeline.child_span = fake_child_span  # type: ignore[assignment]
+        return request_spans, upstream_spans
+
+    async def test_an_authorized_request_tags_both_spans(self) -> None:
+        pipeline, _, _ = await a_pipeline()
+        request_spans, upstream_spans = self._wire_fake_spans(pipeline)
+
+        async with await TestThroughTheGateway._app(pipeline) as client:
+            response = await client.get(
+                "/proxy/invoices/inv_001", headers=dict(bearer(a_mandate()))
+            )
+        assert response.status_code == 200
+
+        assert len(request_spans) == 1
+        assert request_spans[0].attributes["agentiam.outcome"] == "allow"
+        assert request_spans[0].attributes["agentiam.scope"] == "invoice:read"
+
+        assert len(upstream_spans) == 1
+        assert upstream_spans[0].name == "agentiam.upstream_call"
+        assert upstream_spans[0].attributes["http.request.method"] == "GET"
+        assert upstream_spans[0].attributes["http.response.status_code"] == 200
+
+    async def test_a_refusal_tags_the_decision_span_and_opens_no_upstream_span(self) -> None:
+        """A refusal never opens the upstream child span either.
+
+        `TestThroughTheGateway` already pins that a refusal never reaches `client.send`;
+        an upstream span with no upstream call behind it would be a trace lying about
+        what happened.
+        """
+        pipeline, _, _ = await a_pipeline()
+        request_spans, upstream_spans = self._wire_fake_spans(pipeline)
+
+        async with await TestThroughTheGateway._app(pipeline) as client:
+            response = await client.get("/proxy/invoices/inv_001")
+        assert response.status_code == 401
+
+        assert len(request_spans) == 1
+        assert request_spans[0].attributes["agentiam.outcome"] == "refuse"
+        assert (
+            request_spans[0].attributes["agentiam.reason_code"]
+            == ReasonCode.MALFORMED_REQUEST.value
+        )
+        assert upstream_spans == []
 
 
 def a_record_placeholder(pipeline: Pipeline) -> DecisionRecord:

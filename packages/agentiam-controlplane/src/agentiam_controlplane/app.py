@@ -23,6 +23,7 @@ from agentiam_controlplane.budgets_api import build_router as build_budgets_rout
 from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.decisions_api import build_router as build_decisions_router
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
+from agentiam_controlplane.metrics_api import build_router as build_metrics_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
 from agentiam_controlplane.revocations_api import build_router as build_revocations_router
 from agentiam_controlplane.tree_api import build_router as build_tree_router
@@ -200,6 +201,11 @@ def create_app(
 
     # T-048, same shape: 503 without a database rather than a boot failure.
     app.include_router(build_audit_router(session_factory=session_factory))
+
+    # T-049: Prometheus scrapes this for the Decisions and Budgets Grafana dashboards.
+    # Same shape again: 503 without a database rather than a boot failure or a 500 a
+    # scrape target would report as the target itself being down.
+    app.include_router(build_metrics_router(session_factory=session_factory, now=now))
 
     @app.get("/budgets", response_class=HTMLResponse)
     async def budgets_console(request: Request) -> HTMLResponse:

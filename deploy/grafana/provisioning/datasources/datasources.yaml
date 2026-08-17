@@ -1,0 +1,17 @@
+# T-049, ADR-047. Fixed `uid`s so the two dashboard JSONs in
+# deploy/grafana/dashboards/ can reference them without depending on provisioning order.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200

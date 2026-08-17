@@ -29,6 +29,10 @@ dependencies = [
     # Signs the session cookie authlib's Starlette integration and `SessionMiddleware` use
     # to carry OAuth state/nonce and, after login, `principal_id` — T-043.
     "itsdangerous>=2.2",
+    # `GET /metrics` Prometheus exposition for Grafana's Decisions/Budgets dashboards —
+    # T-049. Same package and version floor `agentiam-pep` already pins for its own
+    # `/metrics` (T-018).
+    "prometheus-client>=0.21",
 ]
 
 [build-system]

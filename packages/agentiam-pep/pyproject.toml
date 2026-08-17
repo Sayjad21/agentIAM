@@ -15,9 +15,13 @@ dependencies = [
     "cedarpy>=4.8",
     "fastapi>=0.115",
     "httpx>=0.28",
-    # API only, deliberately. Without an SDK installed the tracer is a no-op, so T-022 can
-    # emit spans now and T-049 wires the collector in M6 (ADR-001, infrastructure per-ticket).
+    # T-022 added the API only, deliberately: without an SDK the tracer is a no-op, so
+    # spans could be measured (5.58 us, `emitter.py`) before anything paid to export them.
+    # T-049 adds the SDK + an OTLP/HTTP exporter, wired through `tracing.py` and only
+    # activated when `AGENTIAM_PEP_OTEL_EXPORTER_ENDPOINT` is set (ADR-047).
     "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
     "prometheus-client>=0.21",
     "uvicorn[standard]>=0.32",
     # Subscribing to the `agentiam:revocations` pub/sub channel — spec 07 §5.1, ADR-042.

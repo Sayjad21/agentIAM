@@ -2183,3 +2183,93 @@ as soon as it works." `tests/integration/test_oidc_login.py` is the one place a 
 Keycloak container is required for a test to pass; every other escalation test fabricates a
 session cookie signed with the same secret the app would use, which is enough to prove the
 escalation contract without paying for a container per test.
+
+## ADR-047 — T-049's observability wiring: metrics straight to Prometheus, traces through the collector, and where the decision span actually opens
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `agentiam_pep.{emitter,pipeline,app,config,tracing}`, `agentiam_controlplane.{metrics_api,db.decision_metrics,app}`, both packages' `pyproject.toml`, `docker-compose.observability.yml`, `deploy/{otel,prometheus,tempo,grafana}/`, `PLAN.md` §1197
+
+**Context:** `PLAN.md` line 1197 (T-049, already reduced in scope) requires two Grafana
+dashboards — Decisions (rate, outcome mix, reason codes) and Budgets (per-mandate spend,
+lease utilization) — committed as JSON, plus traces visible in Tempo with decision spans
+linked to upstream calls. `PLAN.md` §4.2 already settles the shape at the architecture
+level: "OpenTelemetry Python SDK → OTEL Collector → Tempo (traces), Prometheus (metrics),
+Loki (logs), Grafana (dashboards). All OSS, all in `docker-compose.observability.yml`." Three
+things that sentence leaves open were resolved here.
+
+**1. Metrics go straight from each app to Prometheus; only traces cross the collector.**
+`agentiam_pep.app` has exposed a `prometheus_client` `/metrics` since T-018. Rather than
+build a second, OTLP-metrics path through the collector for the control plane to match, T-049
+adds `agentiam_controlplane.metrics_api` in the same idiom — a fresh `CollectorRegistry` per
+scrape, Prometheus polling `/metrics` directly. The collector's job here is traces only. This
+is a narrower reading of §4.2's diagram than "everything flows through the collector," and
+the reason is concrete: nothing in this codebase uses the OTEL *metrics* SDK, `decisions_api`
+and `budgets_api` already compute exactly the numbers a dashboard needs
+(`db/decisions.py`, `db/budget_dashboard.py`), and routing already-Prometheus-shaped data
+through OTLP-then-back-to-Prometheus would be a translation with no reader on either end who
+needed it in a different shape. `Loki` (logs) is not stood up at all — no ticket names a log
+pipeline, T-049's own accept criterion never mentions logs, and standing up log shipping with
+nothing yet emitting structured logs to ship would be infrastructure for a demo beat that
+does not exist. Resumption trigger, if wanted later: a ticket that actually needs to search
+logs across services, which none of T-045…T-050 do (`PLAN.md` §21 pattern).
+
+**2. Money crosses from `Decimal` to `float` at exactly one place: `metrics_api.metrics()`.**
+Rule 4 ("money is `Decimal`, never `float`, not once") governs the ledger and every
+computation over it; `db/budget_dashboard.py`'s `build_dashboard()` is untouched and still
+returns `Decimal`. `prometheus_client.Gauge.set()` only accepts `float`, and a Grafana gauge
+is a display a human reads, never a value fed back into a decision — the invariant checker
+and the ledger never read `/metrics`. The conversion is the exposition boundary, the same
+kind of boundary NFR-5/TM-13 already draw around `arg_digest` (real values stop at the
+control plane; only a hash crosses further). No new caveat or budget-arithmetic code touches
+`float` anywhere.
+
+**3. The decision span opens in `agentiam_pep.app.proxy()`, not inside
+`Pipeline.authorize()`, and this is the fix for a real gap, not a stylistic choice.**
+Checked against the running system before writing anything: `DecisionEmitter.decision_span`
+has existed since T-022, is unit-tested in isolation, and is **never called from production
+code** — grepped the whole tree. That means `authorize()`'s first line,
+`current_trace_id()`, has never had a real span to read outside its own test file; every
+`DecisionRecord.trace_id` in every environment that has ever run this code falls back to
+`str(decision_id)`. T-049 closes that by having `Pipeline.request_span()` open the span
+*before* `authorize()` runs (a new public method, delegating to
+`emitter.decision_span()` with the scope filled in after `authorize()` returns, since scope
+is not known until extraction has run inside it) and keeping it open across the upstream
+`httpx` call, wrapped in its own child span via the new `Pipeline.child_span()`. This is
+also the literal fix for T-049's "decision spans linked to upstream calls": before this
+ticket there was no ambient span for an upstream call to nest inside even if one had been
+opened. `decision_span`'s signature gained a default (`scope: str = ""`) to support opening
+before scope is known; existing callers and existing tests
+(`test_pep_emitter.py::TestTracing`) are unaffected — confirmed by running them, not assumed.
+
+**4. `configure_tracing` is separate from `decision_span`/`request_span`/`child_span`, and
+guards against a real footgun.** `agentiam_pep.tracing.configure_tracing` installs a real
+`opentelemetry-sdk` `TracerProvider` + OTLP/HTTP exporter, but only when
+`AGENTIAM_PEP_OTEL_EXPORTER_ENDPOINT` is set — unset in every unit test, every benchmark, and
+every deployment that has not opted in, so `emitter.py`'s measured 5.58 µs "no SDK attached"
+figure stays exactly what it was measured to be. It also checks
+`isinstance(trace.get_tracer_provider(), TracerProvider)` before calling
+`set_tracer_provider` again: OTEL's API only honours the *first* call in a process and
+otherwise just warns, and `create_app()` runs once per test that builds an app — dozens of
+times in one `pytest` process. Without the guard, every app built after the first in a
+tracing-enabled test run would log that warning. `tests/unit/test_pep_tracing.py` resets
+`opentelemetry.trace`'s two module-level globals (`_TRACER_PROVIDER`,
+`_TRACER_PROVIDER_SET_ONCE`) around every test in that file rather than letting a real
+provider leak into the shared test process — `opentelemetry-python`'s own test suite resets
+the same two globals the same way, so this is the supported pattern, not a private hack.
+
+**Consequences:** Two new dependencies each, both floor-pinned to match what is already
+installed: `agentiam-pep` gains `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`;
+`agentiam-controlplane` gains `prometheus-client` (same version floor PEP already pins).
+`docker-compose.observability.yml` is deliberately separate from `docker-compose.yml` —
+neither `agentiam-controlplane` nor `agentiam-pep` runs as a container yet (no service exists
+for either in the main compose file), so Prometheus's scrape targets in
+`deploy/prometheus/prometheus.yml` point at `host.docker.internal:8000`/`:8010` — placeholder
+ports, since no ticket has fixed a dev-run port for either app; noted in that file rather than
+presented as an established convention, and expected to be settled for good by T-057's demo
+script. No Testcontainers image exists for "the whole observability stack," so nothing here
+is exercised by an integration test the way Postgres/Keycloak are — `tests/unit/
+test_observability_config.py` checks that every config file parses and says what the accept
+criterion requires; bringing the stack up with `docker compose -f
+docker-compose.observability.yml up -d --wait` and confirming traces actually land in Tempo
+remains a manual check, same footing as T-057's eventual demo rehearsal.

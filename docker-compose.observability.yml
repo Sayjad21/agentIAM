@@ -1,0 +1,87 @@
+# AgentIAM — observability stack. T-049, PLAN.md §4.2 / §1197 (ADR-047).
+#
+# Deliberately its own file, not folded into docker-compose.yml (PLAN.md §4.2 names it
+# `docker-compose.observability.yml` explicitly): the control plane and PEP are still run as
+# host processes, not containers (no service for either exists in the main compose file
+# either), so this stack is opt-in infrastructure a developer brings up only when looking at
+# traces or dashboards — not something every `make up` should pay for.
+#
+#   docker compose -f docker-compose.observability.yml up -d --wait
+#
+# Traces: the app processes export OTLP/HTTP straight to the collector
+# (AGENTIAM_PEP_OTEL_EXPORTER_ENDPOINT=http://localhost:4318/v1/traces — unset by default,
+# see .env.example). Metrics: Prometheus scrapes each app's own `/metrics` directly
+# (agentiam_pep.app since T-018, agentiam_controlplane.metrics_api since T-049) rather than
+# through a second OTLP-metrics pipeline — both already speak Prometheus exposition, and
+# routing that through the collector would be a second protocol translation buying nothing.
+# `host.docker.internal` is what lets containers here reach those host processes; Docker
+# Desktop (this project's target per CLAUDE.md) resolves it out of the box.
+
+name: agentiam-observability
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.0
+    container_name: agentiam-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./deploy/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      # OTLP/HTTP receiver — what AGENTIAM_PEP_OTEL_EXPORTER_ENDPOINT points at.
+      - "4318:4318"
+    depends_on:
+      tempo:
+        condition: service_started
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: agentiam-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deploy/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200" # query API, used by Grafana's Tempo datasource
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: agentiam-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # Docker Desktop resolves this automatically; declared for parity with Linux hosts
+      # where it does not, so the same compose file works either way.
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana-oss:11.4.0
+    container_name: agentiam-grafana
+    restart: unless-stopped
+    environment:
+      # Dev-only, throwaway — same footing as docker-compose.yml's Keycloak admin/admin.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
+
+volumes:
+  tempo-data:
+  prometheus-data:
+  grafana-data:

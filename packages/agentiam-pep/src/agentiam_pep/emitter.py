@@ -205,18 +205,32 @@ class DecisionEmitter:
             ) from None
 
     @contextlib.contextmanager
-    def decision_span(self, scope: str) -> Iterator[Span | None]:
-        """Open a span for one decision, or nothing when tracing is off.
+    def span(self, name: str) -> Iterator[Span | None]:
+        """Open a named span, or nothing when tracing is off.
 
         Measured at 5.58 µs per span with no SDK attached — 0.56% of NFR-1's budget, but the
         same order as the decision it wraps. `tracing=False` is there so T-053's load
-        profile can measure both.
+        profile can measure both. T-049 adds the second caller: `Pipeline.request_span`
+        wraps the whole proxied request, not just the decision, so it needs a name of its
+        own rather than being hard-coded to `"agentiam.decision"`.
         """
         if not self._settings.tracing:
             yield None
             return
-        with _TRACER.start_as_current_span("agentiam.decision") as span:
-            span.set_attribute("agentiam.scope", scope)
+        with _TRACER.start_as_current_span(name) as span:
+            yield span
+
+    @contextlib.contextmanager
+    def decision_span(self, scope: str = "") -> Iterator[Span | None]:
+        """Open `"agentiam.decision"`, tagged with `scope` when one is already known.
+
+        `scope` is optional because T-049's caller (`Pipeline.request_span`) opens this
+        span *before* extraction has run — the scope is not known yet. It sets the
+        attribute itself once `authorize()` returns it, via the `Span` this yields.
+        """
+        with self.span("agentiam.decision") as span:
+            if span is not None and scope:
+                span.set_attribute("agentiam.scope", scope)
             yield span
 
     # -- draining -------------------------------------------------------------------

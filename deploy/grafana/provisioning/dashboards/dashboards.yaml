@@ -1,0 +1,14 @@
+# T-049, ADR-047. Loads the two committed JSON dashboards from the mounted directory —
+# `disableDeletion: true` so an operator deleting one in the UI doesn't lose it; it comes
+# back on the next reload from the file this repository actually tracks.
+apiVersion: 1
+
+providers:
+  - name: AgentIAM
+    orgId: 1
+    folder: AgentIAM
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

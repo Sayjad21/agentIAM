@@ -49,6 +49,10 @@ class PepSettings:
         pool_timeout_s: How long to wait for a free connection from the pool.
         max_connections: Upper bound on the upstream pool.
         max_keepalive_connections: How many of those are kept warm.
+        otel_exporter_endpoint: The OTEL collector's OTLP/HTTP traces endpoint, e.g.
+            `http://localhost:4318/v1/traces`. `None` (the default) leaves tracing at the
+            T-018 API-only no-op — unset in every unit test and benchmark, so `emitter.py`'s
+            measured 5.58 µs figure is unaffected by T-049 existing.
     """
 
     upstream_base_url: str
@@ -59,6 +63,7 @@ class PepSettings:
     connect_retries: int = 2
     max_connections: int = 100
     max_keepalive_connections: int = 20
+    otel_exporter_endpoint: str | None = None
 
     def __post_init__(self) -> None:
         """Validate at construction, so a bad value fails at startup rather than in flight."""
@@ -130,6 +135,7 @@ class PepSettings:
             connect_retries=int(number("connect_retries", 2)),
             max_connections=int(number("max_connections", 100)),
             max_keepalive_connections=int(number("max_keepalive_connections", 20)),
+            otel_exporter_endpoint=os.environ.get(f"{ENV_PREFIX}OTEL_EXPORTER_ENDPOINT") or None,
         )
 
     def build_client(self) -> httpx.AsyncClient:

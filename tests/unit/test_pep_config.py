@@ -71,7 +71,10 @@ class TestTimeoutBudget:
     def test_timeouts_must_be_positive(self, field: str) -> None:
         """Zero would mean "no timeout" to httpx — the opposite of what it reads like."""
         with pytest.raises(ValueError, match=field):
-            PepSettings(upstream_base_url="http://up.test", **{field: 0})
+            if field == "connect_timeout_s":
+                PepSettings(upstream_base_url="http://up.test", connect_timeout_s=0)
+            else:
+                PepSettings(upstream_base_url="http://up.test", read_timeout_s=0)
 
 
 class TestHttpxTimeout:

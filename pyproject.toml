@@ -43,6 +43,10 @@ dev = [
     # `testcontainers.community.keycloak` (T-043) — importing that module without it is a
     # `ModuleNotFoundError`, not a lazy-optional feature.
     "testcontainers[postgres,keycloak]>=4.8",
+    # Validating the observability infra's YAML (T-049) — already resolved transitively via
+    # `uvicorn[standard]`, pinned here directly because tests import it, not just uvicorn.
+    "pyyaml>=6.0",
+    "types-pyyaml>=6.0",
 ]
 
 # ---------------------------------------------------------------------------

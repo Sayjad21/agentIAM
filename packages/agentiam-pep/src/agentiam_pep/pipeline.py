@@ -37,7 +37,10 @@ from agentiam_pep.extractor import ExtractionError, extract
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
+    from contextlib import AbstractContextManager
     from datetime import datetime
+
+    from opentelemetry.trace import Span
 
     from agentiam_core.models import Caveat, DecisionRecord
     from agentiam_core.tokens import RootKeySet, VerifiedToken
@@ -189,6 +192,28 @@ class Pipeline:
         self._drift_oracle = drift_oracle
         self._features = features
         self._escalation_sink = escalation_sink
+
+    def request_span(self) -> AbstractContextManager[Span | None]:
+        """The whole-request span wrapping `authorize()`, `settle()`, and the upstream call.
+
+        Must be opened by the caller *before* `authorize()` runs — T-049: `authorize()` calls
+        `current_trace_id()` at its very first line, and that reads whatever span is
+        already current. Opened here rather than inside `authorize()` itself so the
+        upstream call the proxy makes afterward lands inside the same span — otherwise the
+        decision and the call it authorized would show up as two unrelated traces in
+        Tempo, which is what T-049 exists to not do. `agentiam.scope` is not known yet at
+        this point (extraction hasn't run), so the caller sets it on the yielded span once
+        `authorize()` returns.
+        """
+        return self._emitter.decision_span()
+
+    def child_span(self, name: str) -> AbstractContextManager[Span | None]:
+        """A nested span within whatever `request_span()` opened — the upstream call.
+
+        Respects the same `tracing` on/off switch `request_span()` does, so T-053's load
+        profile can measure with it fully disabled rather than half.
+        """
+        return self._emitter.span(name)
 
     async def authorize(
         self,

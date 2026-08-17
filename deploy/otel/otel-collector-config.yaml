@@ -1,0 +1,29 @@
+# OTEL Collector — traces only. T-049, ADR-047.
+#
+# Metrics are not piped through here: both apps already expose Prometheus exposition
+# directly (`agentiam_pep.app` since T-018, `agentiam_controlplane.metrics_api` since
+# T-049) and Prometheus scrapes them itself (`deploy/prometheus/prometheus.yml`). A second,
+# OTLP-metrics path through this collector would be a second protocol translation for the
+# same numbers.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]

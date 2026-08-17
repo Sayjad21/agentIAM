@@ -34,6 +34,7 @@ Three things about the forwarding path were settled by measurement rather than b
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -46,6 +47,7 @@ from agentiam_core.errors import ReasonCode
 from agentiam_pep.config import PepSettings
 from agentiam_pep.headers import filter_request_headers, filter_response_headers
 from agentiam_pep.pipeline import Authorized, Refused
+from agentiam_pep.tracing import configure_tracing
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -95,6 +97,7 @@ def create_app(
     Returns:
         A FastAPI application.
     """
+    configure_tracing(endpoint=settings.otel_exporter_endpoint)
     client = upstream_client or settings.build_client()
     enforcing = pipeline is not None
     registry = CollectorRegistry()
@@ -149,71 +152,103 @@ def create_app(
     )
     async def proxy(upstream_path: str, request: Request) -> StreamingResponse | JSONResponse:
         """Authorize, then forward one request upstream and stream the answer back."""
-        authorized: Authorized | None = None
-        if pipeline is not None:
-            # Read the body only when some route maps a `body.` argument; otherwise the
-            # stream is left untouched and the proxy hop stays constant-memory (ADR-023).
-            # Measured: `json()` then `stream()` replays fine, the reverse raises.
-            request_body = await request.body() if _reads_body(request) else None
-            outcome = await pipeline.authorize(
-                method=request.method,
-                path="/" + upstream_path,
-                query_string=request.url.query,
-                headers=list(request.headers.items()),
-                body=request_body,
+        # T-049: opened before `authorize()` runs, so its first line — `current_trace_id()`
+        # — has a real span to read, and left open across the upstream call below so that
+        # call lands in the same trace rather than an unrelated one. A no-op (`span is
+        # None`) when there's no pipeline (T-018 mode) or tracing is off.
+        span_cm = pipeline.request_span() if pipeline is not None else contextlib.nullcontext(None)
+        with span_cm as span:
+            authorized: Authorized | None = None
+            if pipeline is not None:
+                # Read the body only when some route maps a `body.` argument; otherwise the
+                # stream is left untouched and the proxy hop stays constant-memory
+                # (ADR-023). Measured: `json()` then `stream()` replays fine, the reverse
+                # raises.
+                request_body = await request.body() if _reads_body(request) else None
+                outcome = await pipeline.authorize(
+                    method=request.method,
+                    path="/" + upstream_path,
+                    query_string=request.url.query,
+                    headers=list(request.headers.items()),
+                    body=request_body,
+                )
+                if isinstance(outcome, Refused):
+                    if span is not None:
+                        span.set_attribute("agentiam.outcome", "refuse")
+                        span.set_attribute("agentiam.reason_code", outcome.reason_code.value)
+                    requests_total.labels(request.method, str(outcome.status)).inc()
+                    return JSONResponse(outcome.body(), status_code=outcome.status)
+                authorized = outcome
+                if span is not None:
+                    span.set_attribute("agentiam.outcome", "allow")
+                    span.set_attribute("agentiam.scope", authorized.extraction.scope)
+
+            target = httpx.URL(path="/" + upstream_path, query=request.url.query.encode() or None)
+            upstream_request = client.build_request(
+                request.method,
+                target,
+                headers=filter_request_headers(request.headers.items()),
+                content=request.stream(),
             )
-            if isinstance(outcome, Refused):
-                requests_total.labels(request.method, str(outcome.status)).inc()
-                return JSONResponse(outcome.body(), status_code=outcome.status)
-            authorized = outcome
 
-        target = httpx.URL(path="/" + upstream_path, query=request.url.query.encode() or None)
-        upstream_request = client.build_request(
-            request.method,
-            target,
-            headers=filter_request_headers(request.headers.items()),
-            content=request.stream(),
-        )
-
-        method = request.method
-        try:
-            with upstream_latency.labels(method).time():
-                upstream_response = await client.send(upstream_request, stream=True)
-        except httpx.TimeoutException:
-            requests_total.labels(method, "504").inc()
-            return _gateway_error(504, "the upstream did not respond in time")
-        except httpx.HTTPError:
-            requests_total.labels(method, "502").inc()
-            return _gateway_error(502, "the upstream could not be reached")
-
-        requests_total.labels(method, str(upstream_response.status_code)).inc()
-
-        async def body() -> AsyncIterator[bytes]:
-            # `aiter_raw`, never `aiter_bytes`: the bytes must reach the client exactly as
-            # the upstream sent them, because `content-encoding` is forwarded with them.
-            try:
-                async for chunk in upstream_response.aiter_raw():
-                    yield chunk
-            finally:
-                await upstream_response.aclose()
-
-        if authorized is not None and pipeline is not None:
-            # Step 9. The reserved amount is settled as-is: reading the upstream's own
-            # reported charge would mean buffering its body, and a tool that over-reports is
-            # clamped by the ledger anyway (spec 04 §4.4's G2).
-            pipeline.settle(authorized)
-
-        response = StreamingResponse(body(), status_code=upstream_response.status_code)
-        # Assigned after construction rather than passed in, because Starlette's `headers=`
-        # takes a mapping and `Set-Cookie` legitimately repeats — a mapping keeps only the
-        # last one, which silently drops every cookie but one.
-        response.raw_headers = [
-            (name.encode(), value.encode())
-            for name, value in filter_response_headers(
-                [(k.decode(), v.decode()) for k, v in upstream_response.headers.raw]
+            method = request.method
+            upstream_span_cm = (
+                pipeline.child_span("agentiam.upstream_call")
+                if pipeline is not None
+                else contextlib.nullcontext(None)
             )
-        ]
-        return response
+            with upstream_span_cm as upstream_span:
+                if upstream_span is not None:
+                    upstream_span.set_attribute("http.request.method", method)
+                    upstream_span.set_attribute("url.path", "/" + upstream_path)
+                try:
+                    with upstream_latency.labels(method).time():
+                        upstream_response = await client.send(upstream_request, stream=True)
+                except httpx.TimeoutException:
+                    requests_total.labels(method, "504").inc()
+                    if upstream_span is not None:
+                        upstream_span.set_attribute("agentiam.upstream_error", "timeout")
+                    return _gateway_error(504, "the upstream did not respond in time")
+                except httpx.HTTPError:
+                    requests_total.labels(method, "502").inc()
+                    if upstream_span is not None:
+                        upstream_span.set_attribute("agentiam.upstream_error", "unreachable")
+                    return _gateway_error(502, "the upstream could not be reached")
+
+                if upstream_span is not None:
+                    upstream_span.set_attribute(
+                        "http.response.status_code", upstream_response.status_code
+                    )
+
+            requests_total.labels(method, str(upstream_response.status_code)).inc()
+
+            async def body() -> AsyncIterator[bytes]:
+                # `aiter_raw`, never `aiter_bytes`: the bytes must reach the client exactly
+                # as the upstream sent them, because `content-encoding` is forwarded with
+                # them.
+                try:
+                    async for chunk in upstream_response.aiter_raw():
+                        yield chunk
+                finally:
+                    await upstream_response.aclose()
+
+            if authorized is not None and pipeline is not None:
+                # Step 9. The reserved amount is settled as-is: reading the upstream's own
+                # reported charge would mean buffering its body, and a tool that
+                # over-reports is clamped by the ledger anyway (spec 04 §4.4's G2).
+                pipeline.settle(authorized)
+
+            response = StreamingResponse(body(), status_code=upstream_response.status_code)
+            # Assigned after construction rather than passed in, because Starlette's
+            # `headers=` takes a mapping and `Set-Cookie` legitimately repeats — a mapping
+            # keeps only the last one, which silently drops every cookie but one.
+            response.raw_headers = [
+                (name.encode(), value.encode())
+                for name, value in filter_response_headers(
+                    [(k.decode(), v.decode()) for k, v in upstream_response.headers.raw]
+                )
+            ]
+            return response
 
     return app
 

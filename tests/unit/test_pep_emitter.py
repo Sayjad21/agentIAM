@@ -276,6 +276,36 @@ class TestTracing:
         """
         assert current_trace_id() is None
 
+    async def test_decision_span_works_with_no_scope_yet(self) -> None:
+        """T-049: `Pipeline.request_span` opens this before extraction has run.
+
+        The scope is not known at open time; omitting it must not raise or change
+        whether a span is produced.
+        """
+        sink = RecordingSink()
+        emitter = an_emitter(sink)
+        async with emitter:
+            with emitter.decision_span() as span:
+                assert span is not None
+
+    async def test_a_named_span_is_the_generalization_decision_span_now_uses(self) -> None:
+        """T-049 adds `span(name)`, and `decision_span` is now one call to it.
+
+        Both must honour the same on/off switch.
+        """
+        sink = RecordingSink()
+        emitter = an_emitter(sink)
+        async with emitter:
+            with emitter.span("agentiam.upstream_call") as span:
+                assert span is not None
+
+    async def test_a_named_span_is_also_switched_off_by_tracing_false(self) -> None:
+        sink = RecordingSink()
+        emitter = an_emitter(sink, tracing=False)
+        async with emitter:
+            with emitter.span("agentiam.upstream_call") as span:
+                assert span is None
+
 
 class TestShutdown:
     async def test_aclose_flushes_what_is_buffered(self) -> None:
