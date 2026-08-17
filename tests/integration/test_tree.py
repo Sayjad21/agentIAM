@@ -21,12 +21,14 @@ from agentiam_core.escalation import EscalationState
 
 pytestmark = pytest.mark.integration
 
+
 async def test_empty_task_returns_no_nodes(migrated_engine: AsyncEngine) -> None:
     session_factory = make_session_factory(migrated_engine)
     async with session_factory() as session:
         task_id = uuid.uuid4()
         nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
         assert nodes == []
+
 
 async def test_single_root_agent_node(migrated_engine: AsyncEngine) -> None:
     session_factory = make_session_factory(migrated_engine)
@@ -67,7 +69,7 @@ async def test_single_root_agent_node(migrated_engine: AsyncEngine) -> None:
                 leased=Decimal("5"),
                 allocated=Decimal("0"),
                 agent_id=None,
-                parent_budget_id=None
+                parent_budget_id=None,
             )
         )
         await session.commit()
@@ -85,6 +87,7 @@ async def test_single_root_agent_node(migrated_engine: AsyncEngine) -> None:
         assert not n.revoked
         assert not n.has_pending_escalation
 
+
 async def test_child_depth_is_derived_from_audit_record(migrated_engine: AsyncEngine) -> None:
     session_factory = make_session_factory(migrated_engine)
     async with session_factory() as session:
@@ -98,9 +101,9 @@ async def test_child_depth_is_derived_from_audit_record(migrated_engine: AsyncEn
                     "task_id": str(task_id),
                     "agent_id": "child",
                     "depth": 2,
-                    "token_chain_ids": ["b1", "b2"]
+                    "token_chain_ids": ["b1", "b2"],
                 },
-                record_hash="a"*64,
+                record_hash="a" * 64,
                 created_at=now,
             )
         )
@@ -108,6 +111,7 @@ async def test_child_depth_is_derived_from_audit_record(migrated_engine: AsyncEn
         nodes = await build_tree(session, task_id=task_id, now=now)
         assert len(nodes) == 1
         assert nodes[0].depth == 2
+
 
 async def test_revoked_node_when_block_id_in_revocations(migrated_engine: AsyncEngine) -> None:
     session_factory = make_session_factory(migrated_engine)
@@ -134,13 +138,14 @@ async def test_revoked_node_when_block_id_in_revocations(migrated_engine: AsyncE
                 reason="compromised",
                 revoked_by="alice",
                 revoked_at=now,
-                expires_at=now
+                expires_at=now,
             )
         )
         await session.commit()
         nodes = await build_tree(session, task_id=task_id, now=now)
         assert nodes[0].revoked is True
         assert nodes[0].revocation_reason == "compromised"
+
 
 async def test_non_revoked_node_when_no_block_id_matches(migrated_engine: AsyncEngine) -> None:
     session_factory = make_session_factory(migrated_engine)
@@ -167,12 +172,13 @@ async def test_non_revoked_node_when_no_block_id_matches(migrated_engine: AsyncE
                 reason="compromised",
                 revoked_by="alice",
                 revoked_at=now,
-                expires_at=now
+                expires_at=now,
             )
         )
         await session.commit()
         nodes = await build_tree(session, task_id=task_id, now=now)
         assert nodes[0].revoked is False
+
 
 async def test_pending_escalation_sets_flag(migrated_engine: AsyncEngine) -> None:
     session_factory = make_session_factory(migrated_engine)
@@ -184,7 +190,7 @@ async def test_pending_escalation_sets_flag(migrated_engine: AsyncEngine) -> Non
                 seq=1,
                 decision_id=uuid.uuid4(),
                 record={"task_id": str(task_id), "agent_id": "agent1", "token_chain_ids": ["b1"]},
-                record_hash="a"*64,
+                record_hash="a" * 64,
                 created_at=now,
             )
         )
@@ -195,68 +201,114 @@ async def test_pending_escalation_sets_flag(migrated_engine: AsyncEngine) -> Non
                 task_id=task_id,
                 agent_id="agent1",
                 principal_id="alice",
-                intent_hash="a"*64,
+                intent_hash="a" * 64,
                 requested_scopes=["read"],
                 requested_amount=Decimal("100"),
                 reason="need more",
                 created_at=now,
                 expires_at=now,
-                state=EscalationState.PENDING.value
+                state=EscalationState.PENDING.value,
             )
         )
         await session.commit()
         nodes = await build_tree(session, task_id=task_id, now=now)
         assert nodes[0].has_pending_escalation is True
 
+
 async def test_budget_available_is_total_minus_consumed() -> None:
     # Logic is tested in test_single_root_agent_node
     pass
+
 
 async def test_budget_zero_total_does_not_divide() -> None:
     # Decimal operations natively handle zeros gracefully if we don't divide
     pass
 
+
 async def test_build_tree_diff_detects_added_node() -> None:
     n = TreeNode(
-        agent_id="a1", role="", depth=0, task_id="", principal_id="",
-        block_ids=["b1"], scopes=[], budget=[], revoked=False,
-        revocation_reason=None, has_pending_escalation=False,
-        last_outcome="", last_reason_code="", last_seen=datetime.now(UTC),
+        agent_id="a1",
+        role="",
+        depth=0,
+        task_id="",
+        principal_id="",
+        block_ids=["b1"],
+        scopes=[],
+        budget=[],
+        revoked=False,
+        revocation_reason=None,
+        has_pending_escalation=False,
+        last_outcome="",
+        last_reason_code="",
+        last_seen=datetime.now(UTC),
     )
     diff = build_tree_diff(old=[], new=[n])
     assert diff.added == [n]
     assert diff.removed == []
     assert diff.changed == []
 
+
 async def test_build_tree_diff_detects_changed_node() -> None:
     n1 = TreeNode(
-        agent_id="a1", role="", depth=0, task_id="", principal_id="",
-        block_ids=["b1"], scopes=[], budget=[], revoked=False,
-        revocation_reason=None, has_pending_escalation=False,
-        last_outcome="", last_reason_code="", last_seen=datetime.now(UTC),
+        agent_id="a1",
+        role="",
+        depth=0,
+        task_id="",
+        principal_id="",
+        block_ids=["b1"],
+        scopes=[],
+        budget=[],
+        revoked=False,
+        revocation_reason=None,
+        has_pending_escalation=False,
+        last_outcome="",
+        last_reason_code="",
+        last_seen=datetime.now(UTC),
     )
     n2 = TreeNode(
-        agent_id="a1", role="", depth=0, task_id="", principal_id="",
-        block_ids=["b1"], scopes=[], budget=[], revoked=True,
-        revocation_reason=None, has_pending_escalation=False,
-        last_outcome="", last_reason_code="", last_seen=datetime.now(UTC),
+        agent_id="a1",
+        role="",
+        depth=0,
+        task_id="",
+        principal_id="",
+        block_ids=["b1"],
+        scopes=[],
+        budget=[],
+        revoked=True,
+        revocation_reason=None,
+        has_pending_escalation=False,
+        last_outcome="",
+        last_reason_code="",
+        last_seen=datetime.now(UTC),
     )
     diff = build_tree_diff(old=[n1], new=[n2])
     assert diff.added == []
     assert diff.removed == []
     assert diff.changed == [n2]
 
+
 async def test_build_tree_diff_detects_removed_node() -> None:
     n1 = TreeNode(
-        agent_id="a1", role="", depth=0, task_id="", principal_id="",
-        block_ids=["b1"], scopes=[], budget=[], revoked=False,
-        revocation_reason=None, has_pending_escalation=False,
-        last_outcome="", last_reason_code="", last_seen=datetime.now(UTC),
+        agent_id="a1",
+        role="",
+        depth=0,
+        task_id="",
+        principal_id="",
+        block_ids=["b1"],
+        scopes=[],
+        budget=[],
+        revoked=False,
+        revocation_reason=None,
+        has_pending_escalation=False,
+        last_outcome="",
+        last_reason_code="",
+        last_seen=datetime.now(UTC),
     )
     diff = build_tree_diff(old=[n1], new=[])
     assert diff.added == []
     assert diff.removed == [n1]
     assert diff.changed == []
+
 
 async def test_no_float_in_budget_amounts() -> None:
     pass

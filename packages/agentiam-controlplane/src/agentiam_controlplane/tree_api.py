@@ -36,6 +36,7 @@ class TreeSnapshot(BaseModel):
 
 class BlockSourceItem(BaseModel):
     """Structured caveat block for a node."""
+
     index: int
     source: str
     block_id: str
@@ -43,6 +44,7 @@ class BlockSourceItem(BaseModel):
 
 class BlockSourceResponse(BaseModel):
     """Response containing caveat block sources."""
+
     agent_id: str
     blocks: list[BlockSourceItem]
 
@@ -95,7 +97,7 @@ def build_router(
             select(AuditRecordRow)
             .where(
                 AuditRecordRow.record["task_id"].as_string() == task_id_str,
-                AuditRecordRow.record["agent_id"].as_string() == agent_id
+                AuditRecordRow.record["agent_id"].as_string() == agent_id,
             )
             .order_by(desc(AuditRecordRow.seq))
             .limit(1)
@@ -141,9 +143,7 @@ def build_router(
             async with session_factory() as session:
                 last_nodes = await build_tree(session, task_id=task_id, now=_now())
 
-            snapshot_data = json.dumps({
-                "nodes": [n.model_dump(mode="json") for n in last_nodes]
-            })
+            snapshot_data = json.dumps({"nodes": [n.model_dump(mode="json") for n in last_nodes]})
             yield f"event: snapshot\ndata: {snapshot_data}\n\n"
 
             heartbeat_counter = 0
