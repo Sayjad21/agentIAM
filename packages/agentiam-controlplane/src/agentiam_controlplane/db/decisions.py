@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-__all__ = ["DecisionEvent", "DecisionFilter", "explain", "read_since"]
+__all__ = ["DecisionEvent", "DecisionFilter", "explain", "project_record", "read_since"]
 
 #: A page of stream output. Large enough that a burst is not dribbled out over many polls,
 #: small enough that a console opening onto a long-running demo does not receive megabytes
@@ -76,6 +76,10 @@ class DecisionEvent:
 
     seq: int
     decision_id: uuid.UUID
+    #: The task this decision belongs to. Unused by the live stream itself, but every
+    #: `AuditRecordRow` carries it — T-048's search results need it to link a hit to its
+    #: task's custody view without a second query.
+    task_id: uuid.UUID | None
     timestamp: datetime
     outcome: str
     reason_code: str
@@ -97,6 +101,7 @@ class DecisionEvent:
         return {
             "seq": self.seq,
             "decision_id": str(self.decision_id),
+            "task_id": str(self.task_id) if self.task_id is not None else None,
             "timestamp": self.timestamp.isoformat(),
             "outcome": self.outcome,
             "reason_code": self.reason_code,
@@ -149,7 +154,7 @@ def explain(record: dict[str, Any]) -> str:
     return detail or reason_code
 
 
-def _project(row: AuditRecordRow) -> DecisionEvent:
+def project_record(row: AuditRecordRow) -> DecisionEvent:
     """One row to one event, tolerating a record that is missing fields.
 
     Deliberately forgiving: the console is a *view*. A malformed or older record should
@@ -159,10 +164,16 @@ def _project(row: AuditRecordRow) -> DecisionEvent:
     caveat = record.get("failing_caveat")
     caveat_dict = caveat if isinstance(caveat, dict) else {}
     drift = record.get("drift_score")
+    task_id_raw = record.get("task_id")
+    try:
+        task_id = uuid.UUID(str(task_id_raw)) if task_id_raw is not None else None
+    except ValueError:
+        task_id = None
 
     return DecisionEvent(
         seq=row.seq,
         decision_id=row.decision_id,
+        task_id=task_id,
         timestamp=row.created_at,
         outcome=str(record.get("outcome", "unknown")),
         reason_code=str(record.get("reason_code", "UNKNOWN")),
@@ -213,4 +224,4 @@ async def read_since(
 
     stmt = stmt.order_by(AuditRecordRow.seq).limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
-    return [_project(row) for row in rows]
+    return [project_record(row) for row in rows]

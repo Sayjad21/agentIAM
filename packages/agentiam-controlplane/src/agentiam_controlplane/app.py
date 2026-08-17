@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from agentiam_controlplane.audit_api import build_router as build_audit_router
 from agentiam_controlplane.auth import build_router as build_auth_router
 from agentiam_controlplane.budgets_api import build_router as build_budgets_router
 from agentiam_controlplane.db.escalations import list_by_state
@@ -197,6 +198,9 @@ def create_app(
     # T-047, same shape: 503 without a database rather than a boot failure.
     app.include_router(build_budgets_router(session_factory=session_factory, now=now))
 
+    # T-048, same shape: 503 without a database rather than a boot failure.
+    app.include_router(build_audit_router(session_factory=session_factory))
+
     @app.get("/budgets", response_class=HTMLResponse)
     async def budgets_console(request: Request) -> HTMLResponse:
         """The budget and lease dashboard — T-047's console surface."""
@@ -239,6 +243,20 @@ def create_app(
             request=request,
             name="identity_tree.html",
             context={"task_id": task_id},
+        )
+
+    @app.get("/audit", response_class=HTMLResponse)
+    async def audit_console(request: Request) -> HTMLResponse:
+        """The audit explorer + custody view — T-048's console surface.
+
+        Search, custody, and verification all go through `/v1/audit/*` from the browser;
+        this route only serves the shell, the same split `decisions_console` and
+        `budgets_console` use.
+        """
+        return templates.TemplateResponse(
+            request=request,
+            name="audit.html",
+            context={"has_database": session_factory is not None},
         )
 
     @app.get("/escalations", response_class=HTMLResponse)

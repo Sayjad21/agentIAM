@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentIAM Control Plane - Audit Explorer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: rgba(30, 41, 59, 0.7);
+            --surface-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        body, html {
+            margin: 0; padding: 0; width: 100%;
+            background: var(--bg-color); color: var(--text-main);
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+        .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+        h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+        h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+        .sub { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
+
+        .filters {
+            display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+            background: var(--surface-color); border: 1px solid var(--surface-border);
+            border-radius: 10px; padding: 16px; margin-bottom: 16px;
+        }
+        .filters label { display: block; font-size: 11px; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+        .filters input, .filters select {
+            background: rgba(15, 23, 42, .8); color: var(--text-main);
+            border: 1px solid var(--surface-border); border-radius: 6px;
+            padding: 8px 10px; font-size: 13px; font-family: inherit; min-width: 150px;
+        }
+        button {
+            background: var(--primary); color: #fff; border: 0; border-radius: 6px;
+            padding: 9px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
+            font-family: inherit;
+        }
+        button.secondary { background: rgba(255,255,255,.08); }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th {
+            text-align: left; font-size: 11px; text-transform: uppercase;
+            letter-spacing: .04em; color: var(--text-muted); font-weight: 500;
+            padding: 8px 10px; border-bottom: 1px solid var(--surface-border);
+        }
+        td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+        tr.hit { cursor: pointer; }
+        tr.hit:hover { background: rgba(59,130,246,.08); }
+        .pill {
+            display: inline-block; padding: 2px 8px; border-radius: 999px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+        }
+        .allow { background: rgba(16,185,129,.15); color: var(--success); }
+        .deny { background: rgba(239,68,68,.15); color: var(--danger); }
+        .escalate { background: rgba(245,158,11,.15); color: var(--warning); }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+        .empty { color: var(--text-muted); padding: 24px; text-align: center; }
+        .count { color: var(--text-muted); font-size: 12px; margin: 8px 0 16px; }
+        .pager { display: flex; gap: 8px; margin: 12px 0; }
+
+        section { margin-top: 28px; }
+
+        /* Custody narrative — a vertical chain, one link per decision, in the order it
+           happened. This is the picture "chain of custody" is a metaphor for. */
+        .chain { position: relative; padding-left: 22px; }
+        .chain::before {
+            content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px;
+            background: var(--surface-border);
+        }
+        .link { position: relative; padding-bottom: 18px; }
+        .link::before {
+            content: ""; position: absolute; left: -22px; top: 4px; width: 10px; height: 10px;
+            border-radius: 50%; background: var(--text-muted); border: 2px solid var(--bg-color);
+        }
+        .link.allow::before { background: var(--success); }
+        .link.deny::before { background: var(--danger); }
+        .link.escalate::before { background: var(--warning); }
+        .link .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+        .link .who { font-weight: 600; font-size: 13px; }
+        .link .depth { color: var(--text-muted); font-size: 12px; }
+        .link .why { margin-top: 4px; font-size: 13px; color: var(--text-main); }
+        .link .why.refused { color: #fca5a5; }
+
+        .invariant {
+            display: flex; align-items: center; gap: 14px;
+            border-radius: 12px; padding: 16px 18px; margin-top: 10px;
+            border: 1px solid var(--surface-border); background: var(--surface-color);
+        }
+        .invariant .lamp {
+            width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto;
+            background: var(--text-muted);
+        }
+        .invariant.ok .lamp { background: var(--success); box-shadow: 0 0 12px var(--success); }
+        .invariant.bad .lamp { background: var(--danger); box-shadow: 0 0 12px var(--danger); }
+        .invariant .verdict { font-size: 14px; font-weight: 600; }
+        .invariant.ok .verdict { color: var(--success); }
+        .invariant.bad .verdict { color: var(--danger); }
+        .invariant .meta { color: var(--text-muted); font-size: 12px; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Audit explorer</h1>
+    <div class="sub">Search the chain of custody. Click a record to see the full principal&rarr;caveat narrative for its task.</div>
+
+    <form class="filters" id="search-form">
+        <div>
+            <label for="decision_id">Decision id</label>
+            <input id="decision_id" name="decision_id" placeholder="uuid">
+        </div>
+        <div>
+            <label for="task_id">Task id</label>
+            <input id="task_id" name="task_id" placeholder="uuid">
+        </div>
+        <div>
+            <label for="agent_id">Agent</label>
+            <input id="agent_id" name="agent_id" placeholder="agt-1">
+        </div>
+        <div>
+            <label for="principal_id">Principal</label>
+            <input id="principal_id" name="principal_id" placeholder="kc:alice">
+        </div>
+        <div>
+            <label for="scope">Scope</label>
+            <input id="scope" name="scope" placeholder="payment:initiate">
+        </div>
+        <div>
+            <label for="outcome">Outcome</label>
+            <select id="outcome" name="outcome">
+                <option value="">All</option>
+                <option value="allow">Allow</option>
+                <option value="deny">Deny</option>
+                <option value="escalate">Escalate</option>
+            </select>
+        </div>
+        <button type="submit">Search</button>
+    </form>
+
+    <div class="count" id="count"></div>
+
+    <table>
+        <thead>
+        <tr>
+            <th>Time</th><th>Outcome</th><th>Agent</th><th>Principal</th>
+            <th>Scope</th><th>Tool</th><th>Why</th>
+        </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty">Search above, or leave every field blank and submit to browse everything.</div>
+    <div class="pager" id="pager"></div>
+
+    <section id="custody-section" style="display:none">
+        <h2>Custody chain — task <span class="mono" id="custody-task"></span></h2>
+        <div class="chain" id="custody-chain"></div>
+    </section>
+
+    <section>
+        <h2>Chain integrity</h2>
+        <button class="secondary" id="verify-btn" type="button">Verify chain</button>
+        <div class="invariant" id="verify-banner" style="display:none">
+            <span class="lamp"></span>
+            <span class="verdict" id="verify-verdict"></span>
+            <span class="meta" id="verify-meta"></span>
+        </div>
+    </section>
+</div>
+
+<script>
+{% if has_database %}
+const PAGE_SIZE = 25;
+let offset = 0;
+let lastParams = new URLSearchParams();
+
+function cell(text) {
+    const td = document.createElement("td");
+    td.textContent = text ?? "";
+    return td;
+}
+
+function renderRow(d) {
+    const tr = document.createElement("tr");
+    tr.className = "hit";
+    tr.title = "Click for this task's custody chain";
+
+    const time = cell((d.timestamp || "").replace("T", " ").slice(0, 19));
+    time.className = "mono";
+    tr.appendChild(time);
+
+    const out = document.createElement("td");
+    const pill = document.createElement("span");
+    pill.className = "pill " + (d.outcome || "");
+    pill.textContent = d.outcome || "?";
+    out.appendChild(pill);
+    tr.appendChild(out);
+
+    tr.appendChild(cell(d.agent_id));
+    tr.appendChild(cell(d.principal_id));
+    const scope = cell(d.scope); scope.className = "mono"; tr.appendChild(scope);
+    const tool = cell(d.tool_id); tool.className = "mono"; tr.appendChild(tool);
+    tr.appendChild(cell(d.explanation));
+
+    tr.addEventListener("click", () => loadCustody(d.task_id));
+    return tr;
+}
+
+async function runSearch(params, newOffset) {
+    offset = newOffset;
+    params.set("limit", PAGE_SIZE);
+    params.set("offset", offset);
+    lastParams = params;
+
+    const resp = await fetch("/v1/audit/search?" + params.toString());
+    const data = await resp.json();
+
+    const rows = document.getElementById("rows");
+    rows.textContent = "";
+    for (const d of data.results) rows.appendChild(renderRow(d));
+
+    document.getElementById("empty").style.display = data.results.length ? "none" : "block";
+    document.getElementById("count").textContent =
+        data.total + " record" + (data.total === 1 ? "" : "s") + " matched";
+
+    const pager = document.getElementById("pager");
+    pager.textContent = "";
+    if (offset > 0) {
+        const prev = document.createElement("button");
+        prev.className = "secondary"; prev.type = "button"; prev.textContent = "Previous";
+        prev.addEventListener("click", () => runSearch(lastParams, Math.max(0, offset - PAGE_SIZE)));
+        pager.appendChild(prev);
+    }
+    if (offset + data.results.length < data.total) {
+        const next = document.createElement("button");
+        next.className = "secondary"; next.type = "button"; next.textContent = "Next";
+        next.addEventListener("click", () => runSearch(lastParams, offset + PAGE_SIZE));
+        pager.appendChild(next);
+    }
+}
+
+document.getElementById("search-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    const params = new URLSearchParams();
+    for (const [key, value] of form.entries()) {
+        if (String(value).trim() !== "") params.set(key, value);
+    }
+    runSearch(params, 0);
+});
+
+async function loadCustody(taskId) {
+    if (!taskId) return;
+    const resp = await fetch("/v1/audit/custody/" + encodeURIComponent(taskId));
+    const data = await resp.json();
+
+    document.getElementById("custody-task").textContent = data.task_id;
+    const chain = document.getElementById("custody-chain");
+    chain.textContent = "";
+
+    if (!data.entries.length) {
+        const d = document.createElement("div");
+        d.className = "empty";
+        d.textContent = "No custody records for this task.";
+        chain.appendChild(d);
+    }
+
+    for (const entry of data.entries) {
+        const link = document.createElement("div");
+        link.className = "link " + (entry.outcome || "");
+
+        const head = document.createElement("div");
+        head.className = "head";
+        const who = document.createElement("span");
+        who.className = "who";
+        who.textContent = entry.agent_id;
+        const depth = document.createElement("span");
+        depth.className = "depth";
+        depth.textContent = "depth " + entry.depth + " · " + entry.scope + " · " + entry.tool_id;
+        const pill = document.createElement("span");
+        pill.className = "pill " + (entry.outcome || "");
+        pill.textContent = entry.outcome || "?";
+        head.append(who, pill, depth);
+        link.appendChild(head);
+
+        const why = document.createElement("div");
+        why.className = "why" + (entry.outcome === "allow" ? "" : " refused");
+        why.textContent = entry.explanation;
+        link.appendChild(why);
+
+        chain.appendChild(link);
+    }
+
+    document.getElementById("custody-section").style.display = "block";
+    document.getElementById("custody-section").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+document.getElementById("verify-btn").addEventListener("click", async () => {
+    const banner = document.getElementById("verify-banner");
+    const verdict = document.getElementById("verify-verdict");
+    const meta = document.getElementById("verify-meta");
+    banner.style.display = "flex";
+    banner.className = "invariant";
+    verdict.textContent = "verifying…";
+    meta.textContent = "";
+
+    try {
+        const resp = await fetch("/v1/audit/verify", { method: "POST" });
+        const data = await resp.json();
+        banner.className = "invariant " + (data.ok ? "ok" : "bad");
+        verdict.textContent = data.ok
+            ? "chain intact"
+            : "chain broken at seq " + data.first_bad_seq;
+        meta.textContent = data.ok
+            ? data.checked + " record(s) verified"
+            : data.detail;
+    } catch (err) {
+        banner.className = "invariant bad";
+        verdict.textContent = "could not verify";
+        meta.textContent = String(err);
+    }
+});
+
+runSearch(new URLSearchParams(), 0);
+{% else %}
+document.getElementById("empty").textContent =
+    "The control plane was started without a database, so there is nothing to search.";
+document.getElementById("verify-btn").disabled = true;
+{% endif %}
+</script>
+</body>
+</html>

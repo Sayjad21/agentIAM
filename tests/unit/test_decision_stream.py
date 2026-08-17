@@ -12,9 +12,12 @@ them.
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
-from agentiam_controlplane.db.decisions import DecisionFilter, explain
+from agentiam_controlplane.db.decisions import DecisionFilter, explain, project_record
+from agentiam_controlplane.db.models import AuditRecordRow
 
 
 def a_record(**over: Any) -> dict[str, Any]:
@@ -108,3 +111,35 @@ class TestFilterSemantics:
 
     def test_a_populated_filter_matches_something(self) -> None:
         assert not DecisionFilter(outcome="deny", agent_id="agt-1").matches_nothing()
+
+
+class TestProjectRecordCarriesTaskId:
+    """T-048 needs `task_id` on `DecisionEvent` to link a search hit to its custody view."""
+
+    def _row(self, **record_over: Any) -> AuditRecordRow:
+        record: dict[str, Any] = a_record(**record_over)
+        record.setdefault("agent_id", "agt-1")
+        return AuditRecordRow(
+            seq=1,
+            decision_id=uuid.uuid4(),
+            record=record,
+            prev_hash=None,
+            record_hash="0" * 64,
+            created_at=datetime(2026, 8, 18, 12, 0, tzinfo=UTC),
+        )
+
+    def test_a_valid_task_id_round_trips(self) -> None:
+        task = uuid.uuid4()
+        event = project_record(self._row(task_id=str(task)))
+        assert event.task_id == task
+
+    def test_a_missing_task_id_is_none_rather_than_a_crash(self) -> None:
+        event = project_record(self._row())
+        assert event.task_id is None
+
+    def test_a_malformed_task_id_is_none_rather_than_a_crash(self) -> None:
+        # Deliberately forgiving, same as every other field `project_record` projects: a
+        # malformed record must render as best it can, not break the page for every
+        # well-formed row after it.
+        event = project_record(self._row(task_id="not-a-uuid"))
+        assert event.task_id is None
