@@ -2273,3 +2273,67 @@ test_observability_config.py` checks that every config file parses and says what
 criterion requires; bringing the stack up with `docker compose -f
 docker-compose.observability.yml up -d --wait` and confirming traces actually land in Tempo
 remains a manual check, same footing as T-057's eventual demo rehearsal.
+
+---
+
+## ADR-048 — T-051's red-team suite: which attacks, and why two files
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `tests/security/test_redteam_suite.py`, `tests/integration/test_redteam_suite.py`,
+`PLAN.md` §12, `ROADMAP.md` line 288, `threat-model.md` §6
+
+**Context:** `PLAN.md` §12 catalogues 33 attacks; T-051's own line (`PLAN.md` line 1207-1208)
+reduces this to "15–20 attacks" and names five category ranges. `ROADMAP.md` line 288 states
+the same reduction more precisely: `A-01…A-09, A-10…A-13, A-17…A-18, A-23…A-26, A-28…A-30`
+**plus** `TM-19…TM-22` from `threat-model.md` §6. Counted literally, that is 22 attacks, not
+15–20 — the prose figure and the explicit range disagree.
+
+**Decision 1 — the explicit range is authoritative, not the rough count.** Consistent with
+this project's own standing habit (`CLAUDE.md`: "check the claim against the running
+system"), a specific, named list is more trustworthy than an approximate summary written
+alongside it. This also means **A-06 is in scope** (it falls inside `A-01…A-09`), even
+though a prior session's handoff notes (`.claude/current_work.md`, since superseded)
+asserted it was excluded — that assertion did not survive checking `ROADMAP.md`'s literal
+text. A-06 is tested and reported as **accepted risk** (bearer replay succeeds by design,
+`TM-01`), not as a failure to mitigate; PLAN.md §12 itself documents it as such.
+`TM-19`/`TM-20` are the two coverage gaps `threat-model.md` §6 names as still needing a
+test (`TM-21`, `TM-22`'s reaper half, and `TM-24` are already closed by existing tests, so
+"plus TM-19…TM-22" adds only two genuinely new tests, not four).
+
+**Decision 2 — two files, split by whether a real Postgres/Redis is needed, not one.**
+`tests/security/` has no `conftest.py`; its two existing files (`test_datalog_labels.py`,
+`test_parameter_pollution.py`, both T-011/T-020) are unit-level only. `tests/integration/
+conftest.py`'s fixtures (`postgres_url`, `migrated_engine`, `redis_url`, `session`) are
+scoped to their own directory by pytest's conftest discovery rules and are not reachable
+from `tests/security/` without duplicating them. Rather than invent a second fixture file
+or reach across directories, `A-17` (20-sibling swarm), `A-18` (reserve-then-abandon TTL
+reclaim), `A-29` (revocation pull backstop) and `A-30` (audit tamper detection) — the four
+named attacks that need a real database or Redis — live in `tests/integration/
+test_redteam_suite.py`, marked `[pytest.mark.integration, pytest.mark.security]` so
+`.\make.ps1 test-integration` picks them up and `.\make.ps1 check` does not. Every other
+named attack, plus `TM-19`/`TM-20`, is unit-level and lives in `tests/security/
+test_redteam_suite.py`.
+
+**A finding worth recording alongside this, not a decision:** three tests were written
+wrong on the first pass, all from the same mistaken assumption — that `VerifiedToken.scopes`
+reflects a chain's *effective*, attenuation-narrowed authority. It does not; `verify()`
+reads `scopes` only from the authority block's own `scope(...)` facts (spec 09 §4), so it
+is identical for a root token and every one of its narrowed descendants. A truncation probe
+(A-02/A-03's test) and two `decide()`-level scenarios (A-11, A-12) all asserted against
+`.scopes` directly and were wrong until corrected to pass the caveats explicitly to
+`decide()` (as a real PEP does, reading them back from block content) or to fold them via
+`effective_bound()`. Caught by running the suite rather than by review — `.\make.ps1 check`
+would not have caught it, since the tests were internally consistent, just asserting the
+wrong thing. Worth remembering before writing another test that reasons about a chain's
+narrowed authority from a bare `VerifiedToken`.
+
+**Consequences:** 32 unit tests (`tests/security/test_redteam_suite.py`) plus 4 integration
+tests (`tests/integration/test_redteam_suite.py`), 36 total, covering 22 named attacks (one
+class, `TestA02And03StructuralTampering`, covers two related attacks together, and one
+class, `TestA13DepthLimitBypassViaReMinting`, covers A-13's mint-then-verify shape in one
+test after an earlier wrong split was corrected) plus `TM-19` and `TM-20`. The remaining 11
+attacks in `PLAN.md` §12's full 33 (`A-14…A-16`, `A-19…A-22`, `A-27`, `A-31…A-33`) are
+out of T-051's named scope and stay deferred per `PLAN.md` §21 — most already have design-level
+coverage in `threat-model.md` even where no dedicated red-team test exists (`A-14`/`A-15` via
+`tests/unit/test_escalation.py`, `A-27` explicitly accepted risk per `TM-11`).

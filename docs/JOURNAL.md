@@ -2326,6 +2326,74 @@ waiting for someone to open the page.
 
 ---
 
+## M11 — Red-team suite, and the count that turned out not to be the real number
+
+### T-051 · The red-team suite, and which "15-20" turned out to be true
+
+M10 closed clean at T-050; M11 opens here. `PLAN.md` §12 catalogues 33 adversarial
+attacks; T-051's own summary line reduces that to "15–20 attacks covering key categories."
+`ROADMAP.md` line 288 states the same reduction differently — as an explicit list:
+`A-01…A-09, A-10…A-13, A-17…A-18, A-23…A-26, A-28…A-30`, plus `TM-19…TM-22` from
+`threat-model.md` §6. Counted literally that is 22 attacks, not 15–20. The two documents
+disagree, and per this project's own standing habit — a specific claim checked against the
+running system beats a round number next to it — the explicit list won. That decision,
+recorded as ADR-048, has one concrete consequence worth naming: **A-06 is in scope**
+(bearer-token replay from a different agent, inside the `A-01…A-09` range), which the
+prior session's handoff notes had asserted was excluded. That assertion did not survive
+reading `ROADMAP.md`'s actual text. A-06 is tested and reported as `PLAN.md` §12 itself
+already says to report it — **accepted risk**, not a failure — since bearer semantics are
+the deliberate design (TM-01).
+
+`TM-19…TM-22`, checked against `threat-model.md` §6 rather than assumed: TM-21 and TM-22's
+reaper half were already closed at T-013/T-014, and TM-24 at T-011. Only TM-19 and TM-20
+were genuinely still open, confirmed by grepping `tests/` for both ids before writing
+anything (zero hits). TM-19's test is the more interesting of the two: it hand-builds the
+*wrong* form of a Datalog check — `check if scope($s), $s == "invoice:read";`, written
+against the token's own grant facts rather than the request — appends it to a real,
+freshly-minted `biscuit_auth` chain, and shows it genuinely authorizes an operation
+(`vendor:read`) the narrowing was never meant to permit. Only after that does it show the
+actual shipped encoding (`to_datalog(ScopeSubset(...))`, which binds against the request's
+`operation()` fact) refuses the identical request. Same shape as TM-24's `test_datalog_
+labels.py` — probe the wrong design against the real library first, so the guard is proven
+load-bearing rather than merely asserted correct. TM-20 turned out to need no new
+mechanism at all: `RequestContext` already refuses to construct with a missing budget
+dimension (`_every_dimension_present`, ADR-007), so the test is a `pytest.mark.
+parametrize` over every `BudgetDimension`, confirming each one denies by refusing to even
+exist, not by a runtime check that could someday be forgotten.
+
+**Two files, not one**, for a reason that only became visible while writing them:
+`tests/security/` carries no `conftest.py`, and pytest scopes a `conftest.py`'s fixtures to
+its own directory tree — so `tests/integration/conftest.py`'s `postgres_url`,
+`migrated_engine`, `redis_url` are not reachable from `tests/security/` at all. The four
+named attacks that genuinely need a real database or Redis — A-17 (20-sibling swarm), A-18
+(reserve, then abandon rather than crash, and let the TTL reaper reclaim it), A-29
+(revocation converges even with the pub/sub push channel blocked), A-30 (rewriting a
+*denied* payment into an *allowed* one is caught by the hash chain) — went into
+`tests/integration/test_redteam_suite.py`, marked both `integration` and `security` so
+`.\make.ps1 test-integration` runs them and `.\make.ps1 check` does not. Everything else,
+plus TM-19/TM-20, is `tests/security/test_redteam_suite.py`.
+
+**The same measurement habit that closed nine design errors from T-002 through T-014 found
+three wrong tests in this ticket's own first draft**, all from one mistaken assumption:
+that `VerifiedToken.scopes` reflects a chain's *effective*, attenuation-narrowed authority.
+It does not — `verify()` reads `scopes` only from the authority block's own `scope(...)`
+facts (spec 09 §4), so it is identical for a root token and every descendant it narrows,
+no matter how many attenuation blocks sit between them. A byte-truncation probe for
+A-02/A-03 surfaced it first: a truncated child token that happened to still verify
+reported the *full* root grant, which briefly looked like a real widening bug until the
+probe was re-run comparing `depth` (`block_count() - 1`) instead of `scopes` — the
+narrowing block was never actually stripped, `.scopes` had just never reflected it in the
+first place. The same mistake was already sitting in A-11 and A-12's draft assertions,
+caught only because the probe forced a second look at what `.scopes` actually means. The
+fix in all three: pass the caveats explicitly to `decide()` (exactly what a real PEP does,
+reading them back from block content) rather than relying on the bare `VerifiedToken`.
+
+Full check clean: 32 new unit tests, 4 new integration tests against real Postgres and
+Redis containers (36.25 s), `ruff`/`ruff format`/`mypy --strict` clean across both new
+files, and the existing 1956-test suite unaffected.
+
+---
+
 ## What the numbers looked like at T-033
 
 The snapshot the entries above built up to, left as it was written rather than corrected in
@@ -2345,15 +2413,16 @@ place — the running total is the section below.
 
 ---
 
-## What the numbers look like now (through T-050)
+## What the numbers look like now (through T-051)
 
 | | |
 |---|---|
-| Tickets complete | 41 of 52 in scope (61 defined, 9 deferred) — **M1–M10 all resolved**, M11 next (T-051) |
-| Tests | 2157, all passing (1922 unit + 219 integration + 12 e2e + 4 benchmarks) |
+| Tickets complete | 42 of 52 in scope (61 defined, 9 deferred) — **M1–M10 all resolved**, M11 started (T-051 done) |
+| Tests | 2197, all passing (1958 unit + 223 integration + 12 e2e + 4 benchmarks) |
 | Coverage | `agentiam-core` **100%**, kept since T-005 (`STATUS.md` §1). Whole tree ~98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86% — not independently re-measured for this entry; see `STATUS.md` §1 and §3 gap 14 for the current figure and the fact that it is reported but not yet CI-gated |
-| ADRs | 47 |
+| ADRs | 48 |
 | Specs written | 10 — every spec `PLAN.md` names now exists |
-| Real gaps found by grepping shipped code rather than by testing it | at least 2 beyond T-033's dozen: the activation gate that existed only in the template (T-030, ADR-039), and T-022's `decision_span` never once called from production code in two milestones (T-049, ADR-047) |
+| Real gaps found by grepping shipped code rather than by testing it | at least 3 beyond T-033's dozen: the activation gate that existed only in the template (T-030, ADR-039), T-022's `decision_span` never once called from production code in two milestones (T-049, ADR-047), and A-04/TM-19 having no test anywhere in the tree despite `threat-model.md` documenting both (T-051) |
 | Dependencies rejected on measurement, not on API completeness | `pyprobables` (~900–1,200x slower than the `set` it was meant to guard, T-039, ADR-044) |
-| Threats, total | 27 catalogued (TM-01 through TM-27); 9 of those (TM-19 through TM-27) came from measurement rather than the original brainstormed catalogue, unchanged since T-033 — no ticket after it has added a new one |
+| Threats, total | 27 catalogued (TM-01 through TM-27); 9 of those (TM-19 through TM-27) came from measurement rather than the original brainstormed catalogue — unchanged since T-033, though T-051 closed the last two (TM-19, TM-20) that had no test until now |
+| Red-team attacks proven at test level | 22 of `PLAN.md` §12's 33, plus TM-19/TM-20, per T-051's reduced scope (`ROADMAP.md` line 288, ADR-048) — 1 accepted risk (A-06), 1 partially mitigated (A-12, confused deputy), 20 mitigated |

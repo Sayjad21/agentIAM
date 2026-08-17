@@ -90,14 +90,14 @@ STRIDE: **S**poofing · **T**ampering · **R**epudiation · **I**nformation disc
 ### 3.1 Threats found while building, not present in the original catalogue
 
 These came out of the empirical work in T-002 through T-005 and T-011. They are implementation
-hazards rather than adversary capabilities, but each produces a security failure. TM-19…TM-20
-still need a test; TM-21 is covered as of T-014; TM-22's reaper-side half is covered as of
-T-013; TM-24 has one.
+hazards rather than adversary capabilities, but each produces a security failure. TM-19 and
+TM-20 are covered as of T-051; TM-21 is covered as of T-014; TM-22's reaper-side half is
+covered as of T-013; TM-24 has one.
 
 | ID | STRIDE | Threat | Mitigation | Status | Tests |
 |---|---|---|---|---|---|
-| TM-19 | E | **A caveat that appears to enforce and does not.** Biscuit checks are existential: written against the token's own grant facts, `check if scope($s), [...].contains($s)` passes if *any* granted scope matches, not the one being requested. Measured: narrowing to `invoice:read` still authorized `vendor:read` | Checks are written against verifier-supplied request context only (ADR-005). Spec 01 §2 states the rule normatively | mitigated | **new test needed** (§6) |
-| TM-20 | E | **Incomplete request context.** A check whose fact is absent *fails*, so an omitted `requested(dimension)` denies — but a caveat form chosen wrongly can instead fail **open**: `reject if time($t), $t > EXPIRY` is vacuous when the verifier omits `time()`, and the token never expires | `check if` for facts supplied on every request, `reject if` only for legitimately optional facts (ADR-007). `RequestContext` validates at construction that every budget dimension is present | mitigated | **new test needed** (§6) |
+| TM-19 | E | **A caveat that appears to enforce and does not.** Biscuit checks are existential: written against the token's own grant facts, `check if scope($s), [...].contains($s)` passes if *any* granted scope matches, not the one being requested. Measured: narrowing to `invoice:read` still authorized `vendor:read` | Checks are written against verifier-supplied request context only (ADR-005). Spec 01 §2 states the rule normatively | mitigated | `tests/security/test_redteam_suite.py::TestTM19ExistentialChecksAgainstGrantFactsDoNotEnforce` (T-051) |
+| TM-20 | E | **Incomplete request context.** A check whose fact is absent *fails*, so an omitted `requested(dimension)` denies — but a caveat form chosen wrongly can instead fail **open**: `reject if time($t), $t > EXPIRY` is vacuous when the verifier omits `time()`, and the token never expires | `check if` for facts supplied on every request, `reject if` only for legitimately optional facts (ADR-007). `RequestContext` validates at construction that every budget dimension is present | mitigated | `tests/security/test_redteam_suite.py::TestTM20IncompleteRequestContextMustNeverBeConstructible` (T-051, every `BudgetDimension` covered individually) |
 | TM-21 | T | **Late commit against a reclaimed lease.** A commit arriving after `RELEASE`/`REAP`/`REVOKE` decrements `leased` a second time for budget already returned. Measured: `leased` went negative in 55 of 400 random interleavings | Commits against a non-active lease are rejected and recorded as reconciliation anomalies (ADR-009). The pool invariant is preserved; the divergence is surfaced | mitigated (§5.5) | `test_ledger_commit.py::test_ledger_commit_rejects_a_released_lease_and_records_an_anomaly`, `::test_ledger_commit_rejects_a_reaped_lease_TM21`, P-10's `LedgerCommit` rule (T-014) |
 | TM-22 | T | **Clock skew beyond the configured allowance.** If the reaper reclaims while a lagging PEP still spends, the same budget is issued twice. Measured with no skew margin: the lease was reaped and re-issued while still in use | PEPs expire early at `expires_at − S`; the reaper reclaims late at `expires_at + S`; `ttl > 2S`. **Safety depends on actual skew staying within `S`** | **partially mitigated** (§5.6) | `test_ledger.py` (reaper side, T-013); CH-7, EC-T08 (PEP side) |
 | TM-23 | T | **Agent under-reports the actual amount** to hide spend, where the PEP cannot independently determine it | Over-reporting is clamped to the lease's outstanding, so it cannot break the budget invariant. Under-reporting is flagged and audited wherever the PEP can cross-check, but is not prevented | **accepted risk** (§5.7) | A-19 |
@@ -198,13 +198,22 @@ flagged and audited wherever the PEP can cross-check.
 
 ## 6. Coverage gaps
 
-Two threats still have no test. Recorded here rather than left implicit, and each is a
-concrete addition to T-051's red-team suite.
+Both threats this section once listed as untested are now closed, by T-051.
 
-| Threat | Test to add | Ticket |
-|---|---|---|
-| TM-19 | A caveat compiled against the token's own grant facts must fail the conformance suite — assert the *wrong* encoding does not enforce | T-008 |
-| TM-20 | Authorization with a deliberately incomplete `RequestContext` must deny, never allow. Cover every omitted fact individually | T-019, T-051 |
+~~TM-19~~ — closed in T-051. `tests/security/test_redteam_suite.py::
+TestTM19ExistentialChecksAgainstGrantFactsDoNotEnforce` hand-builds the wrong-form check
+(`check if scope($s), $s == "invoice:read";`, written against the grant, never the
+request) against a real `biscuit_auth` chain and shows it authorizes an operation
+(`vendor:read`) the narrowing never intended to permit — the vulnerability is demonstrated
+as reachable, not merely described — then shows the actual shipped encoding
+(`to_datalog(ScopeSubset(...))`, bound to the request's own `operation()` fact) refuses the
+identical request.
+
+~~TM-20~~ — closed in T-051. `tests/security/test_redteam_suite.py::
+TestTM20IncompleteRequestContextMustNeverBeConstructible` parametrizes over every
+`BudgetDimension` individually, omitting each in turn, and asserts `RequestContext`
+construction itself refuses — the omission denies by refusing to exist, one level stronger
+than a runtime deny.
 
 ~~TM-21~~ — closed in T-014. `tests/integration/test_ledger_commit.py`'s
 `test_ledger_commit_rejects_a_released_lease_and_records_an_anomaly` and
