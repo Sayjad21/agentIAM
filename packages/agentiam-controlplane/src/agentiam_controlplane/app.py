@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from agentiam_controlplane.auth import build_router as build_auth_router
+from agentiam_controlplane.budgets_api import build_router as build_budgets_router
 from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.decisions_api import build_router as build_decisions_router
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
@@ -192,6 +193,18 @@ def create_app(
     # T-046. Mounted unconditionally, like the tree: both routes answer 503 without a
     # database, which is visibly "not wired" rather than a boot failure.
     app.include_router(build_decisions_router(session_factory=session_factory))
+
+    # T-047, same shape: 503 without a database rather than a boot failure.
+    app.include_router(build_budgets_router(session_factory=session_factory, now=now))
+
+    @app.get("/budgets", response_class=HTMLResponse)
+    async def budgets_console(request: Request) -> HTMLResponse:
+        """The budget and lease dashboard — T-047's console surface."""
+        return templates.TemplateResponse(
+            request=request,
+            name="budgets.html",
+            context={"has_database": session_factory is not None},
+        )
 
     @app.get("/decisions", response_class=HTMLResponse)
     async def decisions_console(

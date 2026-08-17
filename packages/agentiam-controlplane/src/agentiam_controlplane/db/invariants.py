@@ -49,7 +49,7 @@ from agentiam_core.models import LeaseState
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlalchemy.ext.asyncio import AsyncEngine
+    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 
 @unique
@@ -231,24 +231,20 @@ def _violations_for(row: object) -> list[Violation]:
     return found
 
 
-async def check_invariants(engine: AsyncEngine) -> CheckReport:
-    """Sweep every budget once and report what does not hold.
+async def check_in_session(session: AsyncSession) -> CheckReport:
+    """The sweep, on a session the caller already has — T-047.
 
-    Read-only and lock-free — safe against a live ledger, which is the point: T-052 runs it
-    as a sidecar through every chaos scenario, and the demo puts it on screen.
+    Split out from `check_invariants` so a request handler can run the check inside the
+    session it is already holding. The dashboard shows this as a live green/red indicator,
+    and opening a second connection per poll to re-derive what the request already has a
+    connection for would be waste on a page that refreshes every few seconds.
 
-    Args:
-        engine: An engine bound to the ledger database.
-
-    Returns:
-        A report naming every violation found, and how long the sweep took.
+    Read-only and lock-free, so it stays safe against a live ledger either way.
     """
-    factory = make_session_factory(engine)
     started = time.perf_counter()
-    async with factory() as session:
-        rows: Sequence[object] = (
-            await session.execute(_SWEEP, {"active_state": LeaseState.ACTIVE.value})
-        ).all()
+    rows: Sequence[object] = (
+        await session.execute(_SWEEP, {"active_state": LeaseState.ACTIVE.value})
+    ).all()
     duration_ms = (time.perf_counter() - started) * 1000
 
     violations: list[Violation] = []
@@ -262,9 +258,26 @@ async def check_invariants(engine: AsyncEngine) -> CheckReport:
     )
 
 
+async def check_invariants(engine: AsyncEngine) -> CheckReport:
+    """Sweep every budget once and report what does not hold.
+
+    Read-only and lock-free — safe against a live ledger, which is the point: T-052 runs it
+    as a sidecar through every chaos scenario, and the demo puts it on screen.
+
+    Args:
+        engine: An engine bound to the ledger database.
+
+    Returns:
+        A report naming every violation found, and how long the sweep took.
+    """
+    async with make_session_factory(engine)() as session:
+        return await check_in_session(session)
+
+
 __all__ = [
     "CheckReport",
     "InvariantKind",
     "Violation",
+    "check_in_session",
     "check_invariants",
 ]

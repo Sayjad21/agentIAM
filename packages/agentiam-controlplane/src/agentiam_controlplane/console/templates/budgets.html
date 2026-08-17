@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentIAM Control Plane - Budgets &amp; Leases</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: rgba(30, 41, 59, 0.7);
+            --surface-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        body, html {
+            margin: 0; padding: 0; width: 100%;
+            background: var(--bg-color); color: var(--text-main);
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+        .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+        h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+        .sub { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
+
+        /* The invariant banner. PLAN.md calls this the single most persuasive thing in the
+           demo, so it is the largest element on the page and reads at a glance. */
+        .invariant {
+            display: flex; align-items: center; gap: 14px;
+            border-radius: 12px; padding: 18px 20px; margin-bottom: 20px;
+            border: 1px solid var(--surface-border); background: var(--surface-color);
+        }
+        .invariant .lamp {
+            width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;
+            background: var(--text-muted);
+        }
+        .invariant.ok .lamp { background: var(--success); box-shadow: 0 0 14px var(--success); }
+        .invariant.bad .lamp { background: var(--danger); box-shadow: 0 0 14px var(--danger); }
+        .invariant .verdict { font-size: 16px; font-weight: 600; }
+        .invariant.ok .verdict { color: var(--success); }
+        .invariant.bad .verdict { color: var(--danger); }
+        .invariant .meta { color: var(--text-muted); font-size: 12px; margin-left: auto; text-align: right; }
+
+        .stats { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
+        .stat {
+            background: var(--surface-color); border: 1px solid var(--surface-border);
+            border-radius: 10px; padding: 14px 18px; min-width: 150px;
+        }
+        .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+            color: var(--text-muted); margin-bottom: 6px; }
+        .stat .value { font-size: 22px; font-weight: 600; }
+
+        .pool {
+            background: var(--surface-color); border: 1px solid var(--surface-border);
+            border-radius: 10px; padding: 16px 18px; margin-bottom: 12px;
+        }
+        .pool-head { display: flex; justify-content: space-between; align-items: baseline;
+            margin-bottom: 12px; gap: 12px; flex-wrap: wrap; }
+        .pool-head .who { font-weight: 600; font-size: 14px; }
+        .pool-head .dim { color: var(--text-muted); font-size: 12px; }
+
+        /* Stacked bar: committed + leased + allocated + available == total, which is the
+           pool invariant drawn rather than asserted (spec 04 §2.1). */
+        .bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden;
+            background: rgba(255,255,255,.06); }
+        .bar > div { height: 100%; }
+        .seg-committed { background: var(--danger); }
+        .seg-leased { background: var(--warning); }
+        .seg-allocated { background: var(--primary); }
+        .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px;
+            font-size: 12px; color: var(--text-muted); }
+        .legend span.key { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+            margin-right: 5px; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .empty { color: var(--text-muted); padding: 28px; text-align: center; }
+        .viol { margin-top: 10px; font-size: 12px; color: #fca5a5; }
+        .viol div { margin-top: 4px; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Budgets &amp; leases</h1>
+    <div class="sub">Spend against each mandate's pool, how much of it is out on lease, and whether the ledger's invariants still hold.</div>
+
+    <div class="invariant" id="banner">
+        <span class="lamp"></span>
+        <span class="verdict" id="verdict">checking…</span>
+        <span class="meta" id="checkmeta"></span>
+    </div>
+
+    <div class="stats">
+        <div class="stat"><div class="label">Pools</div><div class="value" id="pools">–</div></div>
+        <div class="stat"><div class="label">Active leases</div><div class="value" id="leases">–</div></div>
+        <div class="stat"><div class="label">Top-ups / min</div><div class="value" id="topups">–</div></div>
+        <div class="stat"><div class="label">Lease utilization</div><div class="value" id="util">–</div></div>
+    </div>
+
+    <div id="pools-list"></div>
+    <div class="empty" id="empty">No budget pools yet.</div>
+</div>
+
+<script>
+// Poll rather than stream. This page shows *levels*, so missing an intermediate value costs
+// nothing — the next poll supersedes it. T-046 streams because it carries events, where a
+// missed one is a real loss.
+const REFRESH_MS = 3000;
+
+const fmt = (s) => Number(s).toLocaleString(undefined, { maximumFractionDigits: 4 });
+const pct = (s) => (Number(s) * 100).toFixed(1) + "%";
+
+function seg(cls, amount, total, title) {
+    const width = Number(total) > 0 ? (Number(amount) / Number(total)) * 100 : 0;
+    if (width <= 0) return null;
+    const d = document.createElement("div");
+    d.className = cls;
+    d.style.width = width + "%";
+    d.title = title + ": " + fmt(amount);
+    return d;
+}
+
+function renderPool(g) {
+    const card = document.createElement("div");
+    card.className = "pool";
+
+    const head = document.createElement("div");
+    head.className = "pool-head";
+    const who = document.createElement("span");
+    who.className = "who mono";
+    who.textContent = g.mandate_id;
+    const dim = document.createElement("span");
+    dim.className = "dim";
+    dim.textContent = g.dimension + " · " + fmt(g.committed) + " of " + fmt(g.total)
+        + " spent (" + pct(g.spend_fraction) + ")";
+    head.append(who, dim);
+    card.appendChild(head);
+
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    for (const s of [
+        seg("seg-committed", g.committed, g.total, "committed"),
+        seg("seg-leased", g.leased, g.total, "leased"),
+        seg("seg-allocated", g.allocated, g.total, "allocated to children"),
+    ]) if (s) bar.appendChild(s);
+    card.appendChild(bar);
+
+    const legend = document.createElement("div");
+    legend.className = "legend";
+    legend.innerHTML =
+        '<span><span class="key" style="background:var(--danger)"></span>committed ' + fmt(g.committed) + '</span>'
+      + '<span><span class="key" style="background:var(--warning)"></span>leased ' + fmt(g.leased) + '</span>'
+      + '<span><span class="key" style="background:var(--primary)"></span>allocated ' + fmt(g.allocated) + '</span>'
+      + '<span><span class="key" style="background:rgba(255,255,255,.15)"></span>available ' + fmt(g.available) + '</span>'
+      + '<span>' + g.active_leases + ' active lease(s), ' + pct(g.lease_utilization) + ' of held spent</span>';
+    card.appendChild(legend);
+    return card;
+}
+
+async function refresh() {
+    let data;
+    try {
+        const resp = await fetch("/v1/budgets/dashboard", { cache: "no-store" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        data = await resp.json();
+    } catch (err) {
+        // Say the dashboard is stale rather than leaving a green lamp lit on old data —
+        // a stale green is worse than no colour, because it asserts a verdict nobody
+        // checked.
+        const banner = document.getElementById("banner");
+        banner.className = "invariant";
+        document.getElementById("verdict").textContent = "dashboard unreachable";
+        document.getElementById("checkmeta").textContent = String(err);
+        return;
+    }
+
+    const banner = document.getElementById("banner");
+    banner.className = "invariant " + (data.invariants_ok ? "ok" : "bad");
+    document.getElementById("verdict").textContent = data.invariants_ok
+        ? "All ledger invariants hold"
+        : data.violations.length + " invariant violation(s)";
+    document.getElementById("checkmeta").textContent =
+        data.budgets_checked + " budgets swept in " + data.check_duration_ms + " ms";
+
+    document.getElementById("pools").textContent = data.gauges.length;
+    const totalLeases = data.gauges.reduce((n, g) => n + g.active_leases, 0);
+    document.getElementById("leases").textContent = totalLeases;
+    document.getElementById("topups").textContent = data.topups_per_minute;
+
+    // Utilization across everything held, not the mean of per-pool ratios: a pool holding
+    // 1 unit and one holding 10,000 must not count equally.
+    const granted = data.gauges.reduce((n, g) => n + Number(g.lease_granted), 0);
+    const settled = data.gauges.reduce((n, g) => n + Number(g.lease_settled), 0);
+    document.getElementById("util").textContent =
+        granted > 0 ? ((settled / granted) * 100).toFixed(1) + "%" : "–";
+
+    const list = document.getElementById("pools-list");
+    list.textContent = "";
+    for (const g of data.gauges) list.appendChild(renderPool(g));
+    document.getElementById("empty").style.display = data.gauges.length ? "none" : "block";
+
+    if (!data.invariants_ok) {
+        const box = document.createElement("div");
+        box.className = "viol";
+        for (const v of data.violations) {
+            const d = document.createElement("div");
+            d.textContent = v.detail;
+            box.appendChild(d);
+        }
+        list.appendChild(box);
+    }
+}
+
+{% if has_database %}
+refresh();
+setInterval(refresh, REFRESH_MS);
+{% else %}
+document.getElementById("verdict").textContent = "no database configured";
+document.getElementById("checkmeta").textContent = "the control plane was started without one";
+document.getElementById("empty").textContent =
+    "Nothing to report: the control plane was started without a database.";
+{% endif %}
+</script>
+</body>
+</html>
