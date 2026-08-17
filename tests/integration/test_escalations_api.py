@@ -190,6 +190,40 @@ async def test_narrowing_beyond_the_request_is_400(migrated_engine: AsyncEngine)
         assert result.status_code == 400
 
 
+async def test_narrowing_the_amount_mints_a_smaller_grant(migrated_engine: AsyncEngine) -> None:
+    async with await _client(migrated_engine, signed_in_as="kc:manager") as client:
+        opened = await client.post("/v1/escalations", json=_open_body(requested_amount="50000"))
+        escalation_id = opened.json()["id"]
+        result = await client.post(
+            f"/v1/escalations/{escalation_id}/approve",
+            json={"max_amount": "20000"},
+        )
+        assert result.status_code == 200
+        body = result.json()
+        # `max_amount` bypasses the escalation's stored (DB `Numeric(20,4)`-quantized)
+        # `requested_amount` entirely, so the grant carries the request body's own Decimal
+        # precision rather than the zero-padded form `str(escalation.requested_amount)`
+        # would have. Compare numerically, not as the exact string.
+        assert Decimal(body["amount"]) == Decimal("20000")
+
+        key_set = RootKeySet([_KEY_PAIR.public_key])
+        verified = verify(body["elevated_token"], key_set, now=_NOW + timedelta(seconds=1))
+        assert verified.budget.spend_bdt == Decimal("20000")
+
+
+async def test_narrowing_the_amount_above_the_request_is_400(
+    migrated_engine: AsyncEngine,
+) -> None:
+    async with await _client(migrated_engine, signed_in_as="kc:manager") as client:
+        opened = await client.post("/v1/escalations", json=_open_body(requested_amount="50000"))
+        escalation_id = opened.json()["id"]
+        result = await client.post(
+            f"/v1/escalations/{escalation_id}/approve",
+            json={"max_amount": "50001"},
+        )
+        assert result.status_code == 400
+
+
 async def test_deny_records_the_reason(migrated_engine: AsyncEngine) -> None:
     async with await _client(migrated_engine, signed_in_as="kc:cfo") as client:
         opened = await client.post("/v1/escalations", json=_open_body())
@@ -227,6 +261,34 @@ async def test_the_console_queue_page_shows_signed_in_state(
         page = await anon.get("/escalations")
         assert page.status_code == 200
         assert "Sign out" not in page.text
+
+
+async def test_the_console_queue_page_offers_narrowing_controls(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """T-050: a scope checkbox per requested scope, and an amount field capped at it.
+
+    Both narrowing inputs are always emitted, even for an anonymous viewer — the page's
+    own approve/deny actions are what require a session (T-043), not viewing the queue.
+    """
+    async with await _client(migrated_engine) as client:
+        opened = await client.post(
+            "/v1/escalations",
+            json=_open_body(
+                agent_id="agt-narrow",
+                requested_scopes=["invoice:read", "payment:initiate"],
+                requested_amount="75000",
+            ),
+        )
+        escalation_id = opened.json()["id"]
+        page = await client.get("/escalations")
+        assert page.status_code == 200
+        assert f'id="scopes-{escalation_id}"' in page.text
+        assert 'type="checkbox" value="invoice:read"' in page.text
+        assert 'type="checkbox" value="payment:initiate"' in page.text
+        assert f'id="amount-{escalation_id}"' in page.text
+        assert 'value="75000.0000"' in page.text
+        assert 'max="75000.0000"' in page.text
 
 
 async def test_the_console_queue_page_without_a_database_reports_the_gap() -> None:

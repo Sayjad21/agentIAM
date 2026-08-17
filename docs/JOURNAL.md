@@ -2292,6 +2292,40 @@ every deployment that has not opted in.
 
 ---
 
+### T-050 · The escalation queue, and the row that was already an approve screen underneath
+
+*Still M10 — the last ticket in it. `ROADMAP.md`'s "Milestone 6" ends here too.*
+
+The backend for narrowing had shipped at T-037 and never been exercised end to end.
+`agentiam_core.escalation.approve()` already took `narrowed_scopes` and `max_amount`,
+already enforced grant ⊆ request in both dimensions (`NarrowingWidensRequest`, EC-A09);
+`ApproveRequest` already carried both fields; `POST .../approve` already ran under a real
+OIDC session as of T-043. Checked all three against the running code before writing anything,
+per this project's own standing habit — the alternative was rebuilding logic that already
+existed and was already tested at the core level (`tests/unit/test_escalation.py`), which
+would have been the ticket's whole risk if skipped.
+
+What was missing was narrower than "a UI": T-037's own console page rendered the queue
+read-only with two buttons that posted empty approve/deny bodies — a screen that could only
+ever grant exactly what was requested, never less. The gap was the narrowing *inputs*, not
+the narrowing *logic*. `escalations.html` gained a checkbox per requested scope and an
+amount field capped client-side at the requested amount (`max`, `min="0"`), and `approve()`'s
+`fetch` body now carries whatever the row's own inputs say — `narrowed_scopes` from the
+checked boxes, `max_amount` from the field. Unchecking every scope or typing an amount above
+the request disables the row's Approve button before the request is even sent, but that is a
+convenience, not the gate: `NarrowingWidensRequest` on the server is still what an approver
+cannot bypass by editing HTML, exactly as EC-A09 requires.
+
+Two integration tests exercise the amount-narrowing path end to end for the first time —
+`test_narrowing_beyond_the_request_is_400` already covered scopes, but nothing had posted a
+`max_amount` through the actual HTTP router and minted a token from it before. A third test
+asserts the console page actually emits the per-scope checkboxes and the amount field with
+the requested value as both `value` and `max`, so a future edit that silently drops the
+narrowing controls (the same class of gap this ticket closed) fails a test rather than
+waiting for someone to open the page.
+
+---
+
 ## What the numbers looked like at T-033
 
 The snapshot the entries above built up to, left as it was written rather than corrected in
@@ -2311,12 +2345,12 @@ place — the running total is the section below.
 
 ---
 
-## What the numbers look like now (through T-049)
+## What the numbers look like now (through T-050)
 
 | | |
 |---|---|
-| Tickets complete | 40 of 52 in scope (61 defined, 9 deferred) — **M1–M9 resolved**, M10 started (T-045…T-049 done; T-050 remains) |
-| Tests | 2154, all passing (1922 unit + 216 integration + 12 e2e + 4 benchmarks) |
+| Tickets complete | 41 of 52 in scope (61 defined, 9 deferred) — **M1–M10 all resolved**, M11 next (T-051) |
+| Tests | 2157, all passing (1922 unit + 219 integration + 12 e2e + 4 benchmarks) |
 | Coverage | `agentiam-core` **100%**, kept since T-005 (`STATUS.md` §1). Whole tree ~98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86% — not independently re-measured for this entry; see `STATUS.md` §1 and §3 gap 14 for the current figure and the fact that it is reported but not yet CI-gated |
 | ADRs | 47 |
 | Specs written | 10 — every spec `PLAN.md` names now exists |

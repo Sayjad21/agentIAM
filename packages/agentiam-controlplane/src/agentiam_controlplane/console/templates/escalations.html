@@ -5,12 +5,44 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AgentIAM Control Plane - Escalation Queue</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .narrow-scopes {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+        .narrow-scopes label {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.85rem;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        }
+        .narrow-amount {
+            width: 100%;
+            box-sizing: border-box;
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.35rem 0.5rem;
+            font-family: inherit;
+            font-size: 0.85rem;
+        }
+        .narrow-amount:invalid {
+            border-color: var(--danger);
+        }
+        .btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+    </style>
 </head>
 <body class="dark-mode">
     <div class="container">
         <header>
             <h1>AgentIAM Control Plane</h1>
-            <p>Escalation Queue &mdash; the rich approve/deny screen is T-050</p>
+            <p>Escalation Queue &mdash; approve narrows scope or amount, never widens (EC-A09)</p>
             {% if principal_id %}
             <p class="muted">Signed in as {{ display_name or principal_id }} ({{ principal_id }}) &middot; <a href="/auth/logout">Sign out</a></p>
             {% elif login_wired %}
@@ -31,8 +63,8 @@
                     <tr>
                         <th>Agent</th>
                         <th>Principal</th>
-                        <th>Requested scopes</th>
-                        <th>Amount</th>
+                        <th>Grant scopes</th>
+                        <th>Grant amount</th>
                         <th>Reason</th>
                         <th>Expires</th>
                         <th>Action</th>
@@ -43,12 +75,33 @@
                     <tr id="row-{{ e.id }}">
                         <td>{{ e.agent_id }}</td>
                         <td>{{ e.principal_id }}</td>
-                        <td>{{ e.requested_scopes | join(", ") }}</td>
-                        <td>{{ e.requested_amount }}</td>
+                        <td>
+                            <div class="narrow-scopes" id="scopes-{{ e.id }}">
+                                {% for s in e.requested_scopes %}
+                                <label>
+                                    <input type="checkbox" value="{{ s }}" checked onchange="validateRow('{{ e.id }}')">
+                                    {{ s }}
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </td>
+                        <td>
+                            <input
+                                type="number"
+                                class="narrow-amount"
+                                id="amount-{{ e.id }}"
+                                value="{{ e.requested_amount }}"
+                                max="{{ e.requested_amount }}"
+                                min="0"
+                                step="any"
+                                data-requested="{{ e.requested_amount }}"
+                                oninput="validateRow('{{ e.id }}')"
+                            >
+                        </td>
                         <td>{{ e.reason }}</td>
                         <td>{{ e.expires_at }}</td>
                         <td>
-                            <button class="btn primary" onclick="approve('{{ e.id }}')">Approve</button>
+                            <button class="btn primary" id="approve-{{ e.id }}" onclick="approve('{{ e.id }}')">Approve</button>
                             <button class="btn" onclick="deny('{{ e.id }}')">Deny</button>
                         </td>
                     </tr>
@@ -62,11 +115,35 @@
     <script>
         // T-043: the acting approver comes from the session cookie (already attached by
         // the browser to same-origin fetch calls) — never from anything typed here.
+
+        // T-050: the approve button is disabled whenever a row's own inputs already
+        // describe a widening — server-side `NarrowingWidensRequest` is still the real
+        // gate (EC-A09), this only saves the approver a round trip for the obvious case.
+        function validateRow(id) {
+            const amountInput = document.getElementById(`amount-${id}`);
+            const requested = Number(amountInput.dataset.requested);
+            const amount = Number(amountInput.value);
+            const checked = document.querySelectorAll(`#scopes-${id} input:checked`).length;
+            const invalid = !(amount >= 0) || amount > requested || checked === 0;
+            amountInput.setCustomValidity(invalid ? "invalid" : "");
+            document.getElementById(`approve-${id}`).disabled = invalid;
+        }
+
+        function narrowedScopes(id) {
+            return Array.from(document.querySelectorAll(`#scopes-${id} input:checked`))
+                .map((box) => box.value);
+        }
+
         async function approve(id) {
+            const scopes = narrowedScopes(id);
+            const amountInput = document.getElementById(`amount-${id}`);
             const res = await fetch(`/v1/escalations/${id}/approve`, {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({}),
+                body: JSON.stringify({
+                    narrowed_scopes: scopes,
+                    max_amount: amountInput.value,
+                }),
             });
             const body = await res.json();
             if (!res.ok) {
