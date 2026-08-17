@@ -10,6 +10,7 @@ from agentiam_controlplane.app import create_app
 from agentiam_controlplane.db.base import make_session_factory
 from agentiam_controlplane.db.models import AuditRecordRow, RevocationRow
 from agentiam_controlplane.settings import ControlPlaneSettings
+from agentiam_core.tokens import generate_keypair
 
 pytestmark = pytest.mark.integration
 
@@ -18,10 +19,13 @@ pytestmark = pytest.mark.integration
 async def app_client(migrated_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     # We need settings and session factory
     session_factory = make_session_factory(migrated_engine)
+    # A real keypair even though no tree endpoint mints anything: `root_private_key` is
+    # typed `PrivateKey`, and a placeholder string here was the one thing `mypy --strict`
+    # objected to across T-037…T-045. Every sibling integration module already does this.
     settings = ControlPlaneSettings(
-        root_private_key="test-key",
+        root_private_key=generate_keypair().private_key,
         approvers=frozenset({"kc:manager"}),
-        session_secret_key="test-secret",  # noqa: S106
+        session_secret_key="test-secret",  # noqa: S106 — throwaway test signing key
     )
     app = create_app(
         session_factory=session_factory,
