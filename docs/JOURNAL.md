@@ -1820,7 +1820,482 @@ kind of claim this journal exists to catch.
 ---
 
 
-## What the numbers look like
+## M5 — Policy activation, the NL compiler, drift v0, revocation
+
+### T-026 · The activation gate, and a second gap it left behind without saying so
+
+`operator activation gate for policy bundles` (ADR-030): a bundle pushed toward the PEP's
+cache runs the full 51-case corpus, derived from the demo workflows, inside the activation
+pipeline before it is allowed to replace the active one. Any failing case is a 409 and the
+bundle never loads. The corpus lives once, in `agentiam_core.policy_testing`, not copied —
+T-027 needed the same 51 cases for its authoring diffs, and two copies of "the test suite
+that decides whether a policy is safe" is exactly the kind of duplication that drifts.
+
+The gate itself was correct. What was not caught here, and only surfaced while working
+T-030 four tickets later, is that nothing had actually wired it into the Control Plane's own
+`POST /policy/activate` — the corpus ran in the PEP's activation path, and the console's own
+"activate" button skipped it entirely. ADR-039 tells that story; it belongs there rather than
+being anticipated here, since at T-026's own commit the gate did exactly what its acceptance
+criterion asked.
+
+---
+
+### T-027 · The Cedar authoring UI, and moving a corpus so two things can't disagree
+
+`agentiam-controlplane`'s Admin Console (ADR-031): edit a policy, run it against the corpus,
+see a diff against what's live, all through FastAPI + Jinja2 + HTMX + Tailwind — the stack
+`PLAN.md` §4.3 already settled on, because a second frontend language and a build step would
+only pay for themselves if the identity-tree visualization (T-045's D3 work) needed React,
+and Jinja handles that fine too.
+
+The decision worth recording is the corpus move: it had been living in `agentiam-pep` for
+T-026's activation gate. If the console kept its own copy for authoring diffs, "this policy
+passes here" and "this policy passes at activation" become two different claims that happen
+to usually agree — until someone edits one file and not the other. Moved to
+`agentiam_core.corpus` instead, read by both. One source of truth, not two that are supposed
+to match.
+
+---
+
+### T-028 · The Ollama client, and egress as something you can prove rather than promise
+
+`ollama_client.py` (ADR-032): the compiler's first LLM client, wrapping `httpx.AsyncClient`
+with the base URL hardcoded to `127.0.0.1:11434` rather than using the official `ollama`
+package. The reason for raw `httpx` over the convenience package is that a hardcoded
+localhost URL is a claim a reader can check by looking at one line, where a wrapped SDK
+client's actual destination is one more thing to trust. `temperature=0`, a fixed seed, and
+Ollama's `format` parameter constraining output to a JSON schema, for the determinism a demo
+needs.
+
+This decision did not survive contact with the timeout it also shipped with — see ADR-038,
+folded into T-029 below rather than narrated twice — and the no-egress guarantee itself was
+later superseded outright by ADR-040, once a real generation was measured against it. Both
+are the honest continuation of this ticket, not a correction of something wrong at the time:
+`qwen2.5:7b-instruct-q4_0` was not installed on the development machine when this shipped,
+so nothing here had yet met a real inference call.
+
+---
+
+### T-029 · The compiler, and an instrument that measured nothing while claiming to
+
+The commit shipped `compiler.py`, structured JSON-schema output via Pydantic
+(`CompilerTestCase`/`CompilerOutput`, ADR-033), and a 30-case evaluation dataset. The
+substantive story is what happened to that dataset afterward, and it is worth being blunt
+about because two earlier documents — `STATUS.md` and `ADR-033` itself — both said the
+compiler had been "evaluated against a 30-case corpus." It never had been.
+
+**Dataset v1 could not be passed by any compiler, of any quality.** Of the 30 cases, the
+positive principal id appeared verbatim in the English prompt in only 10 of them — the rest
+needed the compiler to *infer* an identity Cedar had no entity for, because the harness
+evaluated every case with `entities=[]`. Role and ownership checks had nothing to check
+against. Separately, the harness itself passed bare names (`"admin"`) where Cedar needs
+entity uids (`User::"admin"`), so every request returned `NoDecision` regardless of what the
+model produced. **0 of 30, always, independent of the compiler.**
+
+The fix was not a better prompt. It was an instrument that could tell the difference between
+a broken harness and a broken compiler: `evaluate_compiler.py --validate` now runs every
+case's own reference policy — no model involved — and must score 30/30 before a run against
+a real model is worth starting. That is the harness checking itself, the same discipline
+T-016's invariant checker and T-025's rollback test apply to their own claims.
+
+**Then the second thing.** Dataset v2, self-validating, still returned inflated numbers on
+an early pass. Three of the dataset's own cases had been pasted into `_SYSTEM_PROMPT` as
+few-shot examples during tuning — meaning the compiler had, quite literally, been shown the
+answer to three of the thirty questions on its own exam. The two figures that round produced
+are not repeated here; they were real outputs of a real run and also not an honest
+measurement of the compiler, which is the whole reason they are not worth citing.
+`test_the_prompt_does_not_contain_any_evaluation_prompt` exists because the fix for a
+failing case is always, every time, tempting to solve by showing the model that exact case —
+and the temptation recurs on every prompt iteration, not just the one that caused it.
+
+The clean measurement, once both were fixed: **27 of 30 (90%) on Gemini** (`passed 27 ·
+wrong 1 · unparseable 2`, latency median 2.6 s, zero throttling), and **43% on the local
+`qwen2.5:7b-instruct-q4_0` model** — the documented baseline the ADR-040 hosted-inference
+migration is measured against, not a number to be embarrassed by, since `--validate` staying
+free of model quota is what makes closing that gap later a matter of iteration rather than
+another rationed measurement.
+
+---
+
+### T-030 · Verify-before-deploy, and a gate that only existed in the template
+
+Two ADRs, one finding. ADR-034 sets the actual policy this ticket asks for: a
+compiler-generated policy activates only when **both** the auto-generated test suite *and*
+the 51-case master corpus pass — the corpus catches a regression against the invariants
+every policy must keep, the auto-generated tests catch the LLM misunderstanding the one
+prompt it was just given, and neither alone covers what the other does.
+
+Building the diff-and-verify UI for that dual gate is what turned up ADR-039. `POST
+/policy/activate` assigned the new source and returned 200 **unconditionally** — no corpus
+run, no auto-test run, not even a check that the Cedar parsed. `can_activate` was computed
+and handed to the *template*, so the gate that ADR-030 and ADR-034 had both already decided
+existed only as a greyed-out button a direct `POST` walked straight past. The one test that
+touched the endpoint asserted it *accepted* a new policy — which is to say, the missing gate
+had its own passing test, documenting the gap as intended behaviour.
+
+Fixed by making the endpoint itself parse and run the corpus before assigning anything,
+returning 409 with the failing case names on any failure, previous policy left serving.
+Worth noting what it deliberately still does not call: `agentiam_pep.activation
+.activate_bundle`, which additionally verifies an Ed25519 signature and a monotonic serial —
+gates that belong to real bundle publication, which the console's `DummyBundleStore` stub
+does not do yet. The corpus gate is the one with something to check today.
+
+One sub-decision earned its own line in the ADR: an empty policy source defaults to `""`
+rather than being a required field, because a required field makes `httpx`'s dropped-empty-
+form-value behaviour diverge from a real browser's `source=`, and the two paths need to
+agree on refusing with 409 rather than one of them 422ing before the gate ever runs.
+
+---
+
+### T-032 · Drift detection, and a header for a fact the PEP is not allowed to remember
+
+Spec 06 + `drift.py` (ADR-035). The problem statement has a contradiction sitting inside it:
+scoring how far a request has drifted from its stated task needs the English task text, and
+the PEP is stateless by design — it never looked the task up anywhere, and holding one more
+piece of per-task state would be exactly the kind of cross-request memory `PLAN.md` §3.2's
+"hot path never blocks on the network" principle exists to prevent.
+
+The token already carries `intent_hash`, cryptographically bound at mint time. The SDK sends
+the plain English alongside it, in a new `AgentIAM-Task-Intent` header; the PEP hashes what
+it received and checks it against the token's own hash before trusting a word of it. A
+mismatch means the caller is asserting an intent the token was never minted with, and the
+request is refused before drift scoring ever runs — the header is not the drift signal,
+it is what makes trusting the drift signal safe. Only once the hash matches does the plain
+text become input to the embedding-based semantic oracle.
+
+---
+
+*T-033's own two findings against T-032's shipped oracle — the cold-embedding timeout and
+the per-call `httpx.Client` — are narrated in that ticket's own section above, in
+chronological order with the rest of M4. What T-033 shipped alongside those fixes, the
+drift-modes wiring, is its own ticket, T-036:*
+
+### T-036 · Wiring `off` / `log_only` / `strict` through, so the extractor's own routes decide
+
+The half of drift detection with no ADR of its own, because nothing about it was left open
+by a spec: spec 06 already names three modes and their meanings, and T-036's job is
+threading the choice from a route's own extractor configuration through the pipeline
+context into `decide()`'s drift evaluation, so an operator can turn drift off for a route
+it does not make sense for (a read with no task-relevant amount) without touching code. The
+three modes now reach every layer that needs to see them — extraction, the request context,
+and the decision itself — rather than drift being a single global switch that a busy
+low-risk route could not opt out of.
+
+---
+
+## M5 continued — Escalation persistence, revocation, and the two performance layers under it
+
+### T-037 · The escalation workflow, split into a pure half and a half that needs custody
+
+The pure workflow — `agentiam_core.escalation`, `request`/`approve`/`deny`, "the grant is
+always ⊆ the request" as the one property the approver cannot violate no matter what they
+type — shipped as its own commit and stopped there on purpose. The persistence half needed
+Postgres, FastAPI, and four things `PLAN.md` §8 gestures at without fixing (ADR-041), and
+conflating "these rules are correct" with "here is where the signing key lives" would have
+made the first claim wait on the second.
+
+Four custody questions, each answered as a stated stopgap rather than a silent choice:
+
+**Who signs an elevated token.** Approval mints a fresh root-signed `Mandate` — never an
+attenuation of the agent's own token, since elevation is explicitly not narrowing. No
+issuance service exists yet to hold that key, so `AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY`
+reads a hex Ed25519 key from the environment, the same shape `agentiam_pep.config` already
+established for its own settings. The module docstring says stopgap in those words.
+
+**Who may approve.** No session identity exists before T-043, so `AGENTIAM_CONTROLPLANE
+_APPROVERS` is a fixed config list and the caller names which approver is acting in the
+request body — until T-043 replaces that with a real one.
+
+**What the request body actually needs to carry.** `PLAN.md`'s sketch is what a UI form
+would submit; a `Mandate` needs `task_id`/`principal_id`/`intent_hash` too, which the
+escalating decision's own context supplies automatically when the PEP opens the escalation
+itself, and which a human hitting the endpoint directly has to supply by hand.
+
+**How deep an elevated token can delegate.** Nothing in the plan fixes a number.
+`ElevationGrant` carries what was approved but not a depth, so `max_depth = 1` — one
+direct use, no children — became `ControlPlaneSettings.elevation_max_depth`'s default: the
+narrowest reading consistent with "elevation is not a new root of a delegation chain."
+
+The concurrency property — exactly one approver wins a race for one pending escalation — is
+proven the same way T-013's `ACQUIRE` and T-014's `LEDGER_COMMIT` were: `SELECT ... FOR
+UPDATE` before the pure `approve()`/`deny()` call, and ten concurrent approvers racing one
+row in the integration suite. And the same ADR-026 reasoning reappears in a new place: a
+failed escalation write fails the *request* closed, because a system that cannot record
+that a human was asked must not tell the agent one was asked.
+
+---
+
+### T-038 · Revocation reaches every PEP, and the first real dependency on Redis
+
+`specs/07-revocation.md` — the last spec gap `PLAN.md` names — plus the `revocations` table,
+`/v1/revocations`, and `RedisRevocationSet`, the PEP-side consumer keeping `decide()`'s
+synchronous `is_revoked()` fed. Two ADRs, because the ticket forced both a dependency
+decision and four implementation choices spec 07 left open on purpose.
+
+**Redis had been running since T-001 and nothing had ever imported it** (ADR-042) —
+`docker-compose.yml`'s comment named the job, but `import redis` failed against the venv
+until this ticket. `redis-py`'s own `redis.asyncio` has shipped pub/sub and pooling natively
+since 4.2, so no separate `aioredis` package is needed; that project merged upstream.
+Crucially, none of this touches `agentiam_core` — the purity guard still holds, because
+`RevocationOracle.is_revoked()` stays a synchronous in-memory `set` lookup on the `decide()`
+side regardless of what feeds it from a background consumer on the other side of that
+boundary.
+
+**Push is the latency optimization, pull is the correctness backstop** — spec 07 already
+said so, and it is proven rather than assumed: one integration test points the consumer's
+push connection at a dead port and shows pull alone still converges; another stops the real
+Redis container mid-revoke and shows the row still persists in Postgres regardless. NFR-4
+(<2 s p99 propagation) is measured against 3 real `RedisRevocationSet` instances, not
+mocked ones — across five runs, p99 ranged from ~11 µs to ~16 ms, with the one 12 ms sample
+a scheduler artefact rather than the norm. Loopback-only, so the number is a floor, not a
+network-separated deployment figure — that caveat travels with it into every later ticket
+that cites it.
+
+ADR-043 records the four choices spec 07 left implicit: the revoke endpoint reuses the same
+`approvers` config list ADR-041 introduced for escalations, rather than inventing a third
+identity stopgap; `revocations.seq` is a Postgres `IDENTITY` column rather than a
+manually-locked counter, because `block_id UNIQUE` already carries the concurrency proof and
+`seq` only needs to be monotonic, not contiguous; the staleness boundary is inclusive,
+matching `Escalation.is_expired()`'s existing convention rather than inventing a second one;
+and the channel name is a literal string in both packages rather than a cross-package
+import, because the control plane and the PEP are separate deployables that have never
+imported from each other anywhere else in the codebase.
+
+---
+
+### T-039 · The Bloom filter that would have made the cache slower than no cache
+
+`PLAN.md` asks for a counting Bloom filter in front of `RedisRevocationSet`'s exact set, for
+O(1) negative answers at EC-R10's scale (10,000 revocations). The obvious choice —
+`pyprobables`, the conventional pure-Python implementation — was probed before being
+adopted, the same habit that has caught nine design errors and a security finding earlier
+in this project.
+
+**It failed on measurement, not on API completeness.** Against 10,000 128-hex-char ids — the
+real shape of a biscuit revocation id — `pyprobables` measured **~92 µs per lookup**, while
+a plain Python `set.__contains__` over the same 10,000 ids measured **~0.76 µs**. The
+"performance layer" would have been roughly **900–1,200x slower** than the exact set it was
+meant to sit in front of — a net loss on every single call, directly contradicting the one
+sentence in spec 07 that names the filter's purpose (ADR-044).
+
+`fastbloom-rs`, Rust-backed via PyO3-style bindings, measured **~0.25 µs per lookup** at the
+same sizing — close to the plain-`set` floor, and still a real counting Bloom filter with
+working `remove_str`, verified rather than assumed, so `PLAN.md`'s literal word "counting"
+is honoured and not merely gestured at. `rbloom` measured even faster (~0.10 µs) but has no
+counting/removal at all, which would have needed its own justification for calling it
+something `PLAN.md` did not ask for; `bloom-filter2`, pure Python, shared `pyprobables`'
+order-of-magnitude problem. The filter sits *inside* `RedisRevocationSet` rather than beside
+it — a negative returns immediately, a positive falls through to the existing exact set,
+which stays authoritative regardless of what the Bloom filter says, so a false positive
+costs one extra lookup and never costs correctness. A 10,000-id property test proves zero
+false denials, including a reachability audit confirming real Bloom collisions actually
+occurred rather than the test passing vacuously because no collision was ever generated.
+
+---
+
+### T-040 · Twelve agents, three subtrees, and choosing a tree shape that makes "unaffected" unambiguous
+
+The subtree-revocation e2e that closes M8, and the point where every prior claim about
+revocation gets exercised through a real `attenuate()`-built chain rather than synthetic
+block ids. Three things `PLAN.md` line 1160 names as a criterion — "revoke root → 12 agents
+fail within 2 s, a sibling subtree unaffected" — without saying how to build or measure it
+(ADR-045).
+
+**The tree is three independent depth-4 chains, not one branching tree.** `12 = 3 × 4`
+either way, but three separate chains under one root mandate guarantee, *by construction*,
+that a sibling subtree shares no block id with the revoked one below the root — so
+"unaffected" has exactly one meaning to verify, rather than depending on which two branches
+of a binary tree happen to be picked. **One oracle, not three**: T-039's own NFR-4 test
+already proved multi-instance propagation; repeating that here would re-prove convergence
+instead of extending the claim this module actually makes, which is that a real chain's
+`revocation_ids` carries the ancestor ordering `decide()` depends on. **Proof runs at
+`decide()` directly, not through the HTTP stack** — T-040's dependencies are T-039 and
+T-011's `attenuate()`, not the gateway, and policy/budget are stubbed to always allow so a
+deny can only come from revocation, proving exactly the mechanism the ticket names rather
+than incidentally testing eleven scopes' worth of Cedar authoring.
+
+Revoking the root denies all 12 through the real pipeline (`ANCESTOR_REVOKED` for
+descendants, `TOKEN_REVOKED` for the revoked block itself); revoking one subtree's own block
+denies its 4 while the other 8 stay `ALLOW` throughout — the explicit negative test
+`PLAN.md` calls out, because over-revocation is also a bug and nothing about a passing
+positive test would have caught it. Measured propagation: **11–79 µs**, same loopback-only
+caveat as T-039's number.
+
+---
+
+## M9 — Keycloak, and the session that had been missing since T-037
+
+### T-043 · Real login, and closing the gap T-037 stated and left open
+
+ADR-041 named this ticket's target explicitly, four tickets earlier: `POST
+/v1/escalations/.../approve` and `.../deny` trusted a request-body `approver` field "because
+no session identity exists yet (T-043)." This is that closure, and the interesting content
+is a library choice plus four things the running system said that the plan did not.
+
+**`authlib`, not a hand-rolled authorization-code flow.** Rule 1 forbids writing crypto, and
+verifying an ID token's signature against a JWKS — plus getting state, nonce and PKCE right
+— is that kind of code regardless of how small it looks.
+`authlib.integrations.starlette_client.OAuth` does discovery, the redirect, the code
+exchange and JWKS verification; `types-authlib` is a mypy-only dev dependency rather than a
+blanket `ignore_missing_imports`, because one method (`create_client`) is genuinely
+untyped and the rest is not.
+
+**Four things found by running Keycloak rather than assuming its behaviour:**
+
+* `testcontainers.community.keycloak` was already in the venv but unusable —
+  `python-keycloak` had never been installed, so `from keycloak import KeycloakAdmin`
+  raised `ModuleNotFoundError`. Fixed via the `testcontainers[keycloak]` extra rather than
+  installing `python-keycloak` directly, so the tested version and the installed version
+  are the same one.
+* Keycloak 26 marks its own login-flow cookies `Secure; SameSite=None` **unconditionally**,
+  regardless of the realm's `sslRequired: none` setting. A real browser on `localhost`
+  sends them anyway — the W3C Secure Contexts spec treats loopback as trustworthy, and
+  every major browser implements the exception — so the actual login flow is unaffected. A
+  bare `httpx` test client does not implement that exception, which only mattered for the
+  test harness, worked around there rather than by changing `auth.py`.
+* `KeycloakAdmin.create_user` cannot pin a caller-supplied id — Keycloak always
+  server-generates one. Only a realm **import** can fix a user's `sub` in advance, which is
+  why the demo's two approvers live in `deploy/keycloak/realm-export.json` rather than
+  being created through the Admin API.
+* `httpx.ASGITransport` implements `AsyncBaseTransport`, not `BaseTransport` — it cannot
+  mount into a sync `httpx.Client`. The OIDC test drives one client across both the
+  in-process app and a real Keycloak container via `mounts`, so every request in that
+  module has to be awaited, including the ones hitting the real container.
+
+**The session mechanism is wired unconditionally, independent of whether login itself is.**
+`SessionMiddleware` installs whenever `session_factory` and `escalation_settings` are both
+supplied — the same condition that already mounts the escalation router — while
+`OIDCSettings` independently and only controls whether `/auth/login` etc. are mounted at
+all. The effect: `approve`/`deny` demand a real session unconditionally as of this ticket,
+with no code path left that reads `approver` from the body, but a deployment or a test can
+produce that session by any means that yields a validly-signed cookie, without needing a
+running Keycloak — the same "wired means it does the thing, unwired means it visibly
+doesn't" shape ADR-041 used for the approver list one layer down.
+
+No `principals` table gets built, on purpose: `principal_id` is derived as `kc:<sub>`
+directly from the verified ID token, the same shape every `principal_id` in the codebase
+already had before this ticket (a caller-supplied string), so a table with nothing yet
+reading from it would have been schema for its own sake.
+
+---
+
+## M10 — The console screens, and the question each one answers: did I build the console, or the truth
+
+Five tickets so far (T-050 remains), one shape: each screen is a new query over tables that
+already exist, wired to data already proven correct somewhere else in the codebase — not a
+second accounting of anything, and not new correctness logic dressed as a UI ticket. T-049,
+the observability ticket in the same milestone, follows this section rather than breaking
+its flow, and is its own kind of screen for the same underlying claim.
+
+### T-045 · The identity tree, and the screen `ROADMAP.md` says to over-invest in
+
+`db/tree.py` builds `TreeNode`/`TreeBudget`/`TreeDiff` entirely from tables that already
+exist — `audit_records`, `budgets`, `revocations`, `escalations` — with no new persistence
+layer. `GET /v1/tree/{task_id}` serves a snapshot, `GET /v1/tree/{task_id}/blocks/{agent_id}`
+looks up a structured caveat block id already sitting in a decision record's JSONB rather
+than parsing raw Datalog fresh each time, and `GET /v1/tree/{task_id}/stream` pushes diffs
+over SSE every 3 seconds. Pool budgets — the ones with no `agent_id`, shared across
+siblings — are assigned to the root agent at depth 0, since a pool budget belongs to the
+mandate as a whole and the tree has to put it somewhere a viewer can see it. D3 in a Jinja
+template, per `PLAN.md` §4.3's reasoning, animating on mint and revoke — `ROADMAP.md` calls
+this "the most important screen in the demo... visual polish is the deliverable, not a
+bonus," and it is the one screen this project treats that way explicitly.
+
+### T-046 · The live decision stream, and a hang built into its own first draft
+
+`db/decisions.py` + `decisions_api.py`: `GET /v1/decisions` pages the audit chain,
+`GET /v1/decisions/stream` is the *same* query filtered in SQL and pushed over SSE — the
+stream reads the ledger's own durable record rather than a side channel, so a `seq` cursor
+gives replay for free and survives a PEP restart for nothing extra. The actual content of
+the ticket is `explain()`: a refusal names the exact failing caveat inline —
+*"block 2's budget_ceiling caveat refused it: spend_bdt 60000 exceeds 50000"* — rather than
+the generic "denied by policy" every other IAM product already says, which is precisely what
+this project exists not to do.
+
+It also built its own hang and found it before shipping: `request.is_disconnected()` never
+fires under an in-process ASGI transport, so an unbounded generator ran forever and hung its
+caller — the same trap that had left T-045's own SSE test a bare `pass` rather than a real
+assertion. `MAX_STREAM_S` now recycles the connection and emits a `recycle` event, which
+turns out to be correct in production too: a proxy kills an idle stream eventually anyway,
+and `EventSource` reconnects on its own with the cursor resuming rather than replaying.
+
+### T-047 · The budget dashboard, and a gauge that is the invariant rather than a second copy of it
+
+`db/budget_dashboard.py`: the spend gauge draws a pool's `total` as `committed + leased +
+allocated + available` — exactly the four terms of the pool invariant spec 04 §2.1 already
+states, so the gauge *is* a picture of the invariant, and a test asserts the four actually
+sum to the total rather than trusting that drawing them side by side makes it so. Lease
+utilization — `settled / granted` over active leases — exposes the stranding failure mode
+spec 04 §7 exists to bound, which the spend gauge alone cannot see: a pool can look
+perfectly healthy while a PEP sits on a lease it never spends. T-016's checker runs live as
+the page's green/red lamp, and — the point worth stating plainly — the lamp is verified
+**red** on a deliberately corrupted ledger, not only green on a healthy one, because an
+indicator only ever observed green is indistinguishable from a light that is simply painted
+on.
+
+### T-048 · The audit explorer, exposing a proof rather than rebuilding one
+
+`db/audit_search.py` + `audit_api.py`: a new JSONB-filtered search over `audit_records`,
+newest first — deliberately the opposite order from T-046's `read_since`, because a search
+result is a snapshot a judge reads top to bottom once, not a feed a client resumes with a
+cursor. The custody view and the "verify chain" button call T-023's `custody()` and
+`verify_chain()` directly. No new tamper-detection logic was written for this ticket,
+because none was needed: those two functions were already proven against real tampering,
+deletion, reordering and head truncation when the audit chain itself shipped. `DecisionEvent`
+(T-046) gained an additive `task_id` field so a search hit can link straight into its task's
+custody chain without a second round trip — T-046's own tests kept passing unmodified,
+confirmed rather than assumed.
+
+---
+
+### T-049 · Grafana dashboards, and the trace that had nowhere to go
+
+*Still M10 — `ROADMAP.md`'s own "Milestone 6" resequencing calls this same set of tickets
+something else; `STATUS.md`, this journal, and every commit subject use `PLAN.md`'s
+numbering throughout, and T-049 is no exception even though it is the observability ticket
+rather than another console screen.*
+
+Two dashboards, committed as JSON, provisioned automatically: Decisions (rate, outcome mix,
+reason codes) and Budgets (per-mandate spend, lease utilization) — the reduced scope
+`PLAN.md` §21 already accepted, two instead of four. `docker-compose.observability.yml`
+brings up the collector, Tempo and Prometheus alongside Grafana, deliberately its own file
+rather than folded into the main compose file, since neither the control plane nor the PEP
+runs as a container anywhere in this repository yet.
+
+**Metrics go straight from each app to Prometheus.** The control plane's new `/metrics`
+joins the PEP's own, which has existed since T-018; only traces cross the OTEL collector.
+That is a narrower reading of `PLAN.md` §4.2's architecture diagram than "everything flows
+through the collector," and the reason is concrete rather than stylistic: nothing in this
+codebase uses the OTEL metrics SDK, both dashboards' numbers are already computed by
+existing query functions, and routing already-Prometheus-shaped data through OTLP and back
+would be a translation with no reader who needed it in a different shape (ADR-047).
+
+**The actual find, though, was in code that had shipped two milestones earlier.**
+`DecisionEmitter.decision_span()` has existed since T-022, benchmarked at 5.58 µs, unit
+tested in its own file — and never once called from production code. Grepped the whole
+tree to be certain rather than assumed. The consequence: `current_trace_id()`'s very first
+read, at the top of `authorize()`, had never had a real span to read in any environment this
+code has ever run in, so every `DecisionRecord.trace_id` that has ever been written falls
+back to the decision's own id rather than carrying an actual trace correlation handle. A
+span that costs 5.58 µs and produces nothing is exactly the kind of guard this project's own
+standing habit exists to catch, and it sat unnoticed because nothing was asking the question
+"is this actually wired in" until a ticket needed traces to show up somewhere real.
+
+Closed by opening the span in the gateway, before `authorize()` runs rather than inside it —
+`Pipeline.request_span()` — and holding it open across the upstream `httpx` call in a nested
+child span, `Pipeline.child_span()`. That ordering is also the literal fix for the ticket's
+other requirement, "decision spans linked to upstream calls": before this, there had never
+been an ambient span for an upstream call to nest inside even if one had been opened.
+`configure_tracing` installs a real SDK exporter only when an endpoint is explicitly
+configured, so the 5.58 µs figure — and NFR-1 alongside it — is unaffected in every test and
+every deployment that has not opted in.
+
+---
+
+## What the numbers looked like at T-033
+
+The snapshot the entries above built up to, left as it was written rather than corrected in
+place — the running total is the section below.
 
 | | |
 |---|---|
@@ -1833,3 +2308,18 @@ kind of claim this journal exists to catch.
 | Design errors caught before implementation | 12 |
 | Wrong diagnoses written down before being measured | 3, all in gap 13 |
 | Threats found by measurement | 9 (TM-19 through TM-27) |
+
+---
+
+## What the numbers look like now (through T-049)
+
+| | |
+|---|---|
+| Tickets complete | 40 of 52 in scope (61 defined, 9 deferred) — **M1–M9 resolved**, M10 started (T-045…T-049 done; T-050 remains) |
+| Tests | 2154, all passing (1922 unit + 216 integration + 12 e2e + 4 benchmarks) |
+| Coverage | `agentiam-core` **100%**, kept since T-005 (`STATUS.md` §1). Whole tree ~98% — `-sdk` 89%, `-pep` 95–100% by module, `-controlplane` 86% — not independently re-measured for this entry; see `STATUS.md` §1 and §3 gap 14 for the current figure and the fact that it is reported but not yet CI-gated |
+| ADRs | 47 |
+| Specs written | 10 — every spec `PLAN.md` names now exists |
+| Real gaps found by grepping shipped code rather than by testing it | at least 2 beyond T-033's dozen: the activation gate that existed only in the template (T-030, ADR-039), and T-022's `decision_span` never once called from production code in two milestones (T-049, ADR-047) |
+| Dependencies rejected on measurement, not on API completeness | `pyprobables` (~900–1,200x slower than the `set` it was meant to guard, T-039, ADR-044) |
+| Threats, total | 27 catalogued (TM-01 through TM-27); 9 of those (TM-19 through TM-27) came from measurement rather than the original brainstormed catalogue, unchanged since T-033 — no ticket after it has added a new one |
