@@ -28,6 +28,7 @@ from agentiam_controlplane.db.audit_sink import LedgerAuditSink
 from agentiam_controlplane.db.base import make_session_factory
 from agentiam_controlplane.db.ledger import acquire
 from agentiam_controlplane.db.models import AuditRecordRow, BudgetRow
+from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
 from agentiam_core.errors import ReasonCode
 from agentiam_core.models import Budget, BudgetDimension, Mandate
 from agentiam_core.tokens import RootKeySet, generate_keypair, mint_root
@@ -40,6 +41,7 @@ from agentiam_pep.pipeline import Pipeline, PipelineSettings
 from agentiam_pep.policy import AgentPrincipal, CedarEngine, PolicyBundle, ToolFacts
 from agentiam_pep.pool import LeaseGrant, LeasePool, PoolSettings
 from agentiam_pep.revocation import InMemoryRevocationSet
+from agentiam_pep.settlement import SettlementQueue, SettlementSettings
 from tests.integration.conftest import make_budget
 
 if TYPE_CHECKING:
@@ -160,6 +162,7 @@ class Slice:
         mandate: Mandate,
         engine: AsyncEngine,
         revocation: InMemoryRevocationSet,
+        settlement: SettlementQueue,
     ) -> None:
         """Hold every handle a test needs to look inside the wired slice."""
         self.client = client
@@ -168,6 +171,7 @@ class Slice:
         self.mandate = mandate
         self.engine = engine
         self.revocation = revocation
+        self.settlement = settlement
         self.token = mint_root(mandate, ROOT.private_key)
 
     @property
@@ -175,8 +179,9 @@ class Slice:
         return {"authorization": f"Bearer {self.token}"}
 
     async def settled(self) -> None:
-        """Let the emitter drain, so the audit assertions see the records."""
+        """Let the emitter and the settlement queue drain, so both ledgers are current."""
         await self.emitter.flush()
+        await self.settlement.flush()
 
     async def available(self) -> Decimal:
         factory = make_session_factory(self.engine)
@@ -204,11 +209,24 @@ async def slice_(migrated_engine: AsyncEngine) -> AsyncIterator[Slice]:
     )
     mandate = a_mandate(mandate_id)
 
+    # Spec 04 §4.4. Added after T-052's CH-10 found that nothing on the PEP path called
+    # `LEDGER_COMMIT`, so `budgets.committed` never moved and a `RELEASE` returned spent
+    # budget to the pool. The slice is the project's reference assembly, so it wires it.
+    settlement = SettlementQueue(
+        LedgerSettlementSink(make_session_factory(migrated_engine)),
+        SettlementSettings(flush_interval_s=0.01),
+        now=lambda: NOW,
+    )
+    await settlement.start()
+
     pool = LeasePool(
         LedgerBackedClient(migrated_engine, mandate_id),
         PoolSettings(pep_id="pep-e2e", lease_size=Decimal("400.0000")),
         mandate_id=mandate_id,
         now=lambda: NOW,
+        # Settle before releasing — a released lease rejects settlements still owed against
+        # it and hands the spent budget back (spec 04 §11; `LeasePool._release`).
+        before_release=settlement.drain,
     )
     await pool.prime(BudgetDimension.SPEND_BDT)
 
@@ -241,6 +259,7 @@ async def slice_(migrated_engine: AsyncEngine) -> AsyncIterator[Slice]:
         settings=PipelineSettings(pep_id="pep-e2e"),
         now=lambda: NOW,
         drift_oracle=RuleBasedDriftOracle(),
+        settlement=settlement,
     )
 
     tools_client = httpx.AsyncClient(
@@ -254,8 +273,11 @@ async def slice_(migrated_engine: AsyncEngine) -> AsyncIterator[Slice]:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://pep"
     ) as client:
-        yield Slice(client, emitter, pool, mandate, migrated_engine, revocation)
+        yield Slice(client, emitter, pool, mandate, migrated_engine, revocation, settlement)
 
+    # Settlement before anything releases a lease: `RELEASE` returns `granted - settled`,
+    # so a queue still holding settlements returns budget that was already spent.
+    await settlement.aclose()
     await emitter.aclose()
     await tools_client.aclose()
 
@@ -319,6 +341,45 @@ class TestTheSlice:
         )
         assert response.status_code == 403
         assert "payment_id" not in response.text
+
+    async def test_spending_reaches_the_ledger_not_just_the_local_lease(
+        self, slice_: Slice
+    ) -> None:
+        """Spec 04 §4.4, end to end — the half that was missing until T-052 found it.
+
+        `test_spending_budget_moves_the_ledger` above only ever checked the PEP's own
+        `remaining_local`, which is why nine tickets went by with `LEDGER_COMMIT` having no
+        production caller: the slice asserted the local half of settlement and never the
+        ledger half. This asserts the ledger half.
+        """
+        factory = make_session_factory(slice_.engine)
+
+        async def committed() -> Decimal:
+            async with factory() as session:
+                row = (
+                    await session.execute(
+                        select(BudgetRow).where(
+                            BudgetRow.mandate_id == slice_.mandate.mandate_id,
+                            BudgetRow.dimension == BudgetDimension.SPEND_BDT.value,
+                            BudgetRow.agent_id.is_(None),
+                        )
+                    )
+                ).scalar_one()
+                return row.committed
+
+        before = await committed()
+        response = await slice_.client.post(
+            "/proxy/payments",
+            headers=slice_.auth,
+            json={"amount": "175.0000", "recipient": {"account_id": "acct_1001"}},
+        )
+        assert response.status_code == 200
+        await slice_.settled()
+
+        assert await committed() == before + Decimal("175.0000"), (
+            "the request succeeded and the PEP drew down its local lease, but the ledger "
+            "never recorded the spend — so a RELEASE would hand it back (spec 04 §4.4)"
+        )
 
     async def test_the_decision_appears_in_the_audit_ledger(self, slice_: Slice) -> None:
         await slice_.client.get("/proxy/invoices/inv_001", headers=slice_.auth)

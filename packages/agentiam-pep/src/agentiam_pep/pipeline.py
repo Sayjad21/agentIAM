@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from agentiam_pep.lease import Reservation
     from agentiam_pep.policy import AgentPrincipal, CedarEngine
     from agentiam_pep.pool import LeasePool
+    from agentiam_pep.settlement import SettlementQueue
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ class Pipeline:
         drift_oracle: DriftOracle | None = None,
         features: FeatureExtractor | None = None,
         escalation_sink: EscalationSink | None = None,
+        settlement: SettlementQueue | None = None,
     ) -> None:
         """Assemble the five oracles and the two adapters the steps need."""
         self._routes = routes
@@ -192,6 +194,7 @@ class Pipeline:
         self._drift_oracle = drift_oracle
         self._features = features
         self._escalation_sink = escalation_sink
+        self._settlement = settlement
 
     def request_span(self) -> AbstractContextManager[Span | None]:
         """The whole-request span wrapping `authorize()`, `settle()`, and the upstream call.
@@ -372,14 +375,27 @@ class Pipeline:
         `actual` defaults to what was reserved. A tool that reports its own charge (the
         payment stub echoes one) passes it here, and spec 04 §4.3's refund or shortfall path
         does the rest.
+
+        **Two settlements happen here, not one**, and until T-052 only the first did. The
+        local one draws down `remaining_local` so this PEP stops spending budget it has
+        already used. The second — enqueueing the resulting `CommitOutcome` for
+        `LEDGER_COMMIT` — is what tells the *ledger*, and without it `budgets.committed`
+        never moved and `RELEASE` handed spent budget back to the pool (spec 04 §4.4;
+        `settlement.py` has the measurement).
+
+        Still synchronous and still off the network: `enqueue()` appends to a deque and
+        returns. A missing `settlement` queue leaves the old, local-only behaviour, which is
+        what the pure-unit tests of `Pipeline` use.
         """
         if authorized.reservation is None:
             return
-        self._pool.commit(
+        outcome = self._pool.commit(
             BudgetDimension.SPEND_BDT,
             authorized.reservation,
             authorized.reservation.amount if actual is None else actual,
         )
+        if self._settlement is not None:
+            self._settlement.enqueue(outcome, now=self._now())
 
     # -- internals ------------------------------------------------------------------
 

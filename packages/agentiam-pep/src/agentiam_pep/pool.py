@@ -37,7 +37,7 @@ from agentiam_pep.errors import ReservationInsufficientError
 from agentiam_pep.lease import CommitOutcome, LocalLease, Reservation, commit, reserve
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
     from datetime import datetime
 
 __all__ = [
@@ -135,14 +135,44 @@ class LeasePool:
         *,
         mandate_id: uuid.UUID,
         now: Callable[[], datetime],
+        before_release: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """Build an empty pool. Nothing is acquired until `prime()`."""
+        """Build an empty pool. Nothing is acquired until `prime()`.
+
+        `before_release` is awaited immediately before every `RELEASE` — see `_release`.
+        `None` keeps the pre-T-052 behaviour and is what the pure unit tests use.
+        """
         self._client = client
         self._settings = settings
         self._mandate_id = mandate_id
         self._now = now
+        self._before_release = before_release
         self._held: dict[BudgetDimension, _Held] = {}
         self._closed = False
+
+    async def _release(self, lease_id: uuid.UUID) -> None:
+        """`RELEASE` one lease, after letting anything owed against it settle first.
+
+        **The order is the whole point, and getting it wrong is a double-spend.** `RELEASE`
+        returns `granted - settled` to the pool, and `leases.settled` only moves when
+        `LEDGER_COMMIT` applies a settlement. So a lease released while settlements against
+        it are still queued gives back budget that was already spent — and then those
+        settlements arrive at a lease that is no longer active, are rejected under spec 04
+        §11 (G3, TM-21), and never apply at all.
+
+        That is not hypothetical. T-052's CH-10 measured it after asynchronous settlement
+        was introduced: **6,678 of 6,992 settlements were declined**, because a top-up
+        replaces the lease and releases the old one, and every settlement still in flight
+        against the old lease was orphaned by it. The visible symptom was the same one that
+        motivated the settlement queue in the first place — `committed` far below what had
+        been spent — arriving by a completely different route.
+
+        The hook is awaited on *both* release paths, top-up and shutdown, because both
+        retire a lease that may still owe the ledger something.
+        """
+        if self._before_release is not None:
+            await self._before_release()
+        await self._client.release(lease_id=lease_id)
 
     # -- acquisition ----------------------------------------------------------------
 
@@ -207,7 +237,7 @@ class LeasePool:
         # revocation gossip starts marking leases from outside, this is where an already
         # retired lease must be skipped — releasing one twice is TM-21's shape (ADR-009).
         old.state = LeaseState.RELEASED
-        await self._client.release(lease_id=old.id)
+        await self._release(old.id)
         return grant
 
     # -- the hot path ---------------------------------------------------------------
@@ -246,6 +276,11 @@ class LeasePool:
 
         A `RequestContext` carries every dimension, most of them zero (ADR-007), so a zero
         request against a dimension this PEP holds no lease for is not a refusal.
+
+        Reserves nothing, but it *does* schedule a top-up when it is about to refuse — see
+        the comment on that branch. A dimension holding no lease at all is not covered: there
+        is no `_Held` to top up from, and re-priming from a read is a larger change than this
+        one. That case is a PEP that never primed the dimension, not one that ran dry.
         """
         for dimension, amount in requested.items():
             if amount <= 0:
@@ -259,6 +294,17 @@ class LeasePool:
                 or self._now() >= lease.expires_at - self._settings.skew
                 or lease.remaining_local < amount
             ):
+                # **A refusal is the last chance to ask for more, so it asks.** Top-ups are
+                # otherwise scheduled only from `reserve()`, which runs only after the
+                # pipeline has allowed — and it cannot allow while this verdict is `ok=False`.
+                # That is a closed loop: a lease that reaches empty can never be refilled,
+                # because the only thing that refills it is the spend path it is now
+                # blocking. The low-water mark normally tops up long before empty, so the
+                # loop only closes when a top-up has already *failed* — which is exactly
+                # CH-1: Postgres goes away, the held lease drains, and every later ACQUIRE
+                # would have been scheduled by a `reserve()` that never runs again. The PEP
+                # stayed dead after the database came back. Measured, then fixed here.
+                self._maybe_schedule_topup(dimension, held)
                 return BudgetVerdict(
                     ok=False,
                     exhausted_dimension=dimension,
@@ -325,4 +371,4 @@ class LeasePool:
         for held in self._held.values():
             if held.lease.state is LeaseState.ACTIVE:
                 held.lease.state = LeaseState.RELEASED
-                await self._client.release(lease_id=held.lease.id)
+                await self._release(held.lease.id)

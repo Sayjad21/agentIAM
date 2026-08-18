@@ -2337,3 +2337,80 @@ attacks in `PLAN.md` §12's full 33 (`A-14…A-16`, `A-19…A-22`, `A-27`, `A-31
 out of T-051's named scope and stay deferred per `PLAN.md` §21 — most already have design-level
 coverage in `threat-model.md` even where no dedicated red-team test exists (`A-14`/`A-15` via
 `tests/unit/test_escalation.py`, `A-27` explicitly accepted risk per `TM-11`).
+
+---
+
+## ADR-049 — Settlement reaches the ledger: a queue, unbounded retries, and settle-before-release
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `agentiam_pep.settlement` (new), `agentiam_pep.pool`, `agentiam_pep.pipeline`,
+`agentiam_controlplane.db.settlement_sink` (new), spec 04 §4.3/§4.4, T-014, T-021, T-052
+
+**Context:** T-052's CH-10 asked where the money went and got an answer nobody expected.
+`Pipeline.settle()` called `LeasePool.commit()` — which is `agentiam_pep.lease.commit`,
+pure and in-memory — and discarded the `CommitOutcome` it returned. That object's own
+docstring says it is *"for the caller to enqueue as `LEDGER_COMMIT`"*. Grepping the whole
+tree for `ledger_commit` found the function, its unit tests, its race tests, and **no
+production caller at all**, from T-014 until now.
+
+So `budgets.committed` never moved. `RELEASE` returns `granted - settled` and
+`leases.settled` is written only by `LEDGER_COMMIT`, so a PEP that spent most of its lease
+handed the **whole grant** back on shutdown and the same budget became spendable twice.
+Measured in CH-10 before the fix: 992 requests spent 4,960 and the ledger recorded
+`committed = 0`; a single instance spending 300 of a 500 lease returned all 500 to the pool.
+
+**The invariant checker could not see any of it**, and that is the part worth keeping.
+It compares `committed` against the sum of settled reservations (0 == 0) and `leased`
+against the outstanding total of active leases — both held, because the books were
+internally consistent. They were consistent about a number that had stopped describing
+reality. A checker over one system's own records is structurally unable to catch that
+class of failure, which is exactly why chaos scenarios exist alongside it.
+
+**Decision:**
+
+1. **A queue, not an await.** `settle()` runs on the request path and `LEDGER_COMMIT` is a
+   locking database round trip; awaiting it there would put the ledger back in the
+   tool-call critical path, which is the one thing `pool.py` exists to prevent.
+   `SettlementQueue.enqueue()` is synchronous, appends to a bounded deque and returns.
+
+2. **Retries are unbounded**, unlike `DecisionEmitter`'s. `LEDGER_COMMIT` is idempotent on
+   `reservation_id` (G4, spec 04 §10), so a replay applies nothing and a retry can never
+   double-count. There is therefore no reason to give up while the ledger might return.
+   The sink resolves the only permanent failure — a lease that is no longer active — itself,
+   by recording a reconciliation anomaly and reporting *declined* rather than raising.
+   This is deliberately the opposite of the emitter's `max_retries` behaviour, which cannot
+   tell a poison batch from an unreachable sink (see `STATUS.md` gap 20).
+
+3. **`enqueue()` never raises**, where `emit()` denies. `emit()` runs before the request is
+   forwarded, so refusing is meaningful; `settle()` runs after the tool call has already
+   happened, so there is nothing left to refuse and raising would turn a bookkeeping
+   backlog into a 500 for work that succeeded. A dropped settlement is counted and logged
+   at `error`.
+
+4. **Settle before every release — `LeasePool._release`, via a `before_release` hook.**
+   This was found *after* the queue shipped, by re-running CH-10: a top-up replaces the held
+   lease and `RELEASE`s the old one, and every settlement still queued against that lease
+   was then rejected under spec 04 §11 (G3, TM-21). **6,678 of 6,992 settlements declined**,
+   `committed` at 3,330 against 51,660 spent — the same double-spend arriving by a
+   completely different route. The hook is awaited on both release paths, top-up and
+   shutdown, because both retire a lease that may still owe the ledger something.
+
+5. **`aclose()` drains rather than flushes once.** A flush moves at most `batch_max`; under
+   load CH-10 measured thousands pending when traffic stopped. Closing on one batch would
+   discard the rest, immediately before the `RELEASE` that the drain exists to precede.
+
+**Cost, stated:** settlement throughput is now a real limit. Every `LEDGER_COMMIT` takes
+`FOR UPDATE` on the same pool row, so instances sharing a mandate serialize against each
+other, and because a release drains first, a backlog larger than a lease's worth of spending
+stalls the top-up behind it — CH-10 at `concurrency=4, pace=5 ms` refused 7,053 of 21,006
+requests, all `LEASE_UNAVAILABLE`, failing closed correctly the whole time. Batching several
+reservations into one transaction is the fix and belongs with T-053, where the number can be
+measured rather than guessed. CH-10 runs at a paced load so that it measures restarts.
+
+**Consequences:** `budgets.committed` tracks real spend, `RELEASE` returns only the unspent
+remainder, and the `committed == Σ settled reservations` invariant is a claim about
+something for the first time. Seven integration tests in
+`tests/integration/test_settlement.py`, one new e2e assertion in the thin slice, and CH-10's
+two scenarios cover it. The e2e slice and `tests/chaos/pepstack.py` — the project's two
+reference assemblies — both wire it; there is no other composition root yet.

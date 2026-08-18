@@ -277,6 +277,41 @@ class TestBudgetOracle:
         await pool.prime(SPEND)
         assert pool.check(dict.fromkeys(BudgetDimension, Decimal(0))).ok
 
+    async def test_a_refusal_schedules_a_top_up_so_the_pool_can_recover(self) -> None:
+        """The closed loop CH-1 found, and the reason `check()` has a side effect.
+
+        Top-ups are otherwise scheduled only from `reserve()`, and `reserve()` runs only
+        after the pipeline has allowed — which it cannot do while `check()` refuses. So a
+        lease that reaches empty could never be refilled: the only thing that refills it is
+        the spend path it is blocking.
+
+        The low-water mark normally tops up long before empty, so the loop closes only when
+        a top-up has already failed. That is CH-1 exactly — Postgres goes away, the held
+        lease drains, and the PEP stays dead after the database comes back.
+        """
+        ledger = FakeLedger()
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)
+
+        # The outage. The lease drains to empty and the top-up it schedules on the way
+        # down fails, which is what leaves the pool with no route back.
+        ledger.fail = True
+        pool.reserve(SPEND, Decimal(100))
+        await pool.drain()
+        assert pool.remaining(SPEND) == Decimal(0)
+
+        ledger.fail = False
+        asked_before = len(ledger.acquired)
+
+        verdict = pool.check({SPEND: Decimal(10)})
+        assert not verdict.ok, "an empty lease must still refuse the request that found it"
+        await pool.drain()
+
+        assert len(ledger.acquired) > asked_before, (
+            "a refusal scheduled no top-up, so nothing will ever refill this lease"
+        )
+        assert pool.check({SPEND: Decimal(10)}).ok, "the pool never recovered"
+
     async def test_the_first_exhausted_dimension_is_named(self) -> None:
         pool = a_pool(FakeLedger())
         await pool.prime(SPEND)
