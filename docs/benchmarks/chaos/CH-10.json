@@ -2,13 +2,13 @@
   "scenario": "CH-10",
   "title": "Rolling restart under load",
   "expected": "zero dropped requests; invariant holds",
-  "run_id": "d9d34814-ff6a-47bd-8df5-91fb5dd9100c",
-  "started_at": "2026-08-18T14:13:06.731806+00:00",
-  "duration_s": 15.606,
+  "run_id": "8f326514-a911-4793-8033-e77f688d8cdb",
+  "started_at": "2026-08-18T15:51:39.810593+00:00",
+  "duration_s": 3.857,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 63,
-    "held": 63,
+    "samples": 16,
+    "held": 16,
     "violated": 0,
     "unavailable": 0,
     "violations": [],
@@ -20,85 +20,85 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.496,
+      "t_s": 0.509,
       "event": "draining pep-roll-0"
     },
     {
-      "t_s": 0.501,
+      "t_s": 0.509,
       "event": "stopping pep-roll-0 (RELEASE)"
     },
     {
-      "t_s": 1.585,
+      "t_s": 1.36,
       "event": "starting pep-roll-0 (ACQUIRE)"
     },
     {
-      "t_s": 1.692,
+      "t_s": 1.45,
       "event": "pep-roll-0 back in rotation"
     },
     {
-      "t_s": 1.692,
+      "t_s": 1.45,
       "event": "draining pep-roll-1"
     },
     {
-      "t_s": 1.692,
+      "t_s": 1.452,
       "event": "stopping pep-roll-1 (RELEASE)"
     },
     {
-      "t_s": 4.232,
+      "t_s": 2.233,
       "event": "starting pep-roll-1 (ACQUIRE)"
     },
     {
-      "t_s": 4.397,
+      "t_s": 2.316,
       "event": "pep-roll-1 back in rotation"
     },
     {
-      "t_s": 4.397,
+      "t_s": 2.316,
       "event": "draining pep-roll-2"
     },
     {
-      "t_s": 4.397,
+      "t_s": 2.316,
       "event": "stopping pep-roll-2 (RELEASE)"
     },
     {
-      "t_s": 11.187,
+      "t_s": 3.182,
       "event": "starting pep-roll-2 (ACQUIRE)"
     },
     {
-      "t_s": 11.344,
+      "t_s": 3.297,
       "event": "pep-roll-2 back in rotation"
     },
     {
-      "t_s": 15.594,
+      "t_s": 3.845,
       "event": "settlement queues drained"
     },
     {
-      "t_s": 15.603,
+      "t_s": 3.854,
       "event": "scenario ended"
     },
     {
-      "t_s": 15.603,
+      "t_s": 3.854,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "leased_with_three_instances": "15000.0000",
     "restarts": 3,
-    "requests_sent": 1405,
+    "requests_sent": 301,
     "requests_dropped": 0,
-    "sweeps_during_restarts": 45,
-    "settlement_backlog_when_load_stopped": 628,
+    "sweeps_during_restarts": 12,
+    "settlement_backlog_when_load_stopped": 7,
     "settlement_counters": {
-      "applied": 1048,
+      "applied": 153,
       "declined": 0,
       "dropped": 0,
       "failed_attempts": 0,
       "still_pending": 0,
       "shutdown_timeouts": 0
     },
-    "leased_after_restarts": "9760.0000",
-    "committed_after_restarts": "7025.0000",
-    "spent_locally": "7025.0000",
-    "pool_available_after_restarts": "183215.0000",
+    "leased_after_restarts": "14235.0000",
+    "committed_after_restarts": "1505.0000",
+    "spent_locally": "1505.0000",
+    "pool_available_after_restarts": "184260.0000",
     "lease_rows_by_state": {
       "active": 3,
       "released": 3
@@ -108,26 +108,27 @@
   "loads": [
     {
       "label": "continuous load across the restart",
-      "sent": 1405,
-      "ok": 1405,
+      "sent": 301,
+      "ok": 301,
       "dropped": 0,
       "by_status": {
-        "200": 1405
+        "200": 301
       },
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 8.443,
-        "p99": 16.083,
-        "max": 116.905,
-        "mean": 8.246
+        "p50": 6.826,
+        "p99": 34.05,
+        "max": 61.02,
+        "mean": 7.771
       }
     }
   ],
   "notes": [
     "An instance is the whole PEP object graph rebuilt, with a real RELEASE and a real ACQUIRE against Postgres, but not a new OS process. CH-3 is the real-process scenario. The risk a rolling restart carries is in the ledger, which is fully exercised here.",
-    "Two throughput observations from tuning this scenario, both unrelated to restarts and both the PEP correctly failing closed. (1) With the lease at 500 and four workers, the low-water mark leaves 25 payments of headroom and the load spent it before the top-up's ACQUIRE landed \u2014 14 LEASE_UNAVAILABLE in 10,434 requests; that is the case T-015 (adaptive lease sizing, deferred) exists for. (2) Settlement costs one LEDGER_COMMIT per reservation, each taking FOR UPDATE on the same pool row, so three instances serialize; since `LeasePool._release` drains the queue before retiring a lease, a backlog larger than a lease's spending stalls the top-up behind it \u2014 7,053 refusals in 21,006 requests at concurrency=4, pace=5 ms. Batching settlements is the fix and belongs with T-053.",
-    "1405 requests spent 7025.0000, and the ledger agrees: committed=7025.0000 across 3 restarts. Before T-052 this read committed=0 \u2014 no production caller reached LEDGER_COMMIT, so every RELEASE returned spent budget to the pool. Closed by `agentiam_pep.settlement`."
+    "Two throughput observations from tuning this scenario, both unrelated to restarts and both the PEP correctly failing closed. (1) With the lease at 500 and four workers, the low-water mark leaves 25 payments of headroom and the load spent it before the top-up's ACQUIRE landed \u2014 14 LEASE_UNAVAILABLE in 10,434 requests; that is the case T-015 (adaptive lease sizing, deferred) exists for. (2) Settlement cost one LEDGER_COMMIT per reservation, each taking FOR UPDATE on the same pool row, so three instances serialized; since `LeasePool._release` drains the queue before retiring a lease, a backlog larger than a lease's spending stalled the top-up behind it \u2014 7,053 refusals in 21,006 requests at concurrency=4, pace=5 ms.",
+    "(2) is fixed. T-053 batches settlements sharing a lease into one transaction (`ledger_commit_batch`), so N lock acquisitions became one. Re-measured at the same concurrency=4, pace=5 ms that produced 7,053 refusals in 21,006 requests (33.6%): **22 in 1,083 (2.0%)**, a 17x reduction in refusal rate. At this scenario's committed paced load the settlement backlog when traffic stopped fell from 442 to 10. What remains is (1), which is lease sizing and belongs to T-015.",
+    "301 requests spent 1505.0000, and the ledger agrees: committed=1505.0000 across 3 restarts. Before T-052 this read committed=0 \u2014 no production caller reached LEDGER_COMMIT, so every RELEASE returned spent budget to the pool. Closed by `agentiam_pep.settlement`."
   ],
   "verdict": "held"
 }

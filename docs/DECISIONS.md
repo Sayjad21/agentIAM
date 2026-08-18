@@ -2601,3 +2601,79 @@ and enforcement p50 of about 2 ms at 100 RPS. Those are reported as measured and
 is reported as not yet measured, which is what `PLAN.md` T-053 asks for — *"Report the
 numbers you actually get. A truthful 6 ms with a breakdown beats a claimed 1 ms that a
 judge can poke a hole in."*
+
+---
+
+## ADR-053 — Settlements batch per lease, and the single-item path becomes a batch of one
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `agentiam_controlplane.db.ledger`, `agentiam_controlplane.db.settlement_sink`,
+`agentiam_pep.settlement`, spec 04 §4.4, T-014, T-052, T-053; closes the item ADR-049 parked
+
+**Context:** ADR-049 wired settlement to `LEDGER_COMMIT` and stated its cost plainly: every
+commit takes `FOR UPDATE` on the lease row and then on the **shared** budget row, so one
+settlement per transaction serialises every PEP leasing from that mandate against every
+other. T-052's CH-10 measured the consequence at `concurrency=4, pace=5 ms`: **7,053 of
+21,006 requests refused (33.6%)**, all `LEASE_UNAVAILABLE`. The mechanism is indirect —
+`LeasePool._release` drains the settlement queue before retiring a lease (ADR-049 point 4),
+so a backlog larger than a lease's worth of spending stalls the top-up waiting behind it,
+and the PEP fails closed while it waits. ADR-049 deferred the fix to T-053, where the
+number could be measured rather than guessed.
+
+**Decision:**
+
+1. **`ledger_commit_batch` settles several reservations against one lease in one
+   transaction.** One pair of lock acquisitions for the batch instead of one per item. It
+   does not shorten the lock in absolute terms; it removes the per-transaction overhead and
+   the N round trips between them.
+
+2. **Every guard keeps its per-item meaning.** G4 dedups each `reservation_id` individually,
+   G2 clamps each amount, G3 refuses the whole batch if the lease has left `active` and
+   records one reconciliation anomaly per item, so a batch loses none of the divergence
+   detail a sequence of single commits would have written.
+
+3. **The clamp is cumulative.** `outstanding` shrinks as items apply within the batch, so
+   each is clamped against what its predecessors left rather than against the value read at
+   the top. Clamping every item against the opening figure would let a batch drive `leased`
+   negative — precisely what G2 exists to prevent — and no single-item test could catch it.
+   `test_a_batch_clamps_cumulatively_and_cannot_overdraw_the_lease` covers it.
+
+4. **`ledger_commit` is now a batch of one.** Not a convenience wrapper for its own sake:
+   it makes `ledger_commit_batch` the only implementation, so the eight existing race,
+   idempotency and TM-21 tests written against the single-item function are also tests of
+   the batched one. They passed unchanged, which is the evidence that the semantics did not
+   move.
+
+5. **The queue batches the longest *consecutive* run sharing a lease**, never a scan-and-
+   group. Grouping would reorder settlements, and order within a lease is what makes the
+   cumulative clamp meaningful. In practice a PEP holds one lease per dimension, so the run
+   is usually the whole queue — and when a top-up has just swapped the lease, the boundary
+   falls exactly there.
+
+6. **`SettlementSink.commit` now takes a sequence and returns one verdict per item.** The
+   control plane still imports nothing from the PEP: the batch element type is declared as
+   a local structural `Protocol` in `settlement_sink.py`, matching how `RecordSink` and
+   `EscalationSink` already keep the two packages apart.
+
+**A defect this introduced and the existing suite caught immediately:** the first version
+deduped only against `reservation_id`s already in the database, not against repeats *within*
+the batch. A replayed id then reached the primary key, the insert raised, and the whole
+transaction rolled back — so a batch containing one accidental duplicate silently applied
+**nothing**. `test_a_replayed_settlement_applies_once` went red on the first run, because
+enqueueing the same outcome three times now lands them in one batch rather than three
+transactions. Fixed by adding each id to the seen set before its insert.
+
+**Measured, at the same load that produced the problem:** refusals fell from 7,053 of
+21,006 (33.6%) to **22 of 1,083 (2.0%)**, a 17x reduction in rate. At CH-10's committed
+paced load the settlement backlog when traffic stopped fell from 442 to 10. The residual
+refusals are the *other* cause CH-10 documented — a 500-unit lease leaves 25 payments of
+headroom below the low-water mark, and four workers can spend that before a top-up's
+`ACQUIRE` lands. That is fixed-lease-sizing lag and belongs to T-015 (deferred), not here.
+
+**Cost, stated:** a batch is all-or-nothing against transport failure — if the ledger
+becomes unreachable mid-batch the whole batch is retried, not the unapplied remainder. That
+is safe because G4 makes a replay apply only what had not already applied, and it is
+cheaper than tracking per-item state across retries. A very large `batch_max` would also
+hold the shared budget row's lock for longer in one go; the default of 64 is unchanged from
+when settlements were applied one at a time, and nothing has measured a better value.

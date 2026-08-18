@@ -2,13 +2,13 @@
   "scenario": "CH-04",
   "title": "Partition PEP <-> ledger",
   "expected": "bounded spend, then fail closed",
-  "run_id": "3870e7dd-2ef3-44ab-a0af-669c29d41b5a",
-  "started_at": "2026-08-18T14:12:14.704796+00:00",
-  "duration_s": 0.401,
+  "run_id": "6e63cb6b-3f84-4d3f-b094-79274b036eca",
+  "started_at": "2026-08-18T15:48:31.804163+00:00",
+  "duration_s": 0.22,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 4,
-    "held": 4,
+    "samples": 3,
+    "held": 3,
     "violated": 0,
     "unavailable": 0,
     "violations": [],
@@ -20,19 +20,19 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.087,
+      "t_s": 0.078,
       "event": "cutting PEP -> ledger (blackhole)"
     },
     {
-      "t_s": 0.143,
+      "t_s": 0.123,
       "event": "healing the partition"
     },
     {
-      "t_s": 0.397,
+      "t_s": 0.216,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.397,
+      "t_s": 0.216,
       "event": "final sweep"
     }
   ],
@@ -42,8 +42,8 @@
     "local_remaining_at_cut": "120.0000",
     "served_during_partition": 6,
     "spent_during_partition": "120.0000",
-    "hot_path_p99_ms_partitioned": 8.731,
-    "hot_path_p99_ms_healthy": 8.88,
+    "hot_path_p99_ms_partitioned": 6.861,
+    "hot_path_p99_ms_healthy": 7.74,
     "committed_during_partition": "0.0000",
     "invariant_held_during_partition": true,
     "blackholed_connections": 1,
@@ -61,10 +61,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 7.977,
-        "p99": 8.88,
-        "max": 8.88,
-        "mean": 7.503
+        "p50": 6.333,
+        "p99": 7.74,
+        "max": 7.74,
+        "mean": 5.978
       }
     },
     {
@@ -81,10 +81,10 @@
       },
       "errors": [],
       "latency_ms": {
-        "p50": 3.858,
-        "p99": 8.731,
-        "max": 8.731,
-        "mean": 3.963
+        "p50": 2.9,
+        "p99": 6.861,
+        "max": 6.861,
+        "mean": 3.074
       }
     },
     {
@@ -98,10 +98,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 3.951,
-        "p99": 6.101,
-        "max": 6.101,
-        "mean": 4.511
+        "p50": 3.786,
+        "p99": 4.288,
+        "max": 4.288,
+        "mean": 3.953
       }
     }
   ],

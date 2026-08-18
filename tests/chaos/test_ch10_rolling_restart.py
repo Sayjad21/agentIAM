@@ -322,12 +322,21 @@ class TestRollingRestart:
                 "500 and four workers, the low-water mark leaves 25 payments of headroom "
                 "and the load spent it before the top-up's ACQUIRE landed — 14 "
                 "LEASE_UNAVAILABLE in 10,434 requests; that is the case T-015 (adaptive "
-                "lease sizing, deferred) exists for. (2) Settlement costs one LEDGER_COMMIT "
+                "lease sizing, deferred) exists for. (2) Settlement cost one LEDGER_COMMIT "
                 "per reservation, each taking FOR UPDATE on the same pool row, so three "
-                "instances serialize; since `LeasePool._release` drains the queue before "
-                "retiring a lease, a backlog larger than a lease's spending stalls the "
+                "instances serialized; since `LeasePool._release` drains the queue before "
+                "retiring a lease, a backlog larger than a lease's spending stalled the "
                 "top-up behind it — 7,053 refusals in 21,006 requests at concurrency=4, "
-                "pace=5 ms. Batching settlements is the fix and belongs with T-053."
+                "pace=5 ms."
+            )
+            run.note(
+                "(2) is fixed. T-053 batches settlements sharing a lease into one "
+                "transaction (`ledger_commit_batch`), so N lock acquisitions became one. "
+                "Re-measured at the same concurrency=4, pace=5 ms that produced 7,053 "
+                "refusals in 21,006 requests (33.6%): **22 in 1,083 (2.0%)**, a 17x "
+                "reduction in refusal rate. At this scenario's committed paced load the "
+                "settlement backlog when traffic stopped fell from 442 to 10. What remains "
+                "is (1), which is lease sizing and belongs to T-015."
             )
             run.note(
                 f"{report.ok} requests spent {spent_locally}, and the ledger agrees: "

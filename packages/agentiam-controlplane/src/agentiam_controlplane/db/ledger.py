@@ -27,7 +27,7 @@ identical, only the order of two independent reads changed. See ADR-016.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -251,6 +251,9 @@ async def ledger_commit(
     `amount` is clamped to `lease.outstanding` (G2) rather than trusted — a compromised or
     buggy PEP cannot drive `leased` negative by over-reporting.
 
+    A batch of one, so every race and idempotency test written against this function is
+    also a test of `ledger_commit_batch`, which is the only implementation.
+
     Returns:
         `True` if this call mutated the ledger, `False` if it was a no-op — either the
         `reservation_id` was already settled (idempotent replay) or the clamped amount was
@@ -262,51 +265,140 @@ async def ledger_commit(
             applied, and recorded as a `ReconciliationAnomalyRow` so the divergence is
             surfaced instead of silently corrupting `leased` (TM-21).
     """
+    applied = await ledger_commit_batch(
+        session, lease_id=lease_id, items=((reservation_id, amount, now),)
+    )
+    return applied[0]
+
+
+async def ledger_commit_batch(
+    session: AsyncSession,
+    *,
+    lease_id: uuid.UUID,
+    items: Sequence[tuple[uuid.UUID, Decimal, datetime]],
+) -> list[bool]:
+    """Settle several reservations against **one** lease in a single transaction — T-053.
+
+    Semantically identical to calling `ledger_commit` once per item, and that is the bar:
+    every guard keeps its meaning per item. G4 still dedups each `reservation_id`
+    individually, G2 still clamps each amount, and G3 still refuses the whole batch if the
+    lease has left `active`.
+
+    **Why it exists.** `LEDGER_COMMIT` takes `FOR UPDATE` on the lease row and then on the
+    budget row, and the budget row is *shared by every PEP leasing from that mandate*. One
+    settlement per transaction therefore serialises every instance against every other, and
+    T-052's CH-10 measured what that costs: with three instances under load the queue could
+    not keep up, and because `LeasePool._release` drains before retiring a lease, a backlog
+    larger than a lease's spending stalled the top-up behind it — 7,053 of 21,006 requests
+    refused, all `LEASE_UNAVAILABLE`, the PEP failing closed correctly the whole time.
+    ADR-049 deferred the fix to here.
+
+    Batching turns N lock acquisitions into one. It does not make the lock shorter in
+    absolute terms, but it removes the per-item transaction overhead and, more importantly,
+    the N round trips between them.
+
+    **The clamp is cumulative, and it has to be.** `outstanding` shrinks as items apply
+    within the batch, so each item is clamped against what is left *after* its predecessors
+    rather than against the value read at the top. Clamping every item against the opening
+    `outstanding` would let a batch drive `leased` negative — exactly what G2 exists to
+    prevent — and no single-item test would ever catch it.
+
+    Args:
+        session: A fresh session; the whole batch runs in one transaction.
+        lease_id: The lease every item settles against. Callers group by lease.
+        items: `(reservation_id, amount, now)` per settlement.
+
+    Returns:
+        One `True`/`False` per item, in order, meaning the same as `ledger_commit`'s.
+
+    Raises:
+        LeaseNotActiveError: The lease is not `active`. Every item is recorded as a
+            reconciliation anomaly first, so a batch does not lose the divergence detail a
+            sequence of single commits would have written (TM-21).
+    """
+    if not items:
+        return []
+
+    results = [False] * len(items)
     reject_state: str | None = None
+
     async with session.begin():
-        lease_result = await session.execute(
-            select(LeaseRow).where(LeaseRow.id == lease_id).with_for_update()
-        )
-        lease = lease_result.scalar_one()
+        lease = (
+            await session.execute(select(LeaseRow).where(LeaseRow.id == lease_id).with_for_update())
+        ).scalar_one()
 
         # Checked after the lock, not before — see this module's docstring and ADR-016.
-        dup = await session.execute(
-            select(ReservationRow.id).where(ReservationRow.id == reservation_id)
-        )
-        if dup.scalar_one_or_none() is not None:
-            return False
-
-        if lease.state != LeaseState.ACTIVE.value:
-            session.add(
-                ReconciliationAnomalyRow(
-                    lease_id=lease_id,
-                    reservation_id=reservation_id,
-                    reported_amount=amount,
-                    lease_state=lease.state,
-                    created_at=now,
+        # One statement for the whole batch rather than one per item: the dedup set is a
+        # read, and N round trips to answer a question the database can answer once is the
+        # cost this function exists to remove.
+        already = set(
+            (
+                await session.execute(
+                    select(ReservationRow.id).where(
+                        ReservationRow.id.in_([reservation for reservation, _, _ in items])
+                    )
                 )
             )
+            .scalars()
+            .all()
+        )
+
+        if lease.state != LeaseState.ACTIVE.value:
+            for reservation_id, amount, now in items:
+                session.add(
+                    ReconciliationAnomalyRow(
+                        lease_id=lease_id,
+                        reservation_id=reservation_id,
+                        reported_amount=amount,
+                        lease_state=lease.state,
+                        created_at=now,
+                    )
+                )
             reject_state = lease.state
         else:
-            applied = min(amount, lease.outstanding)
-            if applied <= 0:
-                return False
-            budget_result = await session.execute(
-                select(BudgetRow).where(BudgetRow.id == lease.budget_id).with_for_update()
-            )
-            budget = budget_result.scalar_one()
-            budget.committed += applied
-            budget.leased -= applied
-            lease.settled += applied
-            session.add(
-                ReservationRow(id=reservation_id, lease_id=lease_id, amount=applied, created_at=now)
-            )
+            budget: BudgetRow | None = None
+            for index, (reservation_id, amount, now) in enumerate(items):
+                if reservation_id in already:
+                    continue
+                # Added *before* the insert, so a `reservation_id` repeated **within** this
+                # batch is a no-op exactly as a replay across batches is. Without it the
+                # duplicate reaches the primary key, the insert raises, and the whole
+                # transaction rolls back — so a batch containing one accidental repeat
+                # silently applies *nothing*. Caught by
+                # `test_a_replayed_settlement_applies_once`, which enqueues the same
+                # outcome three times and used to see them land in three transactions.
+                already.add(reservation_id)
+                # `lease.outstanding` is derived from `granted - settled`, and `settled` is
+                # mutated below, so this re-reads the *running* remainder each time.
+                applied = min(amount, lease.outstanding)
+                if applied <= 0:
+                    continue
+                if budget is None:
+                    budget = (
+                        await session.execute(
+                            select(BudgetRow)
+                            .where(BudgetRow.id == lease.budget_id)
+                            .with_for_update()
+                        )
+                    ).scalar_one()
+                budget.committed += applied
+                budget.leased -= applied
+                lease.settled += applied
+                session.add(
+                    ReservationRow(
+                        id=reservation_id,
+                        lease_id=lease_id,
+                        amount=applied,
+                        created_at=now,
+                    )
+                )
+                results[index] = True
 
     if reject_state is not None:
         raise LeaseNotActiveError(
             f"lease {lease_id} is {reject_state!r}, not active — commit rejected (spec 04 §11)"
         )
-    return True
+    return results
 
 
 async def _retire(session: AsyncSession, *, lease_id: uuid.UUID, next_state: LeaseState) -> bool:

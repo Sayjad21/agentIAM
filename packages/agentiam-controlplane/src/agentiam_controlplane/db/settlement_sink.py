@@ -26,13 +26,14 @@ indistinguishable from a poison batch and the records are discarded.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from agentiam_controlplane.db.ledger import ledger_commit
+from agentiam_controlplane.db.ledger import ledger_commit_batch
 from agentiam_controlplane.errors import LeaseNotActiveError
 
 if TYPE_CHECKING:
     import uuid
+    from collections.abc import Sequence
     from datetime import datetime
     from decimal import Decimal
 
@@ -40,50 +41,77 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["LedgerSettlementSink"]
+__all__ = ["LedgerSettlementSink", "PendingSettlement"]
+
+
+class PendingSettlement(Protocol):
+    """What this sink reads off each queued settlement.
+
+    Declared structurally rather than imported: `agentiam_pep.settlement` owns the concrete
+    dataclass, and the whole point of these sink protocols is that neither package imports
+    the other. Anything carrying these four attributes satisfies it, which is exactly what
+    the PEP's `PendingSettlement` does.
+    """
+
+    @property
+    def lease_id(self) -> uuid.UUID:
+        """The lease this settlement applies to."""
+        ...
+
+    @property
+    def reservation_id(self) -> uuid.UUID:
+        """The idempotency key `LEDGER_COMMIT` dedups on (G4, spec 04 §10)."""
+        ...
+
+    @property
+    def amount(self) -> Decimal:
+        """What the PEP reported spending. Clamped by the ledger, never trusted (G2)."""
+        ...
+
+    @property
+    def now(self) -> datetime:
+        """The clock reading the settlement was made at."""
+        ...
 
 
 class LedgerSettlementSink:
-    """Applies one settlement per call, on its own session."""
+    """Applies a batch of settlements per call, on its own session."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
-        """Hold the factory; a session is taken per settlement and released after."""
+        """Hold the factory; a session is taken per batch and released after."""
         self._session_factory = session_factory
         self.rejected_leases = 0
 
-    async def commit(
-        self,
-        *,
-        lease_id: uuid.UUID,
-        reservation_id: uuid.UUID,
-        amount: Decimal,
-        now: datetime,
-    ) -> bool:
-        """Apply one settlement.
+    async def commit(self, batch: Sequence[PendingSettlement]) -> Sequence[bool]:
+        """Apply a batch of settlements, all against one lease, in a single transaction.
+
+        One `FOR UPDATE` pair for the whole batch instead of one per item — see
+        `ledger_commit_batch` for why that matters and what CH-10 measured without it.
 
         Returns:
-            `True` if the ledger applied it, `False` if the ledger declined it for good —
-            a replay, a zero clamp, or a lease that is no longer active.
+            One verdict per item, in order: `True` if the ledger applied it, `False` if it
+            declined for good — a replay, a zero clamp, or a lease no longer active.
 
         Raises:
-            Exception: The database could not be reached. The queue retries.
+            Exception: The database could not be reached. The queue keeps the batch.
         """
+        if not batch:
+            return []
+        lease_id = batch[0].lease_id
         async with self._session_factory() as session:
             try:
-                return await ledger_commit(
+                return await ledger_commit_batch(
                     session,
                     lease_id=lease_id,
-                    reservation_id=reservation_id,
-                    amount=amount,
-                    now=now,
+                    items=[(item.reservation_id, item.amount, item.now) for item in batch],
                 )
             except LeaseNotActiveError:
-                # Already recorded as a reconciliation anomaly by `ledger_commit` itself.
-                # Retrying would add a second anomaly for one event and never apply.
+                # Already recorded as reconciliation anomalies by `ledger_commit_batch`,
+                # one per item. Retrying would add a second set and never apply.
                 self.rejected_leases += 1
                 logger.warning(
-                    "settlement %s rejected: lease %s is no longer active (spec 04 §11)",
-                    reservation_id,
+                    "%d settlement(s) rejected: lease %s is no longer active (spec 04 §11)",
+                    len(batch),
                     lease_id,
                 )
-                return False
+                return [False] * len(batch)

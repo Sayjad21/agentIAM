@@ -15,6 +15,7 @@ rather than a proxy for it.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -30,7 +31,7 @@ from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
 from agentiam_core.models import BudgetDimension
 from agentiam_pep.lease import CommitOutcome
 from agentiam_pep.pool import LeaseGrant, LeasePool, PoolSettings
-from agentiam_pep.settlement import SettlementQueue, SettlementSettings
+from agentiam_pep.settlement import PendingSettlement, SettlementQueue, SettlementSettings
 from tests.integration.conftest import make_budget
 
 if TYPE_CHECKING:
@@ -305,6 +306,106 @@ class TestSettlementReachesTheLedger:
         )
         assert available == POOL_TOTAL - committed - Decimal("100.0000")
 
+    async def test_a_batch_takes_one_transaction_not_one_per_settlement(
+        self, migrated_engine: AsyncEngine
+    ) -> None:
+        """T-053: the whole point of batching, asserted at the seam that proves it.
+
+        `LEDGER_COMMIT` takes `FOR UPDATE` on the lease and then on the *shared* budget row,
+        so one settlement per transaction serialises every PEP on that mandate against every
+        other. CH-10 measured the cost. Counting sink calls is the honest proxy: one call is
+        one session, one transaction, one pair of locks.
+        """
+        mandate_id = uuid.uuid4()
+        await make_budget(migrated_engine, mandate_id=mandate_id, total=POOL_TOTAL)
+        lease_id = await _take_lease(migrated_engine, mandate_id)
+
+        real = LedgerSettlementSink(make_session_factory(migrated_engine))
+        calls = 0
+        sizes: list[int] = []
+
+        class CountingSink:
+            async def commit(self, batch: Sequence[PendingSettlement]) -> Sequence[bool]:
+                nonlocal calls
+                calls += 1
+                sizes.append(len(batch))
+                return await real.commit(batch)
+
+        queue = SettlementQueue(
+            CountingSink(), SettlementSettings(flush_interval_s=0.01), now=lambda: NOW
+        )
+        for _ in range(20):
+            queue.enqueue(_outcome(lease_id, Decimal("5.0000")))
+        await queue.drain()
+
+        assert calls == 1, f"20 settlements took {calls} transactions, in sizes {sizes}"
+        assert sizes == [20]
+        assert queue.applied == 20
+        assert (await _pool(migrated_engine, mandate_id))[0] == Decimal("100.0000")
+
+    async def test_a_batch_clamps_cumulatively_and_cannot_overdraw_the_lease(
+        self, migrated_engine: AsyncEngine
+    ) -> None:
+        """G2 across a batch — the guard a single-item test can never exercise.
+
+        Each item is clamped against what is left *after* its predecessors, not against the
+        `outstanding` read at the top of the transaction. Clamping every item against the
+        opening value would let a batch drive `leased` negative, which is exactly what G2
+        exists to prevent, and every existing single-commit test would still pass.
+        """
+        mandate_id = uuid.uuid4()
+        await make_budget(migrated_engine, mandate_id=mandate_id, total=POOL_TOTAL)
+        lease_id = await _take_lease(migrated_engine, mandate_id)  # 400 outstanding
+
+        queue = await _queue(migrated_engine)
+        # 5 x 100 against a 400 lease: the first four fit, the fifth must clamp to zero.
+        for _ in range(5):
+            queue.enqueue(_outcome(lease_id, Decimal("100.0000")))
+        await queue.drain()
+
+        committed, leased, _ = await _pool(migrated_engine, mandate_id)
+        assert committed == LEASE_SIZE, (
+            f"committed is {committed}; a batch must not settle more than the lease granted"
+        )
+        assert leased == Decimal(0), f"leased went to {leased} — G2 did not hold across the batch"
+        assert queue.applied == 4
+        assert queue.declined == 1, "the over-the-lease item must be declined, not retried"
+
+    async def test_a_top_up_splits_the_batch_at_the_lease_boundary(
+        self, migrated_engine: AsyncEngine
+    ) -> None:
+        """Batches never span two leases, because `ledger_commit_batch` locks exactly one.
+
+        The queue takes the longest *consecutive* run sharing a lease. A top-up swaps the
+        held lease mid-stream, and the boundary has to fall exactly there.
+        """
+        mandate_id = uuid.uuid4()
+        await make_budget(migrated_engine, mandate_id=mandate_id, total=POOL_TOTAL)
+        first = await _take_lease(migrated_engine, mandate_id)
+        second = await _take_lease(migrated_engine, mandate_id)
+
+        seen: list[uuid.UUID] = []
+        real = LedgerSettlementSink(make_session_factory(migrated_engine))
+
+        class RecordingSink:
+            async def commit(self, batch: Sequence[PendingSettlement]) -> Sequence[bool]:
+                leases = {item.lease_id for item in batch}
+                assert len(leases) == 1, f"a batch spanned {len(leases)} leases"
+                seen.append(batch[0].lease_id)
+                return await real.commit(batch)
+
+        queue = SettlementQueue(
+            RecordingSink(), SettlementSettings(flush_interval_s=0.01), now=lambda: NOW
+        )
+        for _ in range(3):
+            queue.enqueue(_outcome(first, Decimal("10.0000")))
+        for _ in range(2):
+            queue.enqueue(_outcome(second, Decimal("10.0000")))
+        await queue.drain()
+
+        assert seen == [first, second], f"expected one batch per lease, in order; got {seen}"
+        assert queue.applied == 5
+
     async def test_an_unreachable_ledger_keeps_the_settlement_for_retry(
         self, migrated_engine: AsyncEngine
     ) -> None:
@@ -321,21 +422,12 @@ class TestSettlementReachesTheLedger:
         attempts = 0
 
         class FlakySink:
-            async def commit(
-                self,
-                *,
-                lease_id: uuid.UUID,
-                reservation_id: uuid.UUID,
-                amount: Decimal,
-                now: datetime,
-            ) -> bool:
+            async def commit(self, batch: Sequence[PendingSettlement]) -> Sequence[bool]:
                 nonlocal attempts
                 attempts += 1
                 if attempts == 1:
                     raise ConnectionError("the ledger is unreachable")
-                return await real.commit(
-                    lease_id=lease_id, reservation_id=reservation_id, amount=amount, now=now
-                )
+                return await real.commit(batch)
 
         queue = SettlementQueue(
             FlakySink(), SettlementSettings(flush_interval_s=0.01), now=lambda: NOW

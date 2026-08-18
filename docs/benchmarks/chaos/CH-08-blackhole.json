@@ -2,9 +2,9 @@
   "scenario": "CH-08-blackhole",
   "title": "Ollama black-holed (accepts, never answers)",
   "expected": "requests still allowed; the latency cost is measured, not assumed",
-  "run_id": "470c1fd1-7ae7-4dbe-92c4-1f6ef0b64b44",
-  "started_at": "2026-08-18T14:12:51.082869+00:00",
-  "duration_s": 6.107,
+  "run_id": "d96bcf95-f2a0-4215-9af2-9278562c107a",
+  "started_at": "2026-08-18T15:49:08.038610+00:00",
+  "duration_s": 6.174,
   "invariant": {
     "interval_s": 0.25,
     "samples": 1,
@@ -20,19 +20,19 @@
       "event": "scenario started"
     },
     {
-      "t_s": 6.078,
+      "t_s": 6.091,
       "event": "scenario ended"
     },
     {
-      "t_s": 6.078,
+      "t_s": 6.092,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "embedding_timeout_s": 2.0,
-    "baseline_p99_ms": 20.165,
-    "blackholed_p99_ms": 6033.782,
-    "three_concurrent_requests_wall_s": 6.04,
+    "baseline_p99_ms": 13.436,
+    "blackholed_p99_ms": 6062.045,
+    "three_concurrent_requests_wall_s": 6.06,
     "blackholed_connections": 2,
     "final_sweep_readable": true
   },
@@ -48,10 +48,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 18.156,
-        "p99": 20.165,
-        "max": 20.165,
-        "mean": 15.59
+        "p50": 12.985,
+        "p99": 13.436,
+        "max": 13.436,
+        "mean": 11.218
       }
     },
     {
@@ -65,15 +65,15 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 4020.678,
-        "p99": 6033.782,
-        "max": 6033.782,
-        "mean": 4022.974
+        "p50": 4042.389,
+        "p99": 6062.045,
+        "max": 6062.045,
+        "mean": 4042.782
       }
     }
   ],
   "notes": [
-    "A black-holed Ollama costs every uncached drift scoring call its full 2.0 s timeout, on the event loop, because `EmbeddingClient` holds a synchronous httpx.Client (ADR-037 already noted the shape). Three concurrent requests took 6.0 s wall against a baseline p99 of 20.165 ms. Outcomes stay correct \u2014 spec 09 \u00a75 fails open \u2014 but 'no hot-path impact' is only true for a *refused* Ollama, not a hung one. See STATUS.md gap 22."
+    "A black-holed Ollama costs every uncached drift scoring call its full 2.0 s timeout, on the event loop, because `EmbeddingClient` holds a synchronous httpx.Client (ADR-037 already noted the shape). Three concurrent requests took 6.1 s wall against a baseline p99 of 13.436 ms. Outcomes stay correct \u2014 spec 09 \u00a75 fails open \u2014 but 'no hot-path impact' is only true for a *refused* Ollama, not a hung one. See STATUS.md gap 22."
   ],
   "verdict": "held"
 }

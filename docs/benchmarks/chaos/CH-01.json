@@ -2,13 +2,13 @@
   "scenario": "CH-01",
   "title": "Kill Postgres for 30 s",
   "expected": "PEPs spend leases, then fail closed; recovery is clean; invariant holds",
-  "run_id": "4e0241eb-268e-4d3d-bb08-7e10d9f599bc",
-  "started_at": "2026-08-18T14:11:00.581520+00:00",
-  "duration_s": 32.18,
+  "run_id": "757cecd5-ff81-4e1b-999c-cc254b8587cd",
+  "started_at": "2026-08-18T15:47:16.309315+00:00",
+  "duration_s": 31.922,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 15,
-    "held": 4,
+    "samples": 14,
+    "held": 3,
     "violated": 0,
     "unavailable": 11,
     "violations": [],
@@ -24,27 +24,27 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.071,
+      "t_s": 0.068,
       "event": "stopping postgres"
     },
     {
-      "t_s": 0.767,
+      "t_s": 0.562,
       "event": "postgres stopped"
     },
     {
-      "t_s": 31.211,
+      "t_s": 30.955,
       "event": "starting postgres"
     },
     {
-      "t_s": 31.999,
-      "event": "postgres accepting connections after 0.5 s"
+      "t_s": 31.791,
+      "event": "postgres accepting connections after 0.6 s"
     },
     {
-      "t_s": 32.177,
+      "t_s": 31.918,
       "event": "scenario ended"
     },
     {
-      "t_s": 32.177,
+      "t_s": 31.918,
       "event": "final sweep"
     }
   ],
@@ -52,11 +52,11 @@
     "leased_before_outage": "300.0000",
     "local_remaining_at_cut": "200.0000",
     "committed_before_outage": "0.0000",
-    "outage_s": 30.44,
+    "outage_s": 30.39,
     "spent_during_outage": "200.0000",
     "served_during_outage": 8,
     "refused_during_outage": 6,
-    "recovery_s": 0.55,
+    "recovery_s": 0.58,
     "leased_after_recovery": "300.0000",
     "acquire_failures": 1,
     "final_sweep_readable": true
@@ -73,10 +73,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 6.064,
-        "p99": 10.313,
-        "max": 10.313,
-        "mean": 6.458
+        "p50": 7.294,
+        "p99": 14.372,
+        "max": 14.372,
+        "mean": 8.228
       }
     },
     {
@@ -93,10 +93,10 @@
       },
       "errors": [],
       "latency_ms": {
-        "p50": 4.54,
-        "p99": 9.006,
-        "max": 9.006,
-        "mean": 4.419
+        "p50": 4.536,
+        "p99": 8.859,
+        "max": 8.859,
+        "mean": 4.886
       }
     },
     {
@@ -110,10 +110,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 2.891,
-        "p99": 3.292,
-        "max": 3.292,
-        "mean": 2.928
+        "p50": 2.899,
+        "p99": 3.313,
+        "max": 3.313,
+        "mean": 2.965
       }
     }
   ],

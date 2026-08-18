@@ -2,9 +2,9 @@
   "scenario": "CH-01-audit",
   "title": "Kill Postgres for 30 s \u2014 the audit path",
   "expected": "every record buffered during the outage reaches the chain afterwards",
-  "run_id": "ea55bc77-f53b-49f3-8c34-578c3e2fd74d",
-  "started_at": "2026-08-18T14:11:33.459982+00:00",
-  "duration_s": 31.56,
+  "run_id": "52c145b5-b9cf-4a89-abf8-322f864cf72f",
+  "started_at": "2026-08-18T15:47:48.908915+00:00",
+  "duration_s": 31.607,
   "invariant": {
     "interval_s": 0.25,
     "samples": 13,
@@ -24,19 +24,19 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.058,
+      "t_s": 0.065,
       "event": "stopping postgres"
     },
     {
-      "t_s": 30.638,
+      "t_s": 30.71,
       "event": "starting postgres"
     },
     {
-      "t_s": 31.556,
+      "t_s": 31.603,
       "event": "scenario ended"
     },
     {
-      "t_s": 31.556,
+      "t_s": 31.603,
       "event": "final sweep"
     }
   ],

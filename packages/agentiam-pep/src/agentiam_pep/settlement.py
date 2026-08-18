@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from datetime import datetime
     from decimal import Decimal
     from types import TracebackType
@@ -74,27 +74,30 @@ class SettlementSink(Protocol):
     already use.
     """
 
-    async def commit(
-        self,
-        *,
-        lease_id: uuid.UUID,
-        reservation_id: uuid.UUID,
-        amount: Decimal,
-        now: datetime,
-    ) -> bool:
-        """Apply one settlement to the ledger.
+    async def commit(self, batch: Sequence[PendingSettlement]) -> Sequence[bool]:
+        """Apply a batch of settlements, **all against the same lease**, to the ledger.
 
-        The return value carries the retry decision, and that is the whole contract:
+        A batch rather than one at a time because `LEDGER_COMMIT` takes `FOR UPDATE` on the
+        lease row and then on the *shared* budget row, so every settlement serialises every
+        PEP leasing from that mandate against every other. T-052's CH-10 measured the
+        consequence; ADR-049 deferred the fix and T-053 is it.
 
-        * `True` — the ledger applied it.
-        * `False` — the ledger **definitively declined** it and a retry would be pointless.
-          A replayed `reservation_id`, an amount that clamped to zero, or a lease that is no
-          longer active all land here; the last of those is recorded as a reconciliation
-          anomaly by the ledger before it returns.
+        The queue guarantees one lease per batch, so the sink can take one pair of locks.
+
+        Returns:
+            One verdict per item, in order. Each carries the retry decision, and that is
+            the whole contract:
+
+            * `True` — the ledger applied it.
+            * `False` — the ledger **definitively declined** it and a retry would be
+              pointless. A replayed `reservation_id`, an amount that clamped to zero, or a
+              lease that is no longer active all land here; the last is recorded as a
+              reconciliation anomaly by the ledger before it returns.
 
         Raises:
-            Exception: The ledger could not be reached. The queue retries indefinitely,
-                which is safe because `LEDGER_COMMIT` dedups on `reservation_id`.
+            Exception: The ledger could not be reached. The queue keeps the whole batch and
+                retries indefinitely, which is safe because `LEDGER_COMMIT` dedups on
+                `reservation_id` — a replayed batch applies only what it had not already.
         """
         ...
 
@@ -258,11 +261,11 @@ class SettlementQueue:
     # -- draining -------------------------------------------------------------------
 
     async def flush(self) -> None:
-        """Push what is queued to the ledger, one batch, one attempt each.
+        """Push one batch to the ledger, one attempt.
 
-        A settlement the ledger could not be told about is **left at the head** for the next
-        tick, so ordering within a lease is preserved and nothing is skipped past. Returns as
-        soon as one fails rather than hammering a sink that has had no time to recover.
+        A batch the ledger could not be told about is **left at the head** for the next
+        tick, so ordering within a lease is preserved and nothing is skipped past. Returns
+        as soon as it fails rather than hammering a sink that has had no time to recover.
 
         Serialized against the drain task: only one caller walks the deque at a time.
         """
@@ -283,30 +286,46 @@ class SettlementQueue:
             if len(self._pending) >= before:
                 return
 
+    def _next_batch(self) -> list[PendingSettlement]:
+        """The longest run of queued settlements sharing one lease, up to `batch_max`.
+
+        **Consecutive, not grouped.** Scanning the whole deque for every item belonging to
+        a lease would reorder settlements, and order within a lease is what makes the
+        cumulative `outstanding` clamp mean anything. In practice a PEP holds one lease per
+        dimension at a time, so the run is nearly always the whole queue anyway — and when
+        a top-up has just swapped the lease, the boundary falls exactly where it should.
+        """
+        if not self._pending:
+            return []
+        lease_id = self._pending[0].lease_id
+        batch: list[PendingSettlement] = []
+        for item in self._pending:
+            if item.lease_id != lease_id or len(batch) >= self._settings.batch_max:
+                break
+            batch.append(item)
+        return batch
+
     async def _flush_locked(self) -> None:
-        for _ in range(self._settings.batch_max):
-            if not self._pending:
-                return
-            item = self._pending[0]
-            try:
-                applied = await self._sink.commit(
-                    lease_id=item.lease_id,
-                    reservation_id=item.reservation_id,
-                    amount=item.amount,
-                    now=item.now,
-                )
-            except Exception:
-                # The ledger is unreachable. Keep the item — `LEDGER_COMMIT` dedups on
-                # `reservation_id`, so replaying it later cannot double-count.
-                self.failed_attempts += 1
-                logger.warning(
-                    "settlement for reservation %s could not reach the ledger; will retry",
-                    item.reservation_id,
-                    exc_info=True,
-                )
-                return
-            # Popped only after the sink has answered, and only under the lock, so the item
-            # cannot be lost if this coroutine is cancelled mid-commit — a replay is free.
+        batch = self._next_batch()
+        if not batch:
+            return
+        try:
+            verdicts = await self._sink.commit(batch)
+        except Exception:
+            # The ledger is unreachable. Keep the whole batch — `LEDGER_COMMIT` dedups on
+            # `reservation_id`, so replaying it later cannot double-count, and a partially
+            # applied batch replays to exactly the part that did not apply.
+            self.failed_attempts += 1
+            logger.warning(
+                "settlement batch of %d for lease %s could not reach the ledger; will retry",
+                len(batch),
+                batch[0].lease_id,
+                exc_info=True,
+            )
+            return
+        # Popped only after the sink has answered, and only under the lock, so nothing can
+        # be lost if this coroutine is cancelled mid-commit — a replay is free.
+        for applied in verdicts:
             self._pending.popleft()
             if applied:
                 self.applied += 1
