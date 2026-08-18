@@ -47,6 +47,7 @@ dev = [
     # `uvicorn[standard]`, pinned here directly because tests import it, not just uvicorn.
     "pyyaml>=6.0",
     "types-pyyaml>=6.0",
+    "py-spy>=0.4.2",
 ]
 
 # ---------------------------------------------------------------------------

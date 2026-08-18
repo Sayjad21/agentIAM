@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import subprocess
 import sys
 import time
@@ -40,7 +41,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[1]
-_RESULTS: Final = _REPO_ROOT / "docs" / "benchmarks" / "nfr2-load.json"
+_BENCH: Final = _REPO_ROOT / "docs" / "benchmarks"
+_RESULTS: Final = _BENCH / "nfr2-load.json"
 
 #: `PLAN.md` T-053, reduced scope: two profiles, not three. 1000 RPS is deferred (§21).
 PROFILES: Final[tuple[int, ...]] = (100, 500)
@@ -65,6 +67,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target request rates. PLAN.md T-053 names 100 and 500.",
     )
     parser.add_argument("--port", type=int, default=0, help="0 picks a free port.")
+    parser.add_argument(
+        "--flamegraph",
+        type=Path,
+        default=_BENCH / "flamegraph.svg",
+        help=(
+            "Where to write the flame graph sampled from the enforcing PEP during the "
+            "first (unsaturated) profile. Pass an empty string to skip profiling."
+        ),
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=3,
+        help=(
+            "Runs per profile. PLAN.md §13.1 asks for at least three with the variance "
+            "reported, and it is not ceremony here: p99 enforcement overhead has been "
+            "observed between 5.7 and 56 ms across runs on this host."
+        ),
+    )
     parser.add_argument("--results", type=Path, default=_RESULTS)
     return parser
 
@@ -183,7 +204,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             profile["upstream_url"] = f"http://127.0.0.1:{tools_port}"
             profile["passthrough_url"] = f"http://127.0.0.1:{passthrough_port}"
-            results = _measure(profile, args.profiles, args.seconds)
+            results = _measure(
+                profile,
+                args.profiles,
+                args.seconds,
+                flamegraph=args.flamegraph,
+                server_pid=server.pid,
+                repeat=args.repeat,
+            )
         finally:
             for process in (server, passthrough, tools):
                 process.terminate()
@@ -200,7 +228,94 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _measure(profile: dict[str, Any], rates: list[int], seconds: float) -> dict[str, Any]:
+def _start_pyspy(pid: int, output: Path, seconds: float) -> subprocess.Popen[bytes] | None:
+    """Sample the PEP while it is under load, writing a flame graph.
+
+    **Attached by PID, never spawned.** `py-spy record -- <command>` fails on this host
+    with *"Failed to find python version from target process"*; attaching to an
+    already-running interpreter works and produced 222 samples with 0 errors in a probe.
+    So the server is started first and sampled second, which is also the only ordering
+    that profiles it *under load* rather than during startup.
+    """
+    binary = _pyspy_binary()
+    if binary is None:  # pragma: no cover - only where py-spy is not installed
+        print("  (flame graph skipped: py-spy not found; `uv add --dev py-spy`)")
+        return None
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        return subprocess.Popen(  # noqa: S603
+            [
+                str(binary),
+                "record",
+                "--pid",
+                str(pid),
+                # The venv's `python.exe` is a launcher: `Popen.pid` is the shim, and
+                # reading a Python version out of *that* fails with "Failed to find python
+                # version from target process". Following children lands on the interpreter
+                # actually running the server. Attaching to the same server by its
+                # interpreter PID by hand works, which is what isolated this.
+                "--subprocesses",
+                "--duration",
+                str(int(seconds)),
+                "--format",
+                "flamegraph",
+                "--output",
+                str(output),
+            ],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError as exc:  # pragma: no cover - a missing profiler is not a failed benchmark
+        print(f"  (flame graph skipped: {exc})")
+        return None
+
+
+def _pyspy_binary() -> Path | None:
+    """Locate `py-spy`, which is an executable rather than an importable module.
+
+    `python -m py_spy` does not work: the wheel ships a Rust binary and no Python package,
+    so the module import fails and the subprocess dies with a traceback nobody reads. The
+    interpreter's own `Scripts`/`bin` directory is checked before `PATH` so a run inside
+    the project's virtualenv profiles with that virtualenv's copy.
+    """
+    import shutil
+
+    for candidate in (
+        Path(sys.executable).parent / "py-spy.exe",
+        Path(sys.executable).parent / "py-spy",
+    ):
+        if candidate.exists():
+            return candidate
+    found = shutil.which("py-spy")
+    return Path(found) if found else None
+
+
+def _spread(values: list[float]) -> dict[str, float]:
+    """Min / median / max across runs — `PLAN.md` §13.1's "variance reported".
+
+    Not a standard deviation: with three runs it would be a number with no meaning, and
+    §13.1 bans averages from latency tables in any case. The range is what a reader needs
+    to know whether one quoted figure was lucky.
+    """
+    ordered = sorted(values)
+    return {
+        "min": round(ordered[0], 3),
+        "median": round(statistics.median(ordered), 3),
+        "max": round(ordered[-1], 3),
+    }
+
+
+def _measure(
+    profile: dict[str, Any],
+    rates: list[int],
+    seconds: float,
+    *,
+    flamegraph: Path | None = None,
+    server_pid: int | None = None,
+    repeat: int = 1,
+) -> dict[str, Any]:
     """Run the baseline and every profile, and return the whole result."""
     from tests.perf.driver import drive  # local import: needs the repo on sys.path
 
@@ -235,48 +350,66 @@ def _measure(profile: dict[str, Any], rates: list[int], seconds: float) -> dict[
     profiles: list[dict[str, Any]] = []
     for rps in rates:
         print(f"\n=== {rps} RPS ===")
-        print("  tier 1 — the stub upstream alone")
-        baseline = drive(f"{upstream}/invoices/inv_001", token=None, rps=rps, seconds=seconds)
-        print(
-            f"    achieved {baseline.achieved_rps} RPS  p50 {baseline.percentile(50)} ms  "
-            f"p99 {baseline.percentile(99)} ms"
-        )
+        runs: list[dict[str, Any]] = []
+        last: dict[str, Any] = {}
 
-        print("  tier 2 — through the PEP, no pipeline attached")
-        transport = drive(
-            f"{passthrough}/proxy/invoices/inv_001", token=None, rps=rps, seconds=seconds
-        )
-        print(
-            f"    achieved {transport.achieved_rps} RPS  p50 {transport.percentile(50)} ms  "
-            f"p99 {transport.percentile(99)} ms"
-        )
+        for attempt in range(1, repeat + 1):
+            print(f"  run {attempt}/{repeat}")
+            print("    tier 1 — the stub upstream alone")
+            baseline = drive(f"{upstream}/invoices/inv_001", token=None, rps=rps, seconds=seconds)
+            print(
+                f"      achieved {baseline.achieved_rps} RPS  p50 {baseline.percentile(50)} ms  "
+                f"p99 {baseline.percentile(99)} ms"
+            )
 
-        print("  tier 3 — through the enforcing PEP")
-        sample = drive(f"{base_url}/proxy/invoices/inv_001", token=token, rps=rps, seconds=seconds)
-        print(
-            f"    achieved {sample.achieved_rps} RPS  p50 {sample.percentile(50)} ms  "
-            f"p99 {sample.percentile(99)} ms"
-        )
+            print("    tier 2 — through the PEP, no pipeline attached")
+            transport = drive(
+                f"{passthrough}/proxy/invoices/inv_001", token=None, rps=rps, seconds=seconds
+            )
+            print(
+                f"      achieved {transport.achieved_rps} RPS  p50 {transport.percentile(50)} ms "
+                f" p99 {transport.percentile(99)} ms"
+            )
 
-        total_p99 = round(sample.percentile(99) - baseline.percentile(99), 3)
-        total_p50 = round(sample.percentile(50) - baseline.percentile(50), 3)
-        enforce_p99 = round(sample.percentile(99) - transport.percentile(99), 3)
-        enforce_p50 = round(sample.percentile(50) - transport.percentile(50), 3)
-        hop_p50 = round(transport.percentile(50) - baseline.percentile(50), 3)
-        hop_p99 = round(transport.percentile(99) - baseline.percentile(99), 3)
-        print(
-            f"    total overhead p50 {total_p50} / p99 {total_p99} ms  "
-            f"= hop {hop_p50}/{hop_p99} + enforcement {enforce_p50}/{enforce_p99}"
-        )
+            print("    tier 3 — through the enforcing PEP")
+            # Profiled once, on the first run of the first (unsaturated) profile: the later
+            # ones queue, and a flame graph of a queue is a picture of waiting, not of work.
+            spy = None
+            if flamegraph and server_pid and rps == rates[0] and attempt == 1:
+                spy = _start_pyspy(server_pid, flamegraph, seconds)
+            sample = drive(
+                f"{base_url}/proxy/invoices/inv_001", token=token, rps=rps, seconds=seconds
+            )
+            if spy is not None and flamegraph is not None:
+                code = spy.wait(timeout=120)
+                if code == 0 and flamegraph.exists():
+                    print(f"      flame graph written to {flamegraph}")
+                    results["flamegraph"] = str(flamegraph.relative_to(_REPO_ROOT))
+                else:
+                    # Loudly, and with the profiler's own words: a silently absent flame
+                    # graph is an acceptance criterion that quietly went missing.
+                    said = spy.stdout.read().decode(errors="replace").strip() if spy.stdout else ""
+                    print(f"      !! flame graph FAILED (py-spy exit {code}): {said}")
+            print(
+                f"      achieved {sample.achieved_rps} RPS  p50 {sample.percentile(50)} ms  "
+                f"p99 {sample.percentile(99)} ms"
+            )
 
-        # A row whose achieved rate is far below target is measuring a queue, not a server.
-        offered = min(baseline.achieved_rps, transport.achieved_rps, sample.achieved_rps)
-        saturated = offered < rps * 0.9
+            total_p99 = round(sample.percentile(99) - baseline.percentile(99), 3)
+            total_p50 = round(sample.percentile(50) - baseline.percentile(50), 3)
+            enforce_p99 = round(sample.percentile(99) - transport.percentile(99), 3)
+            enforce_p50 = round(sample.percentile(50) - transport.percentile(50), 3)
+            hop_p50 = round(transport.percentile(50) - baseline.percentile(50), 3)
+            hop_p99 = round(transport.percentile(99) - baseline.percentile(99), 3)
+            print(
+                f"      total overhead p50 {total_p50} / p99 {total_p99} ms  "
+                f"= hop {hop_p50}/{hop_p99} + enforcement {enforce_p50}/{enforce_p99}"
+            )
 
-        profiles.append(
-            {
-                "target_rps": rps,
-                "saturated": saturated,
+            offered = min(baseline.achieved_rps, transport.achieved_rps, sample.achieved_rps)
+            last = {
+                "run": attempt,
+                "saturated": offered < rps * 0.9,
                 "tiers": {
                     "upstream_only": baseline.as_dict(),
                     "proxy_no_enforcement": transport.as_dict(),
@@ -285,8 +418,44 @@ def _measure(profile: dict[str, Any], rates: list[int], seconds: float) -> dict[
                 "proxy_hop_ms": {"p50": hop_p50, "p99": hop_p99},
                 "enforcement_overhead_ms": {"p50": enforce_p50, "p99": enforce_p99},
                 "total_overhead_ms": {"p50": total_p50, "p99": total_p99},
-                "meets_nfr2_total": total_p99 < OVERHEAD_BUDGET_MS and not saturated,
-                "meets_nfr2_enforcement": enforce_p99 < OVERHEAD_BUDGET_MS and not saturated,
+            }
+            runs.append(last)
+
+        # §13.1 asks for the variance, not a representative run — and on this host the
+        # spread is the most informative thing in the table.
+        spread = {
+            key: _spread([run[key][stat] for run in runs])
+            for key, stat in (
+                ("enforcement_overhead_ms", "p99"),
+                ("proxy_hop_ms", "p99"),
+                ("total_overhead_ms", "p99"),
+            )
+        }
+        spread["enforcement_overhead_p50_ms"] = _spread(
+            [run["enforcement_overhead_ms"]["p50"] for run in runs]
+        )
+        saturated = any(run["saturated"] for run in runs)
+        worst_enforce = max(run["enforcement_overhead_ms"]["p99"] for run in runs)
+        total_worst = max(run["total_overhead_ms"]["p99"] for run in runs)
+        print(
+            f"  across {repeat} run(s): enforcement p99 "
+            f"{spread['enforcement_overhead_ms']['min']}-"
+            f"{spread['enforcement_overhead_ms']['max']} ms"
+        )
+
+        profiles.append(
+            {
+                "target_rps": rps,
+                "runs": repeat,
+                "saturated": saturated,
+                "spread_ms": spread,
+                "all_runs": runs,
+                "tiers": last["tiers"],
+                "proxy_hop_ms": last["proxy_hop_ms"],
+                "enforcement_overhead_ms": last["enforcement_overhead_ms"],
+                "total_overhead_ms": last["total_overhead_ms"],
+                "meets_nfr2_total": total_worst < OVERHEAD_BUDGET_MS and not saturated,
+                "meets_nfr2_enforcement": worst_enforce < OVERHEAD_BUDGET_MS and not saturated,
             }
         )
 

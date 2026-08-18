@@ -1,239 +1,976 @@
 {
-  "measured_at": "2026-08-18T14:51:07.250221+00:00",
+  "measured_at": "2026-08-18T15:14:51.543885+00:00",
   "nfr2_budget_ms": 8.0,
   "note": "Three tiers measured at *every* rate, over the same loopback transport, so each subtraction compares like with like. (1) the stub upstream alone; (2) the same request through the PEP in T-018 transport mode with no pipeline attached; (3) through the enforcing PEP. (2)-(1) is what a proxy hop costs on this host and is not AgentIAM's doing; (3)-(2) is what authorization costs and is the number T-053 is actually about. Measuring the tiers at one fixed rate and the profiles at another produced negative overheads on the first run \u2014 the baseline was saturated and the profile was not. Latency is `service_ms` (send to response); `scheduled_ms` is the coordinated-omission-aware figure and `generator_lag_ms` says how far the generator itself fell behind, quoted so a reader can judge whether the run measured the server or the harness. `achieved_rps` matters as much as any latency here: where it falls far short of the target, the host could not offer the load and every latency in that row is a queueing artefact. None of this is NFR-1, the in-process decision, which is measured separately in tests/perf/test_pipeline_breakdown.py.",
   "profiles": [
     {
       "target_rps": 100,
+      "runs": 3,
       "saturated": false,
+      "spread_ms": {
+        "enforcement_overhead_ms": {
+          "min": 1.753,
+          "median": 37.732,
+          "max": 74.724
+        },
+        "proxy_hop_ms": {
+          "min": -28.41,
+          "median": 10.88,
+          "max": 21.861
+        },
+        "total_overhead_ms": {
+          "min": 9.322,
+          "median": 12.633,
+          "max": 96.585
+        },
+        "enforcement_overhead_p50_ms": {
+          "min": 1.634,
+          "median": 2.191,
+          "max": 2.84
+        }
+      },
+      "all_runs": [
+        {
+          "run": 1,
+          "saturated": false,
+          "tiers": {
+            "upstream_only": {
+              "target_rps": 100,
+              "achieved_rps": 99.3,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.09,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 4.542,
+                "p95": 9.267,
+                "p99": 15.828,
+                "max": 45.892,
+                "median": 4.542
+              },
+              "scheduled_ms": {
+                "p50": 8.88,
+                "p95": 19.483,
+                "p99": 25.856,
+                "max": 51.264,
+                "median": 8.882
+              },
+              "generator_lag_ms": {
+                "p50": 4.201,
+                "p95": 12.277,
+                "p99": 15.389,
+                "max": 26.977,
+                "median": 4.209
+              }
+            },
+            "proxy_no_enforcement": {
+              "target_rps": 100,
+              "achieved_rps": 99.2,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.1,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 7.392,
+                "p95": 15.776,
+                "p99": 26.708,
+                "max": 87.262,
+                "median": 7.397
+              },
+              "scheduled_ms": {
+                "p50": 10.594,
+                "p95": 26.705,
+                "p99": 37.346,
+                "max": 95.406,
+                "median": 10.616
+              },
+              "generator_lag_ms": {
+                "p50": 2.449,
+                "p95": 13.006,
+                "p99": 15.646,
+                "max": 16.052,
+                "median": 2.449
+              }
+            },
+            "enforcing_pep": {
+              "target_rps": 100,
+              "achieved_rps": 99.0,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.13,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 9.026,
+                "p95": 19.145,
+                "p99": 28.461,
+                "max": 55.777,
+                "median": 9.027
+              },
+              "scheduled_ms": {
+                "p50": 13.309,
+                "p95": 28.499,
+                "p99": 36.446,
+                "max": 61.247,
+                "median": 13.313
+              },
+              "generator_lag_ms": {
+                "p50": 2.676,
+                "p95": 13.741,
+                "p99": 15.521,
+                "max": 16.252,
+                "median": 2.696
+              }
+            }
+          },
+          "proxy_hop_ms": {
+            "p50": 2.85,
+            "p99": 10.88
+          },
+          "enforcement_overhead_ms": {
+            "p50": 1.634,
+            "p99": 1.753
+          },
+          "total_overhead_ms": {
+            "p50": 4.484,
+            "p99": 12.633
+          }
+        },
+        {
+          "run": 2,
+          "saturated": false,
+          "tiers": {
+            "upstream_only": {
+              "target_rps": 100,
+              "achieved_rps": 99.3,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.08,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 4.483,
+                "p95": 8.306,
+                "p99": 15.793,
+                "max": 65.653,
+                "median": 4.485
+              },
+              "scheduled_ms": {
+                "p50": 8.862,
+                "p95": 18.198,
+                "p99": 28.104,
+                "max": 75.719,
+                "median": 8.868
+              },
+              "generator_lag_ms": {
+                "p50": 4.09,
+                "p95": 11.694,
+                "p99": 14.602,
+                "max": 43.602,
+                "median": 4.091
+              }
+            },
+            "proxy_no_enforcement": {
+              "target_rps": 100,
+              "achieved_rps": 99.3,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.09,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 7.149,
+                "p95": 14.583,
+                "p99": 37.654,
+                "max": 71.595,
+                "median": 7.152
+              },
+              "scheduled_ms": {
+                "p50": 10.436,
+                "p95": 26.113,
+                "p99": 43.557,
+                "max": 74.929,
+                "median": 10.436
+              },
+              "generator_lag_ms": {
+                "p50": 2.82,
+                "p95": 13.904,
+                "p99": 15.68,
+                "max": 17.784,
+                "median": 2.833
+              }
+            },
+            "enforcing_pep": {
+              "target_rps": 100,
+              "achieved_rps": 99.2,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.09,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 9.34,
+                "p95": 33.012,
+                "p99": 112.378,
+                "max": 154.991,
+                "median": 9.348
+              },
+              "scheduled_ms": {
+                "p50": 13.633,
+                "p95": 38.178,
+                "p99": 116.937,
+                "max": 156.299,
+                "median": 13.636
+              },
+              "generator_lag_ms": {
+                "p50": 2.487,
+                "p95": 13.068,
+                "p99": 15.681,
+                "max": 45.393,
+                "median": 2.49
+              }
+            }
+          },
+          "proxy_hop_ms": {
+            "p50": 2.666,
+            "p99": 21.861
+          },
+          "enforcement_overhead_ms": {
+            "p50": 2.191,
+            "p99": 74.724
+          },
+          "total_overhead_ms": {
+            "p50": 4.857,
+            "p99": 96.585
+          }
+        },
+        {
+          "run": 3,
+          "saturated": false,
+          "tiers": {
+            "upstream_only": {
+              "target_rps": 100,
+              "achieved_rps": 99.1,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.11,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 4.613,
+                "p95": 8.679,
+                "p99": 47.849,
+                "max": 110.539,
+                "median": 4.615
+              },
+              "scheduled_ms": {
+                "p50": 8.808,
+                "p95": 19.698,
+                "p99": 49.899,
+                "max": 119.364,
+                "median": 8.808
+              },
+              "generator_lag_ms": {
+                "p50": 4.316,
+                "p95": 12.236,
+                "p99": 15.379,
+                "max": 48.241,
+                "median": 4.321
+              }
+            },
+            "proxy_no_enforcement": {
+              "target_rps": 100,
+              "achieved_rps": 99.2,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.1,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 6.769,
+                "p95": 13.77,
+                "p99": 19.439,
+                "max": 26.265,
+                "median": 6.773
+              },
+              "scheduled_ms": {
+                "p50": 10.041,
+                "p95": 25.263,
+                "p99": 29.541,
+                "max": 38.743,
+                "median": 10.051
+              },
+              "generator_lag_ms": {
+                "p50": 2.673,
+                "p95": 13.872,
+                "p99": 15.624,
+                "max": 16.439,
+                "median": 2.677
+              }
+            },
+            "enforcing_pep": {
+              "target_rps": 100,
+              "achieved_rps": 99.0,
+              "sent": 1200,
+              "ok": 1200,
+              "duration_s": 12.12,
+              "statuses": {
+                "200": 1200
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 9.609,
+                "p95": 25.509,
+                "p99": 57.171,
+                "max": 85.057,
+                "median": 9.626
+              },
+              "scheduled_ms": {
+                "p50": 13.266,
+                "p95": 33.618,
+                "p99": 62.908,
+                "max": 88.745,
+                "median": 13.302
+              },
+              "generator_lag_ms": {
+                "p50": 2.364,
+                "p95": 13.518,
+                "p99": 15.507,
+                "max": 40.641,
+                "median": 2.37
+              }
+            }
+          },
+          "proxy_hop_ms": {
+            "p50": 2.156,
+            "p99": -28.41
+          },
+          "enforcement_overhead_ms": {
+            "p50": 2.84,
+            "p99": 37.732
+          },
+          "total_overhead_ms": {
+            "p50": 4.996,
+            "p99": 9.322
+          }
+        }
+      ],
       "tiers": {
         "upstream_only": {
           "target_rps": 100,
-          "achieved_rps": 99.4,
-          "sent": 1500,
-          "ok": 1500,
-          "duration_s": 15.09,
+          "achieved_rps": 99.1,
+          "sent": 1200,
+          "ok": 1200,
+          "duration_s": 12.11,
           "statuses": {
-            "200": 1500
+            "200": 1200
           },
           "errors": [],
           "service_ms": {
-            "p50": 4.535,
-            "p95": 8.201,
-            "p99": 15.112,
-            "max": 43.239,
-            "median": 4.535
+            "p50": 4.613,
+            "p95": 8.679,
+            "p99": 47.849,
+            "max": 110.539,
+            "median": 4.615
           },
           "scheduled_ms": {
-            "p50": 8.774,
-            "p95": 18.579,
-            "p99": 25.745,
-            "max": 49.421,
-            "median": 8.775
+            "p50": 8.808,
+            "p95": 19.698,
+            "p99": 49.899,
+            "max": 119.364,
+            "median": 8.808
           },
           "generator_lag_ms": {
-            "p50": 4.067,
-            "p95": 11.801,
-            "p99": 14.672,
-            "max": 31.652,
-            "median": 4.069
+            "p50": 4.316,
+            "p95": 12.236,
+            "p99": 15.379,
+            "max": 48.241,
+            "median": 4.321
           }
         },
         "proxy_no_enforcement": {
           "target_rps": 100,
-          "achieved_rps": 99.4,
-          "sent": 1500,
-          "ok": 1500,
-          "duration_s": 15.09,
+          "achieved_rps": 99.2,
+          "sent": 1200,
+          "ok": 1200,
+          "duration_s": 12.1,
           "statuses": {
-            "200": 1500
+            "200": 1200
           },
           "errors": [],
           "service_ms": {
-            "p50": 7.309,
-            "p95": 16.975,
-            "p99": 28.435,
-            "max": 63.988,
-            "median": 7.311
+            "p50": 6.769,
+            "p95": 13.77,
+            "p99": 19.439,
+            "max": 26.265,
+            "median": 6.773
           },
           "scheduled_ms": {
-            "p50": 10.868,
-            "p95": 26.434,
-            "p99": 37.434,
-            "max": 65.155,
-            "median": 10.872
+            "p50": 10.041,
+            "p95": 25.263,
+            "p99": 29.541,
+            "max": 38.743,
+            "median": 10.051
           },
           "generator_lag_ms": {
-            "p50": 2.661,
-            "p95": 14.196,
-            "p99": 15.55,
-            "max": 16.102,
-            "median": 2.666
+            "p50": 2.673,
+            "p95": 13.872,
+            "p99": 15.624,
+            "max": 16.439,
+            "median": 2.677
           }
         },
         "enforcing_pep": {
           "target_rps": 100,
-          "achieved_rps": 99.2,
-          "sent": 1500,
-          "ok": 1500,
-          "duration_s": 15.12,
+          "achieved_rps": 99.0,
+          "sent": 1200,
+          "ok": 1200,
+          "duration_s": 12.12,
           "statuses": {
-            "200": 1500
+            "200": 1200
           },
           "errors": [],
           "service_ms": {
-            "p50": 8.5,
-            "p95": 24.729,
-            "p99": 60.899,
-            "max": 152.7,
-            "median": 8.509
+            "p50": 9.609,
+            "p95": 25.509,
+            "p99": 57.171,
+            "max": 85.057,
+            "median": 9.626
           },
           "scheduled_ms": {
-            "p50": 13.162,
-            "p95": 31.475,
-            "p99": 67.631,
-            "max": 167.901,
-            "median": 13.163
+            "p50": 13.266,
+            "p95": 33.618,
+            "p99": 62.908,
+            "max": 88.745,
+            "median": 13.302
           },
           "generator_lag_ms": {
-            "p50": 2.686,
-            "p95": 13.428,
-            "p99": 15.562,
-            "max": 41.044,
-            "median": 2.687
+            "p50": 2.364,
+            "p95": 13.518,
+            "p99": 15.507,
+            "max": 40.641,
+            "median": 2.37
           }
         }
       },
       "proxy_hop_ms": {
-        "p50": 2.774,
-        "p99": 13.323
+        "p50": 2.156,
+        "p99": -28.41
       },
       "enforcement_overhead_ms": {
-        "p50": 1.191,
-        "p99": 32.464
+        "p50": 2.84,
+        "p99": 37.732
       },
       "total_overhead_ms": {
-        "p50": 3.965,
-        "p99": 45.787
+        "p50": 4.996,
+        "p99": 9.322
       },
       "meets_nfr2_total": false,
       "meets_nfr2_enforcement": false
     },
     {
       "target_rps": 500,
+      "runs": 3,
       "saturated": true,
+      "spread_ms": {
+        "enforcement_overhead_ms": {
+          "min": 128.011,
+          "median": 146.159,
+          "max": 388.83
+        },
+        "proxy_hop_ms": {
+          "min": 257.108,
+          "median": 333.919,
+          "max": 428.161
+        },
+        "total_overhead_ms": {
+          "min": 480.078,
+          "median": 556.172,
+          "max": 645.938
+        },
+        "enforcement_overhead_p50_ms": {
+          "min": 12.499,
+          "median": 13.33,
+          "max": 63.069
+        }
+      },
+      "all_runs": [
+        {
+          "run": 1,
+          "saturated": true,
+          "tiers": {
+            "upstream_only": {
+              "target_rps": 500,
+              "achieved_rps": 140.1,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 42.82,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 328.325,
+                "p95": 1263.665,
+                "p99": 1900.465,
+                "max": 3489.306,
+                "median": 328.473
+              },
+              "scheduled_ms": {
+                "p50": 15733.936,
+                "p95": 29236.227,
+                "p99": 30452.299,
+                "max": 31092.821,
+                "median": 15735.895
+              },
+              "generator_lag_ms": {
+                "p50": 15231.187,
+                "p95": 28667.565,
+                "p99": 29910.498,
+                "max": 30338.651,
+                "median": 15233.006
+              }
+            },
+            "proxy_no_enforcement": {
+              "target_rps": 500,
+              "achieved_rps": 119.7,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 50.11,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 378.683,
+                "p95": 1521.302,
+                "p99": 2328.626,
+                "max": 4472.885,
+                "median": 378.697
+              },
+              "scheduled_ms": {
+                "p50": 20075.843,
+                "p95": 36235.502,
+                "p99": 37749.414,
+                "max": 38383.111,
+                "median": 20080.032
+              },
+              "generator_lag_ms": {
+                "p50": 19562.572,
+                "p95": 35756.782,
+                "p99": 37151.535,
+                "max": 37570.72,
+                "median": 19565.484
+              }
+            },
+            "enforcing_pep": {
+              "target_rps": 500,
+              "achieved_rps": 114.2,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 52.52,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 391.182,
+                "p95": 1586.796,
+                "p99": 2456.637,
+                "max": 4379.694,
+                "median": 391.196
+              },
+              "scheduled_ms": {
+                "p50": 20667.108,
+                "p95": 38537.942,
+                "p99": 40107.741,
+                "max": 40984.065,
+                "median": 20670.542
+              },
+              "generator_lag_ms": {
+                "p50": 19951.653,
+                "p95": 38000.023,
+                "p99": 39552.697,
+                "max": 39924.169,
+                "median": 19951.758
+              }
+            }
+          },
+          "proxy_hop_ms": {
+            "p50": 50.358,
+            "p99": 428.161
+          },
+          "enforcement_overhead_ms": {
+            "p50": 12.499,
+            "p99": 128.011
+          },
+          "total_overhead_ms": {
+            "p50": 62.857,
+            "p99": 556.172
+          }
+        },
+        {
+          "run": 2,
+          "saturated": true,
+          "tiers": {
+            "upstream_only": {
+              "target_rps": 500,
+              "achieved_rps": 140.5,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 42.71,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 323.838,
+                "p95": 1292.805,
+                "p99": 1943.506,
+                "max": 3266.441,
+                "median": 323.971
+              },
+              "scheduled_ms": {
+                "p50": 14961.376,
+                "p95": 28732.228,
+                "p99": 30391.185,
+                "max": 31166.317,
+                "median": 14966.612
+              },
+              "generator_lag_ms": {
+                "p50": 14550.818,
+                "p95": 28140.69,
+                "p99": 29869.713,
+                "max": 30235.219,
+                "median": 14555.553
+              }
+            },
+            "proxy_no_enforcement": {
+              "target_rps": 500,
+              "achieved_rps": 124.8,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 48.07,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 357.697,
+                "p95": 1464.491,
+                "p99": 2200.614,
+                "max": 3870.221,
+                "median": 357.725
+              },
+              "scheduled_ms": {
+                "p50": 17947.724,
+                "p95": 34385.962,
+                "p99": 35725.521,
+                "max": 36207.595,
+                "median": 17950.178
+              },
+              "generator_lag_ms": {
+                "p50": 17444.75,
+                "p95": 33846.811,
+                "p99": 35197.771,
+                "max": 35586.173,
+                "median": 17450.017
+              }
+            },
+            "enforcing_pep": {
+              "target_rps": 500,
+              "achieved_rps": 109.1,
+              "sent": 6000,
+              "ok": 5999,
+              "duration_s": 54.98,
+              "statuses": {
+                "200": 5999
+              },
+              "errors": [
+                "RemoteProtocolError: Server disconnected without sending a response."
+              ],
+              "service_ms": {
+                "p50": 420.766,
+                "p95": 1631.67,
+                "p99": 2589.444,
+                "max": 5152.988,
+                "median": 420.766
+              },
+              "scheduled_ms": {
+                "p50": 21289.112,
+                "p95": 40958.694,
+                "p99": 42655.193,
+                "max": 43626.572,
+                "median": 21289.112
+              },
+              "generator_lag_ms": {
+                "p50": 20920.341,
+                "p95": 40442.823,
+                "p99": 42151.415,
+                "max": 42517.403,
+                "median": 20920.341
+              }
+            }
+          },
+          "proxy_hop_ms": {
+            "p50": 33.859,
+            "p99": 257.108
+          },
+          "enforcement_overhead_ms": {
+            "p50": 63.069,
+            "p99": 388.83
+          },
+          "total_overhead_ms": {
+            "p50": 96.928,
+            "p99": 645.938
+          }
+        },
+        {
+          "run": 3,
+          "saturated": true,
+          "tiers": {
+            "upstream_only": {
+              "target_rps": 500,
+              "achieved_rps": 138.4,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 43.36,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 335.032,
+                "p95": 1272.243,
+                "p99": 1906.541,
+                "max": 3706.411,
+                "median": 335.146
+              },
+              "scheduled_ms": {
+                "p50": 15532.41,
+                "p95": 29938.243,
+                "p99": 31073.128,
+                "max": 31637.389,
+                "median": 15538.892
+              },
+              "generator_lag_ms": {
+                "p50": 14977.946,
+                "p95": 29487.511,
+                "p99": 30592.087,
+                "max": 30912.465,
+                "median": 14978.391
+              }
+            },
+            "proxy_no_enforcement": {
+              "target_rps": 500,
+              "achieved_rps": 123.4,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 48.61,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 374.181,
+                "p95": 1453.139,
+                "p99": 2240.46,
+                "max": 4216.47,
+                "median": 374.222
+              },
+              "scheduled_ms": {
+                "p50": 18194.823,
+                "p95": 34878.468,
+                "p99": 36301.455,
+                "max": 37217.314,
+                "median": 18201.892
+              },
+              "generator_lag_ms": {
+                "p50": 17700.976,
+                "p95": 34380.128,
+                "p99": 35749.051,
+                "max": 36153.616,
+                "median": 17705.544
+              }
+            },
+            "enforcing_pep": {
+              "target_rps": 500,
+              "achieved_rps": 117.9,
+              "sent": 6000,
+              "ok": 6000,
+              "duration_s": 50.88,
+              "statuses": {
+                "200": 6000
+              },
+              "errors": [],
+              "service_ms": {
+                "p50": 387.511,
+                "p95": 1569.343,
+                "p99": 2386.619,
+                "max": 5328.437,
+                "median": 387.547
+              },
+              "scheduled_ms": {
+                "p50": 18942.105,
+                "p95": 36970.066,
+                "p99": 38508.427,
+                "max": 39225.302,
+                "median": 18946.248
+              },
+              "generator_lag_ms": {
+                "p50": 18433.748,
+                "p95": 36404.993,
+                "p99": 37936.289,
+                "max": 38335.885,
+                "median": 18437.678
+              }
+            }
+          },
+          "proxy_hop_ms": {
+            "p50": 39.149,
+            "p99": 333.919
+          },
+          "enforcement_overhead_ms": {
+            "p50": 13.33,
+            "p99": 146.159
+          },
+          "total_overhead_ms": {
+            "p50": 52.479,
+            "p99": 480.078
+          }
+        }
+      ],
       "tiers": {
         "upstream_only": {
           "target_rps": 500,
-          "achieved_rps": 136.9,
-          "sent": 7500,
-          "ok": 7500,
-          "duration_s": 54.77,
+          "achieved_rps": 138.4,
+          "sent": 6000,
+          "ok": 6000,
+          "duration_s": 43.36,
           "statuses": {
-            "200": 7500
+            "200": 6000
           },
           "errors": [],
           "service_ms": {
-            "p50": 328.794,
-            "p95": 1333.726,
-            "p99": 2006.72,
-            "max": 4992.878,
-            "median": 328.86
+            "p50": 335.032,
+            "p95": 1272.243,
+            "p99": 1906.541,
+            "max": 3706.411,
+            "median": 335.146
           },
           "scheduled_ms": {
-            "p50": 20747.841,
-            "p95": 37900.05,
-            "p99": 39383.353,
-            "max": 40379.138,
-            "median": 20754.938
+            "p50": 15532.41,
+            "p95": 29938.243,
+            "p99": 31073.128,
+            "max": 31637.389,
+            "median": 15538.892
           },
           "generator_lag_ms": {
-            "p50": 20338.222,
-            "p95": 37430.361,
-            "p99": 38867.274,
-            "max": 39339.002,
-            "median": 20338.404
+            "p50": 14977.946,
+            "p95": 29487.511,
+            "p99": 30592.087,
+            "max": 30912.465,
+            "median": 14978.391
           }
         },
         "proxy_no_enforcement": {
           "target_rps": 500,
-          "achieved_rps": 124.5,
-          "sent": 7500,
-          "ok": 7500,
-          "duration_s": 60.22,
+          "achieved_rps": 123.4,
+          "sent": 6000,
+          "ok": 6000,
+          "duration_s": 48.61,
           "statuses": {
-            "200": 7500
+            "200": 6000
           },
           "errors": [],
           "service_ms": {
-            "p50": 363.921,
-            "p95": 1465.759,
-            "p99": 2175.099,
-            "max": 3830.026,
-            "median": 364.009
+            "p50": 374.181,
+            "p95": 1453.139,
+            "p99": 2240.46,
+            "max": 4216.47,
+            "median": 374.222
           },
           "scheduled_ms": {
-            "p50": 22507.778,
-            "p95": 43070.588,
-            "p99": 44839.127,
-            "max": 45557.345,
-            "median": 22511.069
+            "p50": 18194.823,
+            "p95": 34878.468,
+            "p99": 36301.455,
+            "max": 37217.314,
+            "median": 18201.892
           },
           "generator_lag_ms": {
-            "p50": 22024.601,
-            "p95": 42563.028,
-            "p99": 44273.038,
-            "max": 44763.651,
-            "median": 22036.851
+            "p50": 17700.976,
+            "p95": 34380.128,
+            "p99": 35749.051,
+            "max": 36153.616,
+            "median": 17705.544
           }
         },
         "enforcing_pep": {
           "target_rps": 500,
-          "achieved_rps": 115.2,
-          "sent": 7500,
-          "ok": 7500,
-          "duration_s": 65.11,
+          "achieved_rps": 117.9,
+          "sent": 6000,
+          "ok": 6000,
+          "duration_s": 50.88,
           "statuses": {
-            "200": 7500
+            "200": 6000
           },
           "errors": [],
           "service_ms": {
-            "p50": 389.043,
-            "p95": 1615.778,
-            "p99": 2326.181,
-            "max": 4218.105,
-            "median": 389.075
+            "p50": 387.511,
+            "p95": 1569.343,
+            "p99": 2386.619,
+            "max": 5328.437,
+            "median": 387.547
           },
           "scheduled_ms": {
-            "p50": 24239.495,
-            "p95": 47348.413,
-            "p99": 49624.797,
-            "max": 50285.498,
-            "median": 24241.095
+            "p50": 18942.105,
+            "p95": 36970.066,
+            "p99": 38508.427,
+            "max": 39225.302,
+            "median": 18946.248
           },
           "generator_lag_ms": {
-            "p50": 23638.986,
-            "p95": 46824.996,
-            "p99": 48907.774,
-            "max": 49589.708,
-            "median": 23644.465
+            "p50": 18433.748,
+            "p95": 36404.993,
+            "p99": 37936.289,
+            "max": 38335.885,
+            "median": 18437.678
           }
         }
       },
       "proxy_hop_ms": {
-        "p50": 35.127,
-        "p99": 168.379
+        "p50": 39.149,
+        "p99": 333.919
       },
       "enforcement_overhead_ms": {
-        "p50": 25.122,
-        "p99": 151.082
+        "p50": 13.33,
+        "p99": 146.159
       },
       "total_overhead_ms": {
-        "p50": 60.249,
-        "p99": 319.461
+        "p50": 52.479,
+        "p99": 480.078
       },
       "meets_nfr2_total": false,
       "meets_nfr2_enforcement": false
     }
-  ]
+  ],
+  "flamegraph": "docs\\benchmarks\\flamegraph.svg"
 }

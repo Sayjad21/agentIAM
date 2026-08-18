@@ -27,6 +27,9 @@ _PB2: Final = _BENCH / "pb2-breakdown.json"
 _NFR2: Final = _BENCH / "nfr2-load.json"
 _OUTPUT: Final = _BENCH / "performance.md"
 
+#: NFR-2's bar, mirrored from scripts/run_load_test.py.
+OVERHEAD_BUDGET: Final = 8.0
+
 _HEADER: Final = """<!--
   GENERATED FILE — do not edit.
 
@@ -140,19 +143,20 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         tiers = profile["tiers"]
         target = profile["target_rps"]
         flag = " ⚠️" if profile["saturated"] else ""
+        spread = profile.get("spread_ms", {})
+        enforce = spread.get("enforcement_overhead_ms", {})
+        enforce_p50 = spread.get("enforcement_overhead_p50_ms", {})
         rows.append(
             [
                 f"**{target}**{flag}",
+                str(profile.get("runs", 1)),
                 str(tiers["enforcing_pep"]["achieved_rps"]),
                 f"{tiers['upstream_only']['service_ms']['p50']} / "
                 f"{tiers['upstream_only']['service_ms']['p99']}",
                 f"{tiers['proxy_no_enforcement']['service_ms']['p50']} / "
                 f"{tiers['proxy_no_enforcement']['service_ms']['p99']}",
-                f"{tiers['enforcing_pep']['service_ms']['p50']} / "
-                f"{tiers['enforcing_pep']['service_ms']['p99']}",
-                f"{profile['proxy_hop_ms']['p50']} / {profile['proxy_hop_ms']['p99']}",
-                f"**{profile['enforcement_overhead_ms']['p50']} / "
-                f"{profile['enforcement_overhead_ms']['p99']}**",
+                f"{enforce_p50.get('median', '—')}",
+                f"**{enforce.get('min', '—')} - {enforce.get('max', '—')}**",
             ]
         )
 
@@ -160,14 +164,46 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         rows,
         [
             "Target RPS",
+            "Runs",
             "Achieved",
             "① upstream p50/p99 ms",
             "② +proxy p50/p99 ms",
-            "③ +enforcement p50/p99 ms",
-            "hop ②-① ms",
-            "enforcement ③-② ms",
+            "enforcement p50, median of runs",
+            "enforcement p99, min - max",
         ],
     )
+
+    lines += [
+        "The p99 column is a **range across runs**, not a single figure, because on this "
+        "host it is not stable enough to quote as one. `PLAN.md` §13.1 asks for at least "
+        "three runs with the variance reported; that requirement is the reason this is "
+        "visible rather than a matter of which run got written down.",
+        "",
+    ]
+
+    unstable = [
+        p
+        for p in data["profiles"]
+        if not p["saturated"]
+        and p.get("spread_ms", {}).get("enforcement_overhead_ms", {}).get("max", 0)
+        > OVERHEAD_BUDGET
+        > p.get("spread_ms", {}).get("enforcement_overhead_ms", {}).get("min", 0)
+    ]
+    for profile in unstable:
+        enforce = profile["spread_ms"]["enforcement_overhead_ms"]
+        lines += [
+            f"At **{profile['target_rps']} RPS the enforcement p99 ranged "
+            f"{enforce['min']}-{enforce['max']} ms across {profile['runs']} runs**, which "
+            f"straddles NFR-2's {OVERHEAD_BUDGET} ms budget. The best run is comfortably "
+            f"inside it and the worst is nearly ten times it, so **the honest statement is "
+            f"that this host cannot establish the p99 either way** — the median run's p50 "
+            f"is the only figure here stable enough to quote. Something outside the request "
+            f"path is contributing tens of milliseconds intermittently: the generator, the "
+            f"three uvicorn processes and Postgres all share one machine, and the "
+            f"`generator_lag_ms` series in the JSON shows the harness itself stalling. "
+            f"Establishing NFR-2 properly needs the generator off-box.",
+            "",
+        ]
 
     saturated = [p for p in data["profiles"] if p["saturated"]]
     if saturated:

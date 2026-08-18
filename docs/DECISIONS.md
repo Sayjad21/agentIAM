@@ -2534,3 +2534,70 @@ written during a thirty-second outage reaches the chain afterwards — where it 
 asserted only that loss was *counted*. Two new integration tests pin the sink's
 classification in both directions, and the emitter's unit tests were rewritten around the
 new contract. `STATUS.md` gap 20 closes.
+
+---
+
+## ADR-052 — T-053's load harness: `py-spy`, three tiers, and reporting a range instead of a number
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `scripts/run_load_test.py`, `scripts/serve_pep.py`, `scripts/serve_tools.py`,
+`tests/perf/driver.py`, `scripts/generate_benchmark_results.py`, NFR-1, NFR-2, T-053
+
+**Context:** T-053 asks for Locust profiles at 100 and 500 RPS, NFR-1 and NFR-2 reported
+separately, a per-step latency breakdown, and a committed flame graph. Four decisions were
+forced along the way, each by a measurement rather than a preference.
+
+**Decision 1 — a purpose-built driver rather than Locust.** `PLAN.md` names Locust, and the
+requirement underneath it is `PLAN.md` §13.1: *"coordinated-omission-aware load generation"*.
+Locust measures from request start by default, which is precisely the thing §13.1 forbids,
+so using it would have meant configuring around its default anyway. `tests/perf/driver.py`
+is ~150 lines, records latency from the **scheduled** send time, and reports three series —
+`service_ms`, `scheduled_ms` and `generator_lag_ms` — so a reader can see whether a run
+measured the server or the harness. Cost: no Locust web UI and no distributed mode, neither
+of which T-053 needs. This is a deviation from the plan and is the reason for this ADR.
+
+**Decision 2 — `py-spy` as a new dev dependency (Rule 7).** A flame graph needs a sampling
+profiler, and `cProfile` cannot attach to a running server. `py-spy` samples an existing
+process without modifying it, so the profile is taken from the *same* server under the
+*same* load rather than from a special profiling build. Two things had to be learned first,
+neither documented anywhere obvious:
+
+* `py-spy record -- <command>` fails on this host with *"Failed to find python version from
+  target process"*. Attaching to an already-running interpreter by PID works — 222 samples,
+  0 errors in a probe — so the server is started first and sampled second, which is also the
+  only ordering that profiles it under load rather than during startup.
+* `python -m py_spy` does not exist. The wheel ships a Rust binary and no importable module,
+  so the profiler is located in the interpreter's `Scripts`/`bin` directory.
+* `--subprocesses` is required. The virtualenv's `python.exe` is a launcher, so `Popen.pid`
+  is the shim rather than the interpreter, and py-spy reports the same "failed to find
+  python version" error against it.
+
+**Decision 3 — three tiers, measured at every rate.** "Proxy overhead" as a single
+subtraction conflates two unrelated costs: the second TCP hop a proxy necessarily adds, and
+the authorization work AgentIAM does. So every rate is measured three times — the stub
+upstream alone, the same request through the PEP with **no pipeline attached** (T-018
+transport mode, which the codebase already supported), and through the enforcing PEP.
+(2)−(1) is the hop; (3)−(2) is enforcement, and only the second is about this project.
+
+The first draft measured the tiers once at the top rate and the profiles at their own rates,
+which produced *negative* overheads: the baseline was saturated and the profile was not.
+
+**Decision 4 — report a range, not a figure.** §13.1 asks for at least three runs with the
+variance reported. Doing so is what turned the headline result from a claim into a caveat:
+at 100 RPS the enforcement p99 ranged **1.75 ms to 74.7 ms across three runs**, straddling
+NFR-2's 8 ms budget by a factor of ten in each direction. One run would have supported
+either conclusion. `performance.md` therefore quotes the range and says plainly that the
+p99 cannot be established on this host.
+
+**Cost, stated:** **NFR-2 is not demonstrated.** The 500 RPS profile cannot be offered here
+at all — at that rate the stub upstream *alone*, with no PEP in the path, achieved 138 RPS
+at a p50 of 335 ms — and the 100 RPS p99 is too noisy to assert. The generator, three
+uvicorn processes and Postgres share one Windows machine. Establishing NFR-2 needs the
+generator off-box, which is an infrastructure task rather than a code one.
+
+What *is* established: the per-step breakdown (PB-2), NFR-1 against the real Cedar engine,
+and enforcement p50 of about 2 ms at 100 RPS. Those are reported as measured and the rest
+is reported as not yet measured, which is what `PLAN.md` T-053 asks for — *"Report the
+numbers you actually get. A truthful 6 ms with a breakdown beats a claimed 1 ms that a
+judge can poke a hole in."*
