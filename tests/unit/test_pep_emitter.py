@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from agentiam_core.errors import ReasonCode
+from agentiam_core.errors import ReasonCode, SinkRejectedRecord
 from agentiam_core.models import Budget, DecisionRecord, Outcome
 from agentiam_pep.emitter import (
     AuditBufferFullError,
@@ -76,12 +76,17 @@ class RecordingSink:
         self.batches: list[list[DecisionRecord]] = []
         self.gate: asyncio.Event | None = None
         self.fail_times = 0
+        #: When set, failures are raised as `SinkRejectedRecord` — the sink saying *this
+        #: batch is unacceptable* rather than *I am unreachable*. Only that drops a batch.
+        self.reject = False
 
     async def write(self, batch: Sequence[DecisionRecord]) -> None:
         if self.gate is not None:
             await self.gate.wait()
         if self.fail_times > 0:
             self.fail_times -= 1
+            if self.reject:
+                raise SinkRejectedRecord("this batch will never be accepted")
             raise RuntimeError("sink is down")
         self.batches.append(list(batch))
 
@@ -375,9 +380,16 @@ class TestSettings:
         with pytest.raises(ValueError, match="flush_interval"):
             EmitterSettings(flush_interval_s=0)
 
-    def test_max_retries_must_not_be_negative(self) -> None:
-        with pytest.raises(ValueError, match="max_retries"):
-            EmitterSettings(max_retries=-1)
+    def test_there_is_no_retry_budget_to_configure(self) -> None:
+        """`max_retries` is gone, not defaulted — T-052.
+
+        It bounded how many times a failed batch was retried before being discarded, which
+        made a database outage indistinguishable from a poison batch. Transient failures now
+        retry without limit and `capacity` bounds them by filling and denying. Keeping the
+        field as dead configuration would invite someone to set it and expect it to matter.
+        """
+        with pytest.raises(TypeError):
+            EmitterSettings(max_retries=3)  # type: ignore[call-arg]
 
     def test_the_default_back_pressure_is_deny(self) -> None:
         """`PLAN.md` T-022, and the reason ADR-026 exists."""
@@ -411,7 +423,7 @@ class TestSinkFailureIsNotSilentLoss:
         """
         sink = RecordingSink()
         sink.fail_times = 1000
-        emitter = an_emitter(sink, capacity=2, batch_max=1, max_retries=1000)
+        emitter = an_emitter(sink, capacity=2, batch_max=1)
         async with emitter:
             emitter.emit(a_record())
             await emitter.flush()
@@ -421,23 +433,54 @@ class TestSinkFailureIsNotSilentLoss:
                 emitter.emit(a_record())
         assert sink.written == []
 
-    async def test_a_poison_batch_is_eventually_dropped_and_counted(self) -> None:
-        """Retrying forever would let one unacceptable record wedge the pipeline."""
+    async def test_an_unreachable_sink_is_retried_forever_and_loses_nothing(self) -> None:
+        """The T-052 fix: an outage must never be mistaken for a poison batch.
+
+        This used to fail. `max_retries` bounded *every* failure, so a sink that was merely
+        down had its batch discarded after a few attempts — CH-1 measured records being
+        dropped throughout a 30 s database outage while the PEP kept authorizing, which is
+        the exact outcome ADR-026 exists to prevent. Nothing is lost now: the batch waits.
+        """
         sink = RecordingSink()
-        sink.fail_times = 1000
-        emitter = an_emitter(sink, capacity=64, batch_max=1, max_retries=2)
+        sink.fail_times = 50
+        emitter = an_emitter(sink, capacity=64, batch_max=1)
         async with emitter:
             emitter.emit(a_record())
-            for _ in range(4):
+            for _ in range(10):
                 await emitter.flush()
-        assert emitter.lost_records == 1
-        assert emitter.failed_batches >= 3
+            assert emitter.lost_records == 0, "a transient outage discarded a record"
+            # `>=`, not `==`: the background drain task is flushing on its own timer
+            # alongside these explicit ones, so the exact attempt count is not this test's
+            # to pin. What matters is that every one of them failed and none gave up.
+            assert emitter.failed_batches >= 10
+
+            sink.fail_times = 0  # the database comes back
+            await emitter.flush()
+
+        assert len(sink.written) == 1, "the record did not survive the outage"
+        assert emitter.lost_records == 0
+
+    async def test_a_rejected_batch_is_dropped_and_counted(self) -> None:
+        """The one thing that still drops a batch, and only the sink can say it.
+
+        Retrying forever would otherwise let one unacceptable record fill the buffer and
+        deny every request — fail-closed, but a total outage caused by a single bad row.
+        """
+        sink = RecordingSink()
+        sink.fail_times = 1000
+        sink.reject = True
+        emitter = an_emitter(sink, capacity=64, batch_max=1)
+        async with emitter:
+            emitter.emit(a_record())
+            await emitter.flush()
+        assert emitter.lost_records == 1, "a permanently rejected batch must be dropped"
+        assert emitter.failed_batches == 1, "and dropped on the first attempt, not the third"
 
     async def test_flush_returns_rather_than_spinning_on_a_wedged_sink(self) -> None:
         """A flush that cannot make progress must return, or aclose() never completes."""
         sink = RecordingSink()
         sink.fail_times = 1000
-        emitter = an_emitter(sink, capacity=64, max_retries=1000)
+        emitter = an_emitter(sink, capacity=64)
         async with emitter:
             emitter.emit(a_record())
             await asyncio.wait_for(emitter.flush(), timeout=5)

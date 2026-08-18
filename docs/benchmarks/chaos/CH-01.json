@@ -2,15 +2,15 @@
   "scenario": "CH-01",
   "title": "Kill Postgres for 30 s",
   "expected": "PEPs spend leases, then fail closed; recovery is clean; invariant holds",
-  "run_id": "637e41a3-b1c9-4bf9-8d33-53a8a02bd3f3",
-  "started_at": "2026-08-18T13:20:25.326181+00:00",
-  "duration_s": 32.54,
+  "run_id": "4e0241eb-268e-4d3d-bb08-7e10d9f599bc",
+  "started_at": "2026-08-18T14:11:00.581520+00:00",
+  "duration_s": 32.18,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 16,
+    "samples": 15,
     "held": 4,
     "violated": 0,
-    "unavailable": 12,
+    "unavailable": 11,
     "violations": [],
     "unavailable_reasons": [
       "InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: connection is closed\n[SQL: \n    SELECT\n        b.id  ",
@@ -24,27 +24,27 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.077,
+      "t_s": 0.071,
       "event": "stopping postgres"
     },
     {
-      "t_s": 0.816,
+      "t_s": 0.767,
       "event": "postgres stopped"
     },
     {
-      "t_s": 31.308,
+      "t_s": 31.211,
       "event": "starting postgres"
     },
     {
-      "t_s": 32.256,
-      "event": "postgres accepting connections after 0.7 s"
+      "t_s": 31.999,
+      "event": "postgres accepting connections after 0.5 s"
     },
     {
-      "t_s": 32.533,
+      "t_s": 32.177,
       "event": "scenario ended"
     },
     {
-      "t_s": 32.533,
+      "t_s": 32.177,
       "event": "final sweep"
     }
   ],
@@ -52,11 +52,11 @@
     "leased_before_outage": "300.0000",
     "local_remaining_at_cut": "200.0000",
     "committed_before_outage": "0.0000",
-    "outage_s": 30.49,
+    "outage_s": 30.44,
     "spent_during_outage": "200.0000",
     "served_during_outage": 8,
     "refused_during_outage": 6,
-    "recovery_s": 0.65,
+    "recovery_s": 0.55,
     "leased_after_recovery": "300.0000",
     "acquire_failures": 1,
     "final_sweep_readable": true
@@ -73,10 +73,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 10.181,
-        "p99": 14.966,
-        "max": 14.966,
-        "mean": 10.216
+        "p50": 6.064,
+        "p99": 10.313,
+        "max": 10.313,
+        "mean": 6.458
       }
     },
     {
@@ -93,10 +93,10 @@
       },
       "errors": [],
       "latency_ms": {
-        "p50": 7.283,
-        "p99": 11.554,
-        "max": 11.554,
-        "mean": 7.032
+        "p50": 4.54,
+        "p99": 9.006,
+        "max": 9.006,
+        "mean": 4.419
       }
     },
     {
@@ -110,10 +110,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 4.787,
-        "p99": 5.032,
-        "max": 5.032,
-        "mean": 4.609
+        "p50": 2.891,
+        "p99": 3.292,
+        "max": 3.292,
+        "mean": 2.928
       }
     }
   ],

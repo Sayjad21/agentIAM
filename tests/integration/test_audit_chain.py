@@ -20,6 +20,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import pytest
 from sqlalchemy import delete, select, text, update
@@ -354,3 +355,78 @@ class TestEmitterToLedger:
         assert len(rows) == 1, "the record survived a transient ledger failure"
         assert emitter.failed_batches == 1
         assert emitter.lost_records == 0
+
+
+class TestTheSinkClassifiesItsFailures:
+    """Which errors mean *this batch* and which mean *this database* — T-052, gap 20.
+
+    The emitter cannot make this call: it sees an exception and nothing else. So the sink
+    makes it, and gets exactly one thing right or wrong. Treat an outage as permanent and
+    audit records are discarded while the PEP keeps authorizing — the defect CH-1 measured.
+    Treat a permanent rejection as an outage and one bad row wedges the queue until the
+    buffer fills and every request is denied.
+    """
+
+    async def test_a_batch_the_schema_refuses_is_rejected_rather_than_retried(
+        self, postgres_url: str
+    ) -> None:
+        """A statement the database will never accept, against a database with no tables.
+
+        Two earlier drafts of this were wrong, both because the failure was not permanent
+        after all. Dropping `audit_records` broke the migration downgrade for the rest of
+        the module — the container is module-scoped. Writing the same `decision_id` twice
+        raised nothing, because `append()` is already idempotent on it, which is exactly
+        what T-022's retries need it to be.
+
+        So the permanent failure is manufactured somewhere isolated: a scratch database on
+        the same server with the migration never applied. `relation "audit_records" does
+        not exist` is a `ProgrammingError`, which is permanent by any reading.
+        """
+        from agentiam_controlplane.db.audit_sink import LedgerAuditSink
+        from agentiam_controlplane.db.base import make_engine
+        from agentiam_core.errors import SinkRejectedRecord
+
+        scratch = f"audit_probe_{uuid.uuid4().hex[:12]}"
+        admin = make_engine(postgres_url, isolation_level="AUTOCOMMIT")
+        async with admin.connect() as conn:
+            await conn.execute(text(f'CREATE DATABASE "{scratch}"'))
+        await admin.dispose()
+
+        empty = make_engine(postgres_url.rsplit("/", 1)[0] + f"/{scratch}")
+        sink = LedgerAuditSink(make_session_factory(empty))
+        try:
+            with pytest.raises(SinkRejectedRecord):
+                await sink.write([a_record()])
+            assert sink.rejected_batches == 1, (
+                "a batch the schema will never accept must be reported as permanent, or "
+                "the emitter retries it until the buffer fills and the PEP denies all"
+            )
+        finally:
+            await empty.dispose()
+            admin = make_engine(postgres_url, isolation_level="AUTOCOMMIT")
+            async with admin.connect() as conn:
+                await conn.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
+            await admin.dispose()
+
+    async def test_an_unreachable_database_propagates_unchanged(self, postgres_url: str) -> None:
+        """A transport failure must reach the emitter as itself, so the batch is kept.
+
+        Wrapping this as `SinkRejectedRecord` is the whole gap-20 bug: the emitter would
+        drop the batch, and a database that was merely restarting would cost audit records.
+        """
+        from agentiam_controlplane.db.audit_sink import LedgerAuditSink
+        from agentiam_controlplane.db.base import make_engine
+        from agentiam_core.errors import SinkRejectedRecord
+
+        dead = make_engine(
+            postgres_url.replace(urlparse(postgres_url).netloc.split("@")[-1], "127.0.0.1:1")
+        )
+        sink = LedgerAuditSink(make_session_factory(dead))
+        with pytest.raises(Exception) as caught:
+            await sink.write([a_record()])
+        assert not isinstance(caught.value, SinkRejectedRecord), (
+            "an unreachable database was reported as a permanent rejection; the emitter "
+            "would discard the batch instead of waiting for the database to come back"
+        )
+        assert sink.rejected_batches == 0
+        await dead.dispose(close=False)

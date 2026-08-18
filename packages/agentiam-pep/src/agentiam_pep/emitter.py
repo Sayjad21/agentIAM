@@ -24,14 +24,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import TYPE_CHECKING, Protocol
 
 from opentelemetry import trace
 
-from agentiam_core.errors import ReasonCode
+from agentiam_core.errors import ReasonCode, SinkRejectedRecord
 from agentiam_pep.errors import PepError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -79,13 +82,19 @@ class BackPressure(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class EmitterSettings:
-    """Buffer size, drain cadence, and what happens when it fills."""
+    """Buffer size, drain cadence, and what happens when it fills.
+
+    `max_retries` was removed in T-052 rather than kept as dead configuration. It used to
+    bound how many times a failed batch was retried before being discarded, which made a
+    database outage indistinguishable from a poison batch — see `_write_batch`. Transient
+    failures now retry without limit and `capacity` is what bounds them, by filling and
+    denying; a batch is discarded only when the sink raises `SinkRejectedRecord`.
+    """
 
     capacity: int = 1024
     back_pressure: BackPressure = BackPressure.DENY
     batch_max: int = 64
     flush_interval_s: float = 0.5
-    max_retries: int = 3
     tracing: bool = True
 
     def __post_init__(self) -> None:
@@ -96,8 +105,6 @@ class EmitterSettings:
             raise ValueError("batch_max must be positive")
         if self.flush_interval_s <= 0:
             raise ValueError("flush_interval_s must be positive")
-        if self.max_retries < 0:
-            raise ValueError("max_retries must not be negative")
 
 
 class RecordSink(Protocol):
@@ -260,7 +267,7 @@ class DecisionEmitter:
         Serialized: only one writer touches `_pending` at a time, so the drain task and
         an explicit `flush()` cannot both claim the same batch.
 
-        A failed batch is **retried, not discarded** — up to `max_retries`. Discarding it
+        A failed batch is **retried, not discarded, and not on a budget.** Discarding it
         would lose exactly the records this module refuses requests to protect, which would
         make the deny policy an argument the code did not honour.
 
@@ -269,9 +276,16 @@ class DecisionEmitter:
         is the intended chain: a broken audit path stops authorization, the same way a full
         one does.
 
-        `max_retries` is the escape hatch for a *poison* batch — one the sink will never
-        accept. After that the records are dropped and counted in `lost_records`, because a
-        single bad record must not wedge the pipeline forever.
+        **The retry used to be bounded by `max_retries`, and that bound was the bug.** A
+        sink cannot fail in only one way, but this loop treated every failure identically:
+        after a few attempts the batch was dropped as *poison*. A stopped database looks
+        exactly like a poison batch from here, so T-052's CH-1 measured records being
+        discarded every `(max_retries + 1) x flush_interval_s` throughout a 30 s outage —
+        the queue never filled, back-pressure never engaged, and the PEP kept authorizing
+        requests it could no longer record. Precisely what ADR-026 exists to prevent.
+
+        Only the sink can tell a permanent rejection from an unreachable one, so it says so
+        by raising `SinkRejectedRecord`. That, and only that, drops a batch.
         """
         async with self._writing:
             await self._write_batch_locked()
@@ -291,12 +305,26 @@ class DecisionEmitter:
 
         try:
             await self._sink.write(self._pending)
+        except SinkRejectedRecord:
+            # The sink says it will never accept this batch. Retrying cannot help, and
+            # holding it would wedge the queue until the buffer fills and the PEP denies
+            # everything. Dropped — but loudly, and counted, because a lost audit record
+            # nothing counts is indistinguishable from one that was never made.
+            self.failed_batches += 1
+            self.lost_records += len(self._pending)
+            logger.error(
+                "audit sink permanently rejected %d record(s); they are lost",
+                len(self._pending),
+                exc_info=True,
+            )
+            self._finish_pending()
+            return
         except Exception:  # the sink is somebody else's code; a bad write must not stop the drain
+            # Everything else is treated as *temporary*, and retried without limit. The
+            # buffer is what bounds this: it fills, and `DENY` refuses new requests
+            # (ADR-026). See `_write_batch`'s docstring for the outage this replaced.
             self.failed_batches += 1
             self._attempts += 1
-            if self._attempts > self._settings.max_retries:
-                self.lost_records += len(self._pending)
-                self._finish_pending()
             return
         self._finish_pending()
 

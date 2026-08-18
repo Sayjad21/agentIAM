@@ -226,23 +226,28 @@ class TestPostgresDown:
 
         ADR-026 is unambiguous: *a system that cannot record what it authorized should not
         authorize.* The emitter implements that as deny-on-full back-pressure, and the
-        reasoning holds as long as a failing sink drives the buffer to capacity.
+        reasoning holds only if a failing sink drives the buffer to capacity.
 
-        It does not. `_write_batch_locked` gives a batch `max_retries` attempts and then
-        **discards it** and moves on, because that path was written for a *poison* batch —
-        one record the sink will never accept. A stopped database is indistinguishable from
-        a poison batch at that layer, so a batch is dropped roughly every
-        `(max_retries + 1) x flush_interval_s`, the queue never fills, back-pressure never
-        fires, and the PEP keeps authorizing requests it can no longer record.
+        **When this test was first written, it did not.** `_write_batch_locked` gave a batch
+        `max_retries` attempts and then discarded it, because that path was written for a
+        *poison* batch — one record the sink will never accept. A stopped database is
+        indistinguishable from a poison batch at that layer, so records were dropped roughly
+        every `(max_retries + 1) x flush_interval_s`, the queue never filled, back-pressure
+        never fired, and the PEP kept authorizing requests it could no longer record.
 
-        This test does not assert that is fine. It asserts the loss is **counted** — which
-        is the property `emitter.py` actually guarantees — and writes the number into the
-        results file so the gap is on the record rather than in a comment.
+        Fixed: a transient failure is retried without limit, and only a sink raising
+        `SinkRejectedRecord` drops a batch. `capacity` is what bounds an outage now — the
+        buffer fills and `DENY` refuses, which is the chain ADR-026 actually describes.
+
+        So this asserts the strong property rather than the weak one: after a thirty-second
+        outage, **every record written during it is still in the chain**. The weak property
+        — that any loss is at least *counted* — is asserted too, because it is what holds if
+        the buffer ever does fill.
         """
         async with chaos_run(
             "CH-01-audit",
             title="Kill Postgres for 30 s — the audit path",
-            expected="records buffered during the outage are not lost silently",
+            expected="every record buffered during the outage reaches the chain afterwards",
             engine=migrated_engine,
         ) as run:
             await stack.read_invoice()
@@ -282,17 +287,24 @@ class TestPostgresDown:
                 "no write failed during a 30 s database outage — the emitter was not "
                 "actually writing to the stopped database"
             )
-            # The guarantee that holds: nothing vanishes without being counted.
+            # The strong property, and the reason the fix was worth making.
+            assert stack.emitter.lost_records == 0, (
+                f"{stack.emitter.lost_records} audit records were discarded during a "
+                f"transient outage. A stopped database is not a poison batch: it must be "
+                f"retried until it returns, or the buffer must fill and DENY (ADR-026)"
+            )
+            # The weak one, which is what holds if the buffer ever does fill.
             assert landed + stack.emitter.lost_records >= emitted, (
                 f"{emitted} requests were authorized, {landed} records landed and only "
                 f"{stack.emitter.lost_records} were counted lost — the difference is "
                 f"unaccounted-for audit loss, which is the one outcome ADR-026 forbids"
             )
-            if stack.emitter.lost_records:
-                run.note(
-                    f"{stack.emitter.lost_records} audit records were discarded during the "
-                    f"outage while {emitted} requests were still authorized. The emitter's "
-                    f"max_retries path cannot tell a poison batch from an unreachable sink, "
-                    f"so ADR-026's deny-on-full back-pressure never engaged. Counted, not "
-                    f"silent — but a gap. See STATUS.md gap 20."
-                )
+            run.note(
+                f"Every one of the {emitted} records written while Postgres was stopped "
+                f"reached the chain after it came back ({landed} landed, 0 lost, "
+                f"{stack.emitter.failed_batches} failed write attempts along the way). "
+                f"Before the fix this scenario measured the opposite: the emitter bounded "
+                f"every failure by max_retries and discarded the batch, so an outage was "
+                f"indistinguishable from a poison batch and the PEP kept authorizing "
+                f"requests it could no longer record. STATUS.md gap 20, now closed."
+            )

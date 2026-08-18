@@ -184,3 +184,28 @@ class CanonicalizationError(AgentIAMError):
     exceeding the fixed scale, and types with no defined encoding. Every one of these is
     a bug at the call site rather than something to coerce.
     """
+
+
+class SinkRejectedRecord(AgentIAMError):
+    """A sink will *never* accept this batch, so retrying it is pointless.
+
+    The one distinction a buffered writer cannot make for itself, and getting it wrong is
+    how audit records go missing. `DecisionEmitter` retries a failed batch indefinitely,
+    because an unreachable database is temporary and giving up on it loses exactly the
+    records ADR-026 refuses requests to protect. But a batch the sink will reject forever —
+    a value that cannot be encoded, a constraint it can never satisfy — would then wedge
+    the queue until the buffer fills and the PEP denies everything.
+
+    Only the sink can tell those apart, because only the sink knows what its failures mean.
+    So it raises this for the permanent kind and lets everything else propagate as it is.
+
+    It lives in `agentiam-core` because both sides need to name it: `agentiam-pep` catches
+    it and `agentiam-controlplane` raises it, and neither package imports the other — the
+    sinks are structural `Protocol`s precisely to keep it that way.
+
+    T-052's CH-1 is why this exists. Before it, `DecisionEmitter` bounded *every* failure by
+    `max_retries` and discarded the batch afterwards, so a 30 s database outage was
+    indistinguishable from a poison batch: records were dropped roughly every
+    `(max_retries + 1) x flush_interval_s`, the queue never filled, back-pressure never
+    engaged, and the PEP kept authorizing requests it could no longer record.
+    """

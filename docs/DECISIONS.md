@@ -2474,3 +2474,63 @@ nightly as `PLAN.md` §13 intends. Each emits a JSON result under `docs/benchmar
 and `scripts/generate_chaos_results.py` regenerates `docs/benchmarks/chaos-results.md` from
 those with a `--check` mode for CI, so the committed table cannot drift from the runs. The
 seven deferred scenarios are listed in that table as *not run* rather than omitted.
+
+---
+
+## ADR-051 — The audit emitter retries an outage forever, and only the sink may call a failure permanent
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `agentiam_pep.emitter`, `agentiam_controlplane.db.audit_sink`,
+`agentiam_core.errors`, T-022, ADR-026, T-052 (`STATUS.md` gap 20)
+
+**Context:** ADR-026 says a system that cannot record what it authorized must not authorize,
+and implements it as deny-on-full back-pressure. That argument holds only if a failing sink
+actually drives the buffer to capacity.
+
+It did not. `_write_batch_locked` gave a batch `max_retries` attempts and then **discarded
+it**, a path written for a *poison* batch — one record the sink will never accept. A stopped
+database is indistinguishable from a poison batch at that layer, so T-052's CH-1 measured
+records being dropped roughly every `(max_retries + 1) x flush_interval_s` throughout a
+thirty-second outage. The queue never filled, back-pressure never engaged, and the PEP kept
+authorizing requests it could no longer record — the precise outcome ADR-026 exists to
+prevent, produced by the mechanism meant to serve it.
+
+**Decision:**
+
+1. **Transient failures retry without limit.** `capacity` is what bounds them: the buffer
+   fills, `DENY` refuses new requests, and the chain ADR-026 describes actually runs. This
+   is the same reasoning ADR-049 applies to settlement, arrived at from the opposite
+   direction — there the retry was already unbounded and the question was whether it was
+   safe; here it was bounded and the question was what that cost.
+
+2. **Only `SinkRejectedRecord` drops a batch**, on its first occurrence, counted in
+   `lost_records` and logged at `error`. Retrying forever would otherwise let one bad row
+   fill the buffer and deny every request: fail-closed, but a total outage caused by a
+   single record.
+
+3. **The sink classifies, because only the sink can.** `LedgerAuditSink` maps
+   `DataError` / `IntegrityError` / `ProgrammingError` — the statement is wrong for this
+   content, and will be wrong forever — onto `SinkRejectedRecord`, and lets everything else
+   propagate unchanged, `OperationalError` and `InterfaceError` above all. The emitter sees
+   an exception and nothing else; it has no basis for the judgement.
+
+4. **`SinkRejectedRecord` lives in `agentiam-core`.** Both sides must name it, and neither
+   `agentiam-pep` nor `agentiam-controlplane` imports the other — the sinks are structural
+   `Protocol`s precisely to keep that true. Core is the only place both already depend on,
+   and an exception class carries no I/O, so the purity rule is untouched.
+
+5. **`EmitterSettings.max_retries` is removed, not defaulted.** It now bounds nothing;
+   keeping it would invite someone to set it and expect it to matter.
+
+**Cost, stated:** a sink that fails transiently forever now ends in total denial rather than
+in silent loss. That is the correct direction for an audit path in a system whose whole
+claim is provable authorization — but it is a real availability change, and an operator
+whose database is down long enough will see the PEP refuse everything rather than serve
+unrecorded traffic. `capacity` is the dial.
+
+**Consequences:** CH-1's audit scenario now asserts the strong property — every record
+written during a thirty-second outage reaches the chain afterwards — where it previously
+asserted only that loss was *counted*. Two new integration tests pin the sink's
+classification in both directions, and the emitter's unit tests were rewritten around the
+new contract. `STATUS.md` gap 20 closes.
