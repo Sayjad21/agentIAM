@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down logs ps test test-unit lint fmt typecheck check bench cov clean nuke
+.PHONY: help install up down logs ps test test-unit test-integration test-e2e chaos lint fmt \
+        typecheck check bench cov clean nuke
 
 UV ?= uv
 
@@ -34,6 +35,12 @@ test-integration: ## Run tests that need Docker (testcontainers spins its own Po
 
 test-e2e: ## Run the end-to-end slice (needs Docker; testcontainers spins its own Postgres)
 	$(UV) run pytest -m e2e
+
+# Nightly, per PLAN.md §13 — deliberately not part of `check` or `test-integration`.
+# CH-1 alone holds Postgres down for 30 s, so this is minutes, not seconds.
+chaos: ## Run the chaos scenarios and regenerate the results table (§13.2, T-052)
+	$(UV) run pytest -m chaos
+	$(UV) run python scripts/generate_chaos_results.py
 
 lint: ## Check formatting and lint rules
 	$(UV) run ruff check .

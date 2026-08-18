@@ -17,7 +17,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'install', 'up', 'down', 'logs', 'ps', 'test', 'test-unit',
-                 'test-integration', 'test-e2e', 'lint', 'fmt', 'typecheck', 'check',
+                 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt', 'typecheck', 'check',
                  'bench', 'cov',
                  'clean', 'nuke')]
     [string]$Target = 'help'
@@ -52,6 +52,7 @@ switch ($Target) {
             'test-unit'        = 'Run unit and property tests only'
             'test-integration' = 'Run tests that need Docker (spins its own Postgres)'
             'test-e2e'         = 'Run the end-to-end slice (needs Docker)'
+            'chaos'            = 'Run the chaos scenarios and regenerate the results table'
             'lint'             = 'Check formatting and lint rules'
             'fmt'              = 'Apply formatting and autofixable lint rules'
             'typecheck'        = 'Run mypy in strict mode'
@@ -89,6 +90,13 @@ switch ($Target) {
         # Same Ryuk workaround as test-integration, and for the same reason.
         if (-not $env:TESTCONTAINERS_RYUK_DISABLED) { $env:TESTCONTAINERS_RYUK_DISABLED = 'true' }
         Invoke-Step @('uv', 'run', 'pytest', '-m', 'e2e')
+    }
+    'chaos' {
+        # Same Ryuk workaround again. Minutes, not seconds: CH-1 alone holds Postgres
+        # down for 30 s. Nightly per PLAN.md §13, not part of `check`.
+        if (-not $env:TESTCONTAINERS_RYUK_DISABLED) { $env:TESTCONTAINERS_RYUK_DISABLED = 'true' }
+        Invoke-Step @('uv', 'run', 'pytest', '-m', 'chaos')
+        Invoke-Step @('uv', 'run', 'python', 'scripts/generate_chaos_results.py')
     }
     'lint' {
         Invoke-Step @('uv', 'run', 'ruff', 'check', '.')

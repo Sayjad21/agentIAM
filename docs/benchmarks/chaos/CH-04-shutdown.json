@@ -1,0 +1,49 @@
+{
+  "scenario": "CH-04-shutdown",
+  "title": "Partition PEP <-> ledger \u2014 graceful shutdown",
+  "expected": "a partitioned PEP cannot complete `LeasePool.aclose()`",
+  "run_id": "76087fd0-192b-4b1e-afae-5d4dad1cad28",
+  "started_at": "2026-08-18T13:21:47.133235+00:00",
+  "duration_s": 5.505,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 22,
+    "held": 22,
+    "violated": 0,
+    "unavailable": 0,
+    "violations": [],
+    "unavailable_reasons": []
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 0.438,
+      "event": "cutting, then asking the pool to close"
+    },
+    {
+      "t_s": 5.464,
+      "event": "healing; the pending shutdown should now complete"
+    },
+    {
+      "t_s": 5.5,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 5.5,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "graceful_close_completed_within_5s": false,
+    "graceful_close_completed_after_heal": true,
+    "final_sweep_readable": true
+  },
+  "loads": [],
+  "notes": [
+    "A partitioned PEP cannot complete a graceful shutdown: `aclose()` drains in-flight top-ups and then RELEASEs, and both need the ledger. Worse, the timeout meant to bound it does not: `asyncio.wait_for` cancels into SQLAlchemy's greenlet bridge while asyncpg is blocked on the dead socket, and the driver's own rollback/close needs that same socket \u2014 measured stuck for 5 minutes against a 5 s bound. Healing the partition is what releases it. The stranded lease is bounded by TTL + S (CH-3), so this costs availability on restart, not correctness. See STATUS.md gap 21."
+  ],
+  "verdict": "held"
+}

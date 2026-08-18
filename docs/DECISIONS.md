@@ -2414,3 +2414,63 @@ something for the first time. Seven integration tests in
 `tests/integration/test_settlement.py`, one new e2e assertion in the thin slice, and CH-10's
 two scenarios cover it. The e2e slice and `tests/chaos/pepstack.py` — the project's two
 reference assemblies — both wire it; there is no other composition root yet.
+
+---
+
+## ADR-050 — T-052's chaos suite: an in-process fault proxy instead of toxiproxy, and a pinned container port
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `tests/chaos/`, `scripts/generate_chaos_results.py`, `PLAN.md` §13.2, T-052
+
+**Context:** `PLAN.md` §13.2 names toxiproxy for CH-4 and says nothing about how a stopped
+Postgres is meant to come back for CH-1. Both gaps had to be closed before any scenario
+could be written, and both were closed by probing rather than by choosing.
+
+**Decision 1 — an in-process `asyncio` fault proxy, not toxiproxy.** The community
+`testcontainers` modules were enumerated at the pinned version and there is no toxiproxy
+module, so it would mean a bare `DockerContainer` plus an HTTP control client — a new
+dependency against Rule 7 — and one more container behaving differently on Windows and
+Linux CI. Sixty lines this repo owns give a cut that lands on a known byte boundary.
+
+*Cost:* it severs a TCP path, not a network. It cannot drop, reorder or corrupt individual
+packets, so CH-6 (packet loss) could not be built on it. CH-6 is deferred and CH-4 does not
+need it.
+
+Two things about it were learned by measurement, not design. **The black hole must freeze
+established connections rather than close them**: the first draft closed them, SQLAlchemy's
+pool handed back its dropped connection, asyncpg raised in 1 ms, and
+`connections_blackholed` was **0** — the mode was inert and the test would have passed
+without exercising a partition. And **`heal()` must drop the connections accepted during
+the black hole**, because they were never joined to an upstream; without that a top-up
+started during CH-4's partition never returned, `LeasePool`'s single-flight flag stayed set,
+and the PEP could not top up again after the network came back.
+
+**Decision 2 — the container's host port is pinned.** Measured: `testcontainers` publishes
+on a random host port and a `stop()`/`start()` pair reassigns it — one probe went `:54423`
+→ `:54429`. CH-1 asserts that recovery is clean, so against a moving port the PEP's DSN is
+dead forever and the recovery half of the scenario asserts nothing. `with_bind_ports` pins
+it; a second probe confirmed the same URL reconnects two attempts after the restart.
+
+**Decision 3 — the sidecar records three outcomes, not two.** A sweep either held, found
+violations, or could not run at all. CH-1 stops Postgres, so for thirty seconds the checker
+cannot read the rows it is checking; folding "unreachable" into "holds" would report a green
+run for a database that was not there. `unavailable` is counted and reported separately, and
+every scenario ends with a sweep taken after recovery.
+
+**A trap worth recording, found in CH-4's teardown.** `asyncio.wait_for` does not bound an
+operation blocked on a partitioned socket. It cancels the coroutine, the cancellation lands
+inside SQLAlchemy's greenlet bridge while asyncpg is blocked, and the driver's own cleanup —
+rollback, then close — needs that same dead socket. A five-second bound around
+`LeasePool.aclose()` was still stuck five minutes later. Bounding such a step means starting
+it as a task and `asyncio.wait`ing without cancelling; healing the fault is what releases it.
+For the same reason `AsyncEngine.dispose(close=False)` is used in chaos teardown, and
+`FaultProxy.aclose()` drops connections *before* closing the server, since Python 3.12's
+`Server.wait_closed()` waits for every live handler.
+
+**Consequences:** five scenarios (CH-1, CH-3, CH-4, CH-8, CH-10) under `tests/chaos/`,
+marked `chaos` only so they stay out of `make test` and `make test-integration` and run
+nightly as `PLAN.md` §13 intends. Each emits a JSON result under `docs/benchmarks/chaos/`,
+and `scripts/generate_chaos_results.py` regenerates `docs/benchmarks/chaos-results.md` from
+those with a `--check` mode for CI, so the committed table cannot drift from the runs. The
+seven deferred scenarios are listed in that table as *not run* rather than omitted.

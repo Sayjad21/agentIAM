@@ -1,0 +1,110 @@
+{
+  "scenario": "CH-04",
+  "title": "Partition PEP <-> ledger",
+  "expected": "bounded spend, then fail closed",
+  "run_id": "e93bde39-b227-457e-bf81-5a19ff8ef1de",
+  "started_at": "2026-08-18T13:21:45.473136+00:00",
+  "duration_s": 0.571,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 4,
+    "held": 4,
+    "violated": 0,
+    "unavailable": 0,
+    "violations": [],
+    "unavailable_reasons": []
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 0.137,
+      "event": "cutting PEP -> ledger (blackhole)"
+    },
+    {
+      "t_s": 0.217,
+      "event": "healing the partition"
+    },
+    {
+      "t_s": 0.561,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 0.561,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "leased_at_cut": "200.0000",
+    "committed_at_cut": "0.0000",
+    "local_remaining_at_cut": "120.0000",
+    "served_during_partition": 6,
+    "spent_during_partition": "120.0000",
+    "hot_path_p99_ms_partitioned": 10.16,
+    "hot_path_p99_ms_healthy": 16.265,
+    "committed_during_partition": "0.0000",
+    "invariant_held_during_partition": true,
+    "blackholed_connections": 1,
+    "final_sweep_readable": true
+  },
+  "loads": [
+    {
+      "label": "healthy",
+      "sent": 4,
+      "ok": 4,
+      "dropped": 0,
+      "by_status": {
+        "200": 4
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 14.36,
+        "p99": 16.265,
+        "max": 16.265,
+        "mean": 13.97
+      }
+    },
+    {
+      "label": "during partition",
+      "sent": 11,
+      "ok": 6,
+      "dropped": 0,
+      "by_status": {
+        "200": 6,
+        "429": 5
+      },
+      "by_reason": {
+        "LEASE_UNAVAILABLE": 5
+      },
+      "errors": [],
+      "latency_ms": {
+        "p50": 6.17,
+        "p99": 10.16,
+        "max": 10.16,
+        "mean": 5.639
+      }
+    },
+    {
+      "label": "after heal",
+      "sent": 4,
+      "ok": 4,
+      "dropped": 0,
+      "by_status": {
+        "200": 4
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 6.313,
+        "p99": 9.873,
+        "max": 9.873,
+        "mean": 7.554
+      }
+    }
+  ],
+  "notes": [],
+  "verdict": "held"
+}

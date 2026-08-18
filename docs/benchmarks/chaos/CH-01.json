@@ -1,0 +1,124 @@
+{
+  "scenario": "CH-01",
+  "title": "Kill Postgres for 30 s",
+  "expected": "PEPs spend leases, then fail closed; recovery is clean; invariant holds",
+  "run_id": "637e41a3-b1c9-4bf9-8d33-53a8a02bd3f3",
+  "started_at": "2026-08-18T13:20:25.326181+00:00",
+  "duration_s": 32.54,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 16,
+    "held": 4,
+    "violated": 0,
+    "unavailable": 12,
+    "violations": [],
+    "unavailable_reasons": [
+      "InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: connection is closed\n[SQL: \n    SELECT\n        b.id  ",
+      "ConnectionError: unexpected connection_lost() call",
+      "ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection"
+    ]
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 0.077,
+      "event": "stopping postgres"
+    },
+    {
+      "t_s": 0.816,
+      "event": "postgres stopped"
+    },
+    {
+      "t_s": 31.308,
+      "event": "starting postgres"
+    },
+    {
+      "t_s": 32.256,
+      "event": "postgres accepting connections after 0.7 s"
+    },
+    {
+      "t_s": 32.533,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 32.533,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "leased_before_outage": "300.0000",
+    "local_remaining_at_cut": "200.0000",
+    "committed_before_outage": "0.0000",
+    "outage_s": 30.49,
+    "spent_during_outage": "200.0000",
+    "served_during_outage": 8,
+    "refused_during_outage": 6,
+    "recovery_s": 0.65,
+    "leased_after_recovery": "300.0000",
+    "acquire_failures": 1,
+    "final_sweep_readable": true
+  },
+  "loads": [
+    {
+      "label": "healthy",
+      "sent": 4,
+      "ok": 4,
+      "dropped": 0,
+      "by_status": {
+        "200": 4
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 10.181,
+        "p99": 14.966,
+        "max": 14.966,
+        "mean": 10.216
+      }
+    },
+    {
+      "label": "during outage",
+      "sent": 14,
+      "ok": 8,
+      "dropped": 0,
+      "by_status": {
+        "200": 8,
+        "429": 6
+      },
+      "by_reason": {
+        "LEASE_UNAVAILABLE": 6
+      },
+      "errors": [],
+      "latency_ms": {
+        "p50": 7.283,
+        "p99": 11.554,
+        "max": 11.554,
+        "mean": 7.032
+      }
+    },
+    {
+      "label": "after recovery",
+      "sent": 4,
+      "ok": 4,
+      "dropped": 0,
+      "by_status": {
+        "200": 4
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 4.787,
+        "p99": 5.032,
+        "max": 5.032,
+        "mean": 4.609
+      }
+    }
+  ],
+  "notes": [
+    "The clock is frozen, so no lease expired during the outage. CH-1 is about an unreachable ledger; expiry is CH-3's subject."
+  ],
+  "verdict": "held"
+}

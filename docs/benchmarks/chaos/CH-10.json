@@ -1,0 +1,133 @@
+{
+  "scenario": "CH-10",
+  "title": "Rolling restart under load",
+  "expected": "zero dropped requests; invariant holds",
+  "run_id": "39ba268c-2b7c-4f9a-acd0-b713e96e588a",
+  "started_at": "2026-08-18T13:22:44.617162+00:00",
+  "duration_s": 18.9,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 72,
+    "held": 72,
+    "violated": 0,
+    "unavailable": 0,
+    "violations": [],
+    "unavailable_reasons": []
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 0.509,
+      "event": "draining pep-roll-0"
+    },
+    {
+      "t_s": 0.509,
+      "event": "stopping pep-roll-0 (RELEASE)"
+    },
+    {
+      "t_s": 1.783,
+      "event": "starting pep-roll-0 (ACQUIRE)"
+    },
+    {
+      "t_s": 2.037,
+      "event": "pep-roll-0 back in rotation"
+    },
+    {
+      "t_s": 2.037,
+      "event": "draining pep-roll-1"
+    },
+    {
+      "t_s": 2.037,
+      "event": "stopping pep-roll-1 (RELEASE)"
+    },
+    {
+      "t_s": 5.194,
+      "event": "starting pep-roll-1 (ACQUIRE)"
+    },
+    {
+      "t_s": 5.473,
+      "event": "pep-roll-1 back in rotation"
+    },
+    {
+      "t_s": 5.473,
+      "event": "draining pep-roll-2"
+    },
+    {
+      "t_s": 5.477,
+      "event": "stopping pep-roll-2 (RELEASE)"
+    },
+    {
+      "t_s": 13.973,
+      "event": "starting pep-roll-2 (ACQUIRE)"
+    },
+    {
+      "t_s": 14.168,
+      "event": "pep-roll-2 back in rotation"
+    },
+    {
+      "t_s": 18.879,
+      "event": "settlement queues drained"
+    },
+    {
+      "t_s": 18.895,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 18.895,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "leased_with_three_instances": "15000.0000",
+    "restarts": 3,
+    "requests_sent": 945,
+    "requests_dropped": 0,
+    "sweeps_during_restarts": 53,
+    "settlement_backlog_when_load_stopped": 415,
+    "settlement_counters": {
+      "applied": 713,
+      "declined": 0,
+      "dropped": 0,
+      "failed_attempts": 0,
+      "still_pending": 0,
+      "shutdown_timeouts": 0
+    },
+    "leased_after_restarts": "11435.0000",
+    "committed_after_restarts": "4725.0000",
+    "spent_locally": "4725.0000",
+    "pool_available_after_restarts": "183840.0000",
+    "lease_rows_by_state": {
+      "active": 3,
+      "released": 3
+    },
+    "final_sweep_readable": true
+  },
+  "loads": [
+    {
+      "label": "continuous load across the restart",
+      "sent": 945,
+      "ok": 945,
+      "dropped": 0,
+      "by_status": {
+        "200": 945
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 14.11,
+        "p99": 31.919,
+        "max": 59.204,
+        "mean": 14.768
+      }
+    }
+  ],
+  "notes": [
+    "An instance is the whole PEP object graph rebuilt, with a real RELEASE and a real ACQUIRE against Postgres, but not a new OS process. CH-3 is the real-process scenario. The risk a rolling restart carries is in the ledger, which is fully exercised here.",
+    "Two throughput observations from tuning this scenario, both unrelated to restarts and both the PEP correctly failing closed. (1) With the lease at 500 and four workers, the low-water mark leaves 25 payments of headroom and the load spent it before the top-up's ACQUIRE landed \u2014 14 LEASE_UNAVAILABLE in 10,434 requests; that is the case T-015 (adaptive lease sizing, deferred) exists for. (2) Settlement costs one LEDGER_COMMIT per reservation, each taking FOR UPDATE on the same pool row, so three instances serialize; since `LeasePool._release` drains the queue before retiring a lease, a backlog larger than a lease's spending stalls the top-up behind it \u2014 7,053 refusals in 21,006 requests at concurrency=4, pace=5 ms. Batching settlements is the fix and belongs with T-053.",
+    "945 requests spent 4725.0000, and the ledger agrees: committed=4725.0000 across 3 restarts. Before T-052 this read committed=0 \u2014 no production caller reached LEDGER_COMMIT, so every RELEASE returned spent budget to the pool. Closed by `agentiam_pep.settlement`."
+  ],
+  "verdict": "held"
+}

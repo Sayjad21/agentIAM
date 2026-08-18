@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Chaos runs nightly per PLAN.md §13. Every other job is gated off `schedule` by its
+  # own `if:` only where it needs to be — the rest are cheap enough to run here too.
+  schedule:
+    - cron: "0 2 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -117,6 +121,45 @@ jobs:
       # exhaustion -> decision in the audit ledger. If it goes red, nothing after it matters.
       - name: End-to-end slice
         run: uv run pytest -m e2e -v
+
+  chaos:
+    name: Chaos scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Nightly and on demand, not on every push: `PLAN.md` §13 schedules chaos nightly, and
+    # CH-1 alone holds Postgres down for 30 s. The whole suite measured 3m05s locally
+    # against §13's 20-minute budget, so the timeout is slack, not an estimate.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync workspace
+        run: uv sync
+
+      - name: Chaos scenarios
+        run: uv run pytest -m chaos -v
+
+      # The committed table must match the runs that produced it. `generate_chaos_results.py`
+      # rewrites it from the JSON each scenario emits; `--check` fails if what is committed
+      # differs, which catches both a hand-edited table and a stale one.
+      - name: Results table matches the runs
+        run: uv run python scripts/generate_chaos_results.py --check
+
+      - name: Upload chaos results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-results
+          path: docs/benchmarks/chaos/
+          if-no-files-found: ignore
 
   purity:
     name: agentiam-core is I/O-free

@@ -1,0 +1,66 @@
+{
+  "scenario": "CH-03",
+  "title": "SIGKILL one PEP of three",
+  "expected": "its lease strands <= TTL then reclaims; others unaffected",
+  "run_id": "03a3cb4b-56eb-4753-a091-cf22832749f8",
+  "started_at": "2026-08-18T13:21:36.413553+00:00",
+  "duration_s": 3.044,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 14,
+    "held": 14,
+    "violated": 0,
+    "unavailable": 0,
+    "violations": [],
+    "unavailable_reasons": []
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 1.711,
+      "event": "three leases held"
+    },
+    {
+      "t_s": 1.735,
+      "event": "killing pep-doomed"
+    },
+    {
+      "t_s": 1.738,
+      "event": "pep-doomed exited 1"
+    },
+    {
+      "t_s": 2.53,
+      "event": "reaped one second inside the skew margin"
+    },
+    {
+      "t_s": 2.566,
+      "event": "reaped past the skew margin"
+    },
+    {
+      "t_s": 3.039,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 3.04,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "lease_size": "200.0000",
+    "leased_with_three_holders": "600.0000",
+    "survivor_heartbeats_after_kill": 8,
+    "leased_while_stranded": "600.0000",
+    "invariant_held_while_stranded": true,
+    "leased_after_reap": "400.0000",
+    "documented_worst_case_strand_s": 80.0,
+    "final_sweep_readable": true
+  },
+  "loads": [],
+  "notes": [
+    "Reclamation is observed by advancing an injected `now` into `reap()`, not by sleeping for the TTL. The bound under test is the ledger's `expires_at + S`, which is a value, not a wall-clock wait."
+  ],
+  "verdict": "held"
+}

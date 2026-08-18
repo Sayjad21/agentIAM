@@ -1,0 +1,57 @@
+{
+  "scenario": "CH-01-audit",
+  "title": "Kill Postgres for 30 s \u2014 the audit path",
+  "expected": "records buffered during the outage are not lost silently",
+  "run_id": "391c038f-1fca-4307-bde6-0d7dc3009ff7",
+  "started_at": "2026-08-18T13:20:58.715522+00:00",
+  "duration_s": 31.802,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 14,
+    "held": 4,
+    "violated": 0,
+    "unavailable": 10,
+    "violations": [],
+    "unavailable_reasons": [
+      "InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: connection is closed\n[SQL: \n    SELECT\n        b.id  ",
+      "ConnectionError: unexpected connection_lost() call",
+      "ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection"
+    ]
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 0.099,
+      "event": "stopping postgres"
+    },
+    {
+      "t_s": 30.738,
+      "event": "starting postgres"
+    },
+    {
+      "t_s": 31.796,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 31.796,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "records_before_outage": 1,
+    "allowed_while_unrecordable": 141,
+    "records_landed": 139,
+    "emitter_failed_batches": 7,
+    "emitter_lost_records": 2,
+    "emitter_dropped": 0,
+    "final_sweep_readable": true
+  },
+  "loads": [],
+  "notes": [
+    "2 audit records were discarded during the outage while 141 requests were still authorized. The emitter's max_retries path cannot tell a poison batch from an unreachable sink, so ADR-026's deny-on-full back-pressure never engaged. Counted, not silent \u2014 but a gap. See STATUS.md gap 20."
+  ],
+  "verdict": "held"
+}

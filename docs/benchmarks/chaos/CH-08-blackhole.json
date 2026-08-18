@@ -1,0 +1,79 @@
+{
+  "scenario": "CH-08-blackhole",
+  "title": "Ollama black-holed (accepts, never answers)",
+  "expected": "requests still allowed; the latency cost is measured, not assumed",
+  "run_id": "e0ed223c-aac6-4d1d-bed3-505514b63976",
+  "started_at": "2026-08-18T13:22:25.805624+00:00",
+  "duration_s": 6.192,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 2,
+    "held": 2,
+    "violated": 0,
+    "unavailable": 0,
+    "violations": [],
+    "unavailable_reasons": []
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 6.141,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 6.144,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "embedding_timeout_s": 2.0,
+    "baseline_p99_ms": 28.79,
+    "blackholed_p99_ms": 6086.662,
+    "three_concurrent_requests_wall_s": 6.09,
+    "blackholed_connections": 2,
+    "final_sweep_readable": true
+  },
+  "loads": [
+    {
+      "label": "no intent headers (oracle not consulted)",
+      "sent": 6,
+      "ok": 6,
+      "dropped": 0,
+      "by_status": {
+        "200": 6
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 21.441,
+        "p99": 28.79,
+        "max": 28.79,
+        "mean": 21.657
+      }
+    },
+    {
+      "label": "ollama black-holed",
+      "sent": 3,
+      "ok": 3,
+      "dropped": 0,
+      "by_status": {
+        "200": 3
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 4070.502,
+        "p99": 6086.662,
+        "max": 6086.662,
+        "mean": 4064.236
+      }
+    }
+  ],
+  "notes": [
+    "A black-holed Ollama costs every uncached drift scoring call its full 2.0 s timeout, on the event loop, because `EmbeddingClient` holds a synchronous httpx.Client (ADR-037 already noted the shape). Three concurrent requests took 6.1 s wall against a baseline p99 of 28.79 ms. Outcomes stay correct \u2014 spec 09 \u00a75 fails open \u2014 but 'no hot-path impact' is only true for a *refused* Ollama, not a hung one. See STATUS.md gap 22."
+  ],
+  "verdict": "held"
+}

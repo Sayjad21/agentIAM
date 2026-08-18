@@ -1,0 +1,63 @@
+{
+  "scenario": "CH-08",
+  "title": "Ollama down",
+  "expected": "template fallback; no hot-path impact",
+  "run_id": "e412b0fb-7303-42fe-a91b-391d77fbea4a",
+  "started_at": "2026-08-18T13:21:59.416820+00:00",
+  "duration_s": 24.274,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 1,
+    "held": 1,
+    "violated": 0,
+    "unavailable": 0,
+    "violations": [],
+    "unavailable_reasons": []
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 24.232,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 24.232,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "served_with_ollama_down": 12,
+    "hot_path_p99_ms": 6066.837,
+    "hot_path_p50_ms": 6057.622,
+    "embedding_timeout_s": 2.0,
+    "final_sweep_readable": true
+  },
+  "loads": [
+    {
+      "label": "ollama refusing connections",
+      "sent": 12,
+      "ok": 12,
+      "dropped": 0,
+      "by_status": {
+        "200": 12
+      },
+      "by_reason": {},
+      "errors": [],
+      "latency_ms": {
+        "p50": 6057.622,
+        "p99": 6066.837,
+        "max": 6066.837,
+        "mean": 5553.804
+      }
+    }
+  ],
+  "notes": [
+    "The template fallback PLAN.md \u00a713.2 expects for CH-8 does not exist: T-031 is deferred (PLAN.md \u00a721). CH-8 is therefore PARTIAL on both halves \u2014 the fallback is unimplemented, and 'no hot-path impact' is false.",
+    "An unreachable Ollama costs the hot path p50 6057.622 ms / p99 6066.837 ms against a 2.0 s embedding timeout \u2014 roughly three timeouts, because scoring one request embeds the task, the action template and the rendered action, and `EmbeddingClient` is a *synchronous* httpx.Client called from the event loop (ADR-037 noted the shape; this puts a number on it). Outcomes stay correct: all 12 requests were allowed, because spec 09 \u00a75 fails drift open. See STATUS.md gap 22.",
+    "Measured on the development host, and it invalidated this scenario's first premise: a connect to a *closed* 127.0.0.1 port does not refuse, it raises ConnectTimeout after ~3 s \u2014 port 9 included. There is no cheap-failure mode for an unreachable local service on Windows."
+  ],
+  "verdict": "held"
+}

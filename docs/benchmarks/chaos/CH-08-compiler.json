@@ -1,0 +1,43 @@
+{
+  "scenario": "CH-08-compiler",
+  "title": "Ollama down \u2014 the NL compiler",
+  "expected": "typed error inside the timeout; template fallback is unimplemented",
+  "run_id": "f6159bb0-3e1b-4911-bece-db8ff6c04462",
+  "started_at": "2026-08-18T13:22:32.914509+00:00",
+  "duration_s": 5.945,
+  "invariant": {
+    "interval_s": 0.25,
+    "samples": 17,
+    "held": 17,
+    "violated": 0,
+    "unavailable": 0,
+    "violations": [],
+    "unavailable_reasons": []
+  },
+  "timeline": [
+    {
+      "t_s": 0.0,
+      "event": "scenario started"
+    },
+    {
+      "t_s": 5.941,
+      "event": "scenario ended"
+    },
+    {
+      "t_s": 5.941,
+      "event": "final sweep"
+    }
+  ],
+  "measurements": {
+    "warm_returned": false,
+    "warm_s": 3.186,
+    "generate_failed_after_s": 2.754,
+    "generate_error": "OllamaError",
+    "final_sweep_readable": true
+  },
+  "loads": [],
+  "notes": [
+    "No template fallback exists to exercise: T-031 is deferred (PLAN.md \u00a721), so demo beat 5 has no F-2 recovery while that stays true. This is the resumption trigger STATUS.md records for T-031."
+  ],
+  "verdict": "held"
+}
