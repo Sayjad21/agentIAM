@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 import urllib.error
@@ -115,7 +115,7 @@ def _wait_for(
         if process is not None and process.poll() is not None:
             raise RuntimeError(f"{url}: the server exited with code {process.returncode}")
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:  # noqa: S310
+            with urllib.request.urlopen(url, timeout=2) as response:  # noqa: S310  # nosec B310
                 if response.status == 200:
                     return
         except (urllib.error.URLError, OSError, TimeoutError):
@@ -156,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         profile_path = (
             _REPO_ROOT / "docs" / "benchmarks" / f".perf-profile-{uuid.uuid4().hex[:8]}.json"
         )
-        tools = subprocess.Popen(  # noqa: S603
+        tools = subprocess.Popen(  # noqa: S603  # nosec B603
             [
                 sys.executable,
                 str(_REPO_ROOT / "scripts" / "serve_tools.py"),
@@ -165,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ],
             cwd=str(_REPO_ROOT),
         )
-        passthrough = subprocess.Popen(  # noqa: S603
+        passthrough = subprocess.Popen(  # noqa: S603  # nosec B603
             [
                 sys.executable,
                 str(_REPO_ROOT / "scripts" / "serve_pep.py"),
@@ -181,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ],
             cwd=str(_REPO_ROOT),
         )
-        server = subprocess.Popen(  # noqa: S603
+        server = subprocess.Popen(  # noqa: S603  # nosec B603
             [
                 sys.executable,
                 str(_REPO_ROOT / "scripts" / "serve_pep.py"),
@@ -244,7 +244,7 @@ def _start_pyspy(pid: int, output: Path, seconds: float) -> subprocess.Popen[byt
 
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        return subprocess.Popen(  # noqa: S603
+        return subprocess.Popen(  # noqa: S603  # nosec B603
             [
                 str(binary),
                 "record",

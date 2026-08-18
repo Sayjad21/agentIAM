@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help install up down logs ps test test-unit test-integration test-e2e chaos lint fmt \
-        typecheck check bench cov clean nuke
+        typecheck check bench cov clean nuke security sbom
 
 UV ?= uv
 
@@ -63,6 +63,20 @@ bench: ## Run benchmarks (PLAN.md §13.1, NFR-1)
 
 cov: ## Run tests with a coverage report
 	$(UV) run pytest --cov --cov-report=term-missing --cov-report=html
+
+# The `security-scan` CI job (`.github/workflows/ci.yml`) is authoritative — trivy and
+# gitleaks in particular need binaries CI installs from actions rather than uv. This
+# target runs the tools that *are* uv-installable, so a local iteration can find issues
+# before pushing.
+security: ## Run bandit, pip-audit, the SBOM check, and the log secret-scanning test (T-054)
+	$(UV) run bandit -c pyproject.toml -r packages scripts
+	$(UV) export --no-emit-workspace --no-editable --format=requirements-txt > /tmp/agentiam-requirements.txt
+	$(UV) run pip-audit --disable-pip -r /tmp/agentiam-requirements.txt --strict
+	$(UV) run python scripts/generate_sbom.py
+	$(UV) run pytest tests/security/test_secret_scanning.py
+
+sbom: ## Regenerate `docs/evidence/sbom.json` from the current venv (T-054)
+	$(UV) run python scripts/generate_sbom.py --write
 
 clean: ## Remove caches and build artifacts
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .hypothesis htmlcov .coverage dist build

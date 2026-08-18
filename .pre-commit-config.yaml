@@ -38,7 +38,10 @@ repos:
           - pytest>=8.3
 
   # Secret scanning. NFR-5 forbids plaintext secrets anywhere, including history.
+  # T-054 pins `.gitleaks.toml` as the shared config so pre-commit and CI apply the
+  # same waivers.
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.23.1
     hooks:
       - id: gitleaks
+        args: ["--config=.gitleaks.toml"]

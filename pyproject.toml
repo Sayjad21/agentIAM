@@ -48,6 +48,13 @@ dev = [
     "pyyaml>=6.0",
     "types-pyyaml>=6.0",
     "py-spy>=0.4.2",
+    # T-054 — security scanning + SBOM. All four run in CI (`.github/workflows/ci.yml`
+    # `security-scan` job). Configured in `[tool.bandit]` below; results and waivers in
+    # `docs/evidence/security-scan.md`. The SBOM is regenerated from the resolved venv by
+    # `scripts/generate_sbom.py` and committed to `docs/evidence/sbom.json`.
+    "bandit>=1.7",
+    "pip-audit>=2.7",
+    "cyclonedx-bom>=6",
 ]
 
 # ---------------------------------------------------------------------------
@@ -165,4 +172,26 @@ exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
     "@overload",
+]
+
+# ---------------------------------------------------------------------------
+# bandit — T-054
+# ---------------------------------------------------------------------------
+# `bandit -c pyproject.toml -r packages scripts` matches what CI runs. Every skip is
+# the twin of a ruff `S`-rule waiver documented elsewhere; drop it here if the ruff
+# waiver drops there. `# nosec Bxxx - reason` still applies inline where the twin is
+# per-line rather than global (see `scripts/run_load_test.py`).
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist", "node_modules"]
+skips = [
+    # B101 (assert_used) — every assert in `packages/` is a load-bearing invariant
+    # annotated `# noqa: S101` for ruff. The codebase never runs under `python -O`,
+    # so the "assertions get stripped" concern does not apply.
+    "B101",
+    # B105 / B106 (hardcoded_password_string / hardcoded_password_funcarg) —
+    # false positives on the closed `ReasonCode` enum (spec 09 §11) and on the
+    # local-testcontainer Postgres password in `run_load_test.py`. Both already have
+    # `# noqa: S105`/`# noqa: S106` for ruff.
+    "B105",
+    "B106",
 ]

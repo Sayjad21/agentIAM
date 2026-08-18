@@ -1,5 +1,6 @@
 """NL to Cedar Compiler module."""
 
+import hashlib
 import logging
 from decimal import Decimal
 from typing import Any
@@ -10,6 +11,18 @@ from agentiam_controlplane.nl_compiler.llm import LLMClient, client_from_env
 from agentiam_core.policy_testing import PolicyTestCase
 
 logger = logging.getLogger(__name__)
+
+#: A statement is user-authored English that may name individuals or amounts. Logging it
+#: verbatim leaks whatever the operator typed into their console (`ENGINEERING-RULES`
+#: rule 10, `PLAN.md` NFR-5). The digest is a correlation handle across the compile
+#: request, its evaluation, and the audit record — same shape as spec 10 §5.4's
+#: ``arg_digest`` for the same reason.
+_STATEMENT_DIGEST_BYTES = 8
+
+
+def _statement_digest(statement: str) -> str:
+    """A short, stable handle for a natural-language statement, suitable for logs."""
+    return hashlib.sha256(statement.encode("utf-8")).hexdigest()[: _STATEMENT_DIGEST_BYTES * 2]
 
 
 class CompilerTestCase(BaseModel):
@@ -171,7 +184,11 @@ async def compile_nl_to_policy(
     prompt = f"{_SYSTEM_PROMPT}\n\nREQUIREMENT:\n{nl_statement}\n"
     schema: dict[str, Any] = CompilerOutput.model_json_schema()
 
-    logger.info("Compiling NL statement to Cedar: %s", nl_statement)
+    logger.info(
+        "compiling NL statement (sha256[:16]=%s, length=%d)",
+        _statement_digest(nl_statement),
+        len(nl_statement),
+    )
     raw_output = await client.generate_structured(prompt=prompt, schema=schema)
 
     return CompilerOutput.model_validate(raw_output)

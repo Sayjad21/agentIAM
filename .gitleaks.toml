@@ -1,0 +1,53 @@
+# gitleaks configuration — T-054.
+#
+# Runs in `.github/workflows/ci.yml` (`security-scan` job) and in
+# `.pre-commit-config.yaml`. This file exists to name the false positives the codebase
+# already knows about, so a real leak is not lost in noise.
+#
+# Rule of thumb before adding a `stopwords` entry: it must be a *deliberate* constant
+# whose lexical form looks secret to a scanner. Anything that could actually leak a
+# secret goes back into the code, not into this file.
+
+title = "AgentIAM gitleaks config"
+
+# Start from the community default ruleset. Extending rather than replacing keeps every
+# provider heuristic (AWS, GCP, GitHub, Slack, Gemini, Groq, ...) live even when we add
+# suppressions.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented AgentIAM waivers — every entry names why it is safe."
+paths = [
+    # `.env.example` is tracked deliberately (`.gitignore` has `!.env.example`). It
+    # carries only placeholder values; a real key written here goes to the tree, which
+    # `CLAUDE.md` records as having happened once. `test_env_example_has_no_secret`
+    # (below) is what we lean on instead.
+    '''\.env\.example$''',
+    # Realm export ships two demo user ids and a *dev-only* client secret; the file's
+    # own comment says so, and every deployment overrides it.
+    '''deploy/keycloak/realm-export\.json$''',
+    # The Cursor session directory is gitignored, but a machine with a stale clone can
+    # still surface it to `gitleaks protect`.
+    '''\.cursor/''',
+    '''\.claude/''',
+    # This file itself uses example values for its rule tests.
+    '''\.gitleaks\.toml$''',
+]
+# Strings that are *lexically* secret-shaped but semantically safe. Keep the list
+# narrow: every entry is a place a future edit could hide a real leak.
+stopwords = [
+    # Reason codes from `PLAN.md` §6.9 (spec 09 §11). The closed enum's string values
+    # start with `TOKEN_` and would trip generic-secret heuristics.
+    "TOKEN_INVALID_SIGNATURE",
+    "TOKEN_EXPIRED",
+    "TOKEN_NOT_YET_VALID",
+    "TOKEN_TOO_LARGE",
+    "TOKEN_REVOKED",
+    "ANCESTOR_REVOKED",
+    # Dev-only defaults from `.env.example`. These are documented as placeholders;
+    # `test_env_example_has_no_secret` (in `tests/security/test_secret_scanning.py`)
+    # is what guarantees a real value never lands here.
+    "dev-change-me-session-secret",
+    "dev-console-secret-change-me",
+]

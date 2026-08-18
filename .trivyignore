@@ -1,0 +1,10 @@
+# trivy suppressions — T-054.
+#
+# Add one CVE per line, followed by a `# Reason:` comment stating why the finding does
+# not apply to AgentIAM (no reachable code path, upstream fix pending, or false
+# positive on a transitive dep we do not import). Every entry is a place a future
+# vulnerability could hide, so keep the list short and dated.
+#
+# Currently empty: the initial T-054 run of `trivy fs` produced no findings against
+# the pinned `uv.lock`. `pip-audit` and this scanner overlap; both are kept so a CVE
+# indexed in one database but not the other still fails CI.

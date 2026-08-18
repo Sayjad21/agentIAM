@@ -2677,3 +2677,118 @@ is safe because G4 makes a replay apply only what had not already applied, and i
 cheaper than tracking per-item state across retries. A very large `batch_max` would also
 hold the shared budget row's lock for longer in one go; the default of 64 is unchanged from
 when settlements were applied one at a time, and nothing has measured a better value.
+
+---
+
+## ADR-054 — T-054's log secret-scanner runs at two layers, and hashed digests replace natural-language statements
+
+**Date:** 2026-08-18
+**Status:** accepted
+**Affects:** `tests/security/test_secret_scanning.py` (new), `packages/agentiam-
+controlplane/src/agentiam_controlplane/nl_compiler/compiler.py`, `pyproject.toml`
+`[tool.bandit]`, `.gitleaks.toml`, `.trivyignore`, `.github/workflows/ci.yml`,
+`Makefile`, `scripts/generate_sbom.py`, `docs/evidence/security-scan.md`, `docs/
+evidence/sbom.json`; closes T-054.
+
+**Context:** `PLAN.md` line 1216 fixes T-054's acceptance criteria in one sentence —
+bandit, pip-audit, trivy, gitleaks clean or waived in CI, an SBOM, and *"secret-
+scanning test asserts no token, key, or PII in any log line at any log level."*
+Wiring the scanners is mechanical. The test is not: no single obvious mechanism
+covers every log line at every level, and the wrong mechanism reports "scanned"
+when nothing was actually looked at.
+
+Three shapes were on the table before writing:
+
+1. **Runtime capture only.** Attach a global logging handler, run the whole test
+   suite, and assert nothing matches the forbidden regexes. Would catch content but
+   only for log sites some test happens to drive — a code path the suite does not
+   exercise is invisible.
+2. **Static AST scan only.** Enumerate every `logger.<level>(...)` call site and
+   refuse forbidden variable names. Would catch shape but not content: a `%s` on a
+   safely-named `msg` variable that happens to be an exception's `.args[0]`
+   containing a URL with credentials would pass.
+3. **Grep the source tree.** Cheapest and worst — matches on strings the code never
+   actually formats, no way to prove reachability.
+
+**Decision 1 — both §1 and §2, deliberately.** `tests/security/test_secret_scanning.
+py` does an AST walk over every `.py` under `packages/` and refuses positional
+arguments whose variable names are in `FORBIDDEN_ARG_NAMES` (tokens, keys, session
+secrets, API keys, `nl_statement`, `prompt`, `body_bytes`, extractor `args`,
+tool-call `arguments`, ...). It also runs a directed `caplog` capture over the log
+sites the AST scan already accepts, and regex-scans the emitted records at every
+level for content — PEM headers, biscuit-shaped base64url (`{300,}` chars), 64-hex-
+char key material, e-mail addresses, JWT-shaped strings, Gemini `AIza...` and Groq
+`gsk_...` API-key shapes. Each layer is proven load-bearing by a detector self-test
+that plants a known-bad site and asserts the scanner fires, and by a companion
+that plants a known-safe site and asserts it does not — the same pattern
+`test_core_purity.py` uses for the I/O-free rule. `.env.example` gets its own
+deterministic guard (`test_env_example_carries_only_placeholders`) so a real
+value written to the tracked file fails before pre-commit rather than at review.
+
+**Decision 2 — bandit waivers are the ruff-`S`-rule twins, no new logical class.**
+`pyproject.toml` `[tool.bandit]` skips B101 (asserts under `-O`), B105 and B106
+(hardcoded-password heuristics on the `ReasonCode` enum and the test-container
+Postgres password). Every skip corresponds to an existing `# noqa: S101/S105/S106`
+in the codebase, and the config header names each one — dropping either waiver is a
+coordinated change, not a silent one. Inline `# nosec Bxxx` covers the four B603
+subprocess calls, B310 `urlopen` on a fixed URL, and one B404 subprocess import in
+`scripts/run_load_test.py` — every one has the same shape as its ruff twin: fixed
+argv, no shell, no caller-controlled scheme. `docs/evidence/security-scan.md`
+enumerates all eight `# nosec` sites with rationale; adding a ninth means adding a
+line to that document.
+
+**Decision 3 — SBOM produced by `cyclonedx-py --output-reproducible`, not by
+`pip-audit --format=cyclonedx-json`.** The first-cut pipeline used `pip-audit`
+because it was already in the CI job for the vuln scan, but its serializer emits
+random `bom-ref` values on every invocation. `docs/evidence/sbom.json` needs the
+committed-file-plus-`--check` pattern the chaos and performance evidence already
+use, and a serializer whose output varies run-to-run makes that pattern report
+false positives forever. `cyclonedx-py environment --output-reproducible` is
+deterministic by construction; `--sv 1.5` pins the schema; `sort_keys=True` on top
+of that gives a diff meaningful under `jq`. Cost: 136 components including the dev
+dependencies (bandit, pip-audit, cyclonedx-bom, testcontainers) that never ship to
+production. Accepted because the SBOM describes *the environment tests run in*,
+not a production image — production packaging is T-056, which will produce a
+second SBOM against the image contents when it lands.
+
+**The finding this ticket delivered by measurement:** on the AST scan's first
+production run, `nl_compiler/compiler.py:174` came back positive:
+
+```python
+logger.info("Compiling NL statement to Cedar: %s", nl_statement)
+```
+
+The operator's own console types the `nl_statement`; the beat-5 policy prompt in
+`docs/DEMO.md` explicitly names an individual (*"Only alice@example.com approves
+>5000 BDT"*) — an INFO log at that shape leaks PII by design. `threat-model.md`
+does not carry this as a threat, and `PLAN.md` §12's 33 adversarial attacks do not
+either, because there is no attacker: the leak is between a legitimate user and
+their own logs. Fixed in the same ticket, because the test that surfaced it is
+also the test that must not silently pass:
+
+```python
+logger.info(
+    "compiling NL statement (sha256[:16]=%s, length=%d)",
+    _statement_digest(nl_statement),
+    len(nl_statement),
+)
+```
+
+Same shape as spec 10 §5.4's `arg_digest`, and for the same reason: a correlation
+handle across the compile request, its evaluation, and the eventual audit record,
+carrying nothing evidentiary about the input. `test_compile_nl_to_policy_does_not_
+log_the_statement_verbatim` in `tests/unit/test_nl_compiler.py` pins the
+behaviour; the AST scanner refuses any future edit that names `nl_statement` or
+`prompt` as a positional log argument.
+
+**Consequences:** every log site in `packages/` is either shape-clean by the AST
+scanner or waived with a rationale in the file; nothing under `packages/` currently
+requires a waiver. Adding one requires an `ALLOWLIST` entry with a file, line, and
+rationale, so a code review sees the choice explicitly. The runtime layer's small
+directed scenarios exercise the *kinds* of formatting that could carry secret
+content the shape check cannot see (`%r` on an untrusted payload, `exc_info=True`
+on a library exception), and additional scenarios are additive rather than
+restructuring. Trivy and gitleaks run only in CI — both need binaries CI installs
+from action steps rather than uv-installable Python packages, so `make security`
+targets what is locally reproducible and the CI `security-scan` job is
+authoritative on the full set.

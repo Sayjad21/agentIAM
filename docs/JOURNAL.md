@@ -2392,6 +2392,83 @@ Full check clean: 32 new unit tests, 4 new integration tests against real Postgr
 Redis containers (36.25 s), `ruff`/`ruff format`/`mypy --strict` clean across both new
 files, and the existing 1956-test suite unaffected.
 
+### T-054 · Security scanning + SBOM, and the log leak the scanner found in shipped code
+
+`PLAN.md` line 1216 spells the acceptance criteria out flatly — bandit, pip-audit,
+trivy, gitleaks in CI (clean or with documented waivers), an SBOM, and *"secret-
+scanning test asserts no token, key, or PII in any log line at any log level."* Four
+scanners and a test. The scanners are wiring; the test is the deliverable.
+
+**The scanners went in first, because they cost nothing to run and set the bar for
+what the test can rely on.** Bandit against `packages/` and `scripts/` produced 19
+findings on its first run, all shape-matches on the codebase's own idioms: five B105
+hits on `ReasonCode.TOKEN_*` enum values (the closed enum from `PLAN.md` §6.9 that
+ruff already ignores via a per-file `S105` waiver), eight B101 asserts already
+annotated `# noqa: S101`, one B106 on the throwaway Postgres password in
+`run_load_test.py`, one B310 on a fixed-URL localhost health probe, one B404 subprocess
+import, and four B603 `subprocess.Popen` calls with fixed argv. Configured as `skips`
+in `[tool.bandit]` for the ruff-twinned ones (B101, B105, B106) and inline `# nosec
+Bxxx` for B310/B404/B603 — matching what ruff had already documented per line.
+`bandit -c pyproject.toml -r packages scripts` now reports **zero findings**.
+`pip-audit --strict` against the resolved `uv.lock` also reports zero. Trivy and
+gitleaks run in the CI job (they need binaries CI installs from action steps rather
+than uv-installable Python packages), configured against `.trivyignore` (currently
+empty) and `.gitleaks.toml` (allowlists the tracked `.env.example`, the demo Keycloak
+realm export, the `TOKEN_*` reason codes and the two dev-only placeholder secrets).
+
+**The SBOM was the finicky bit.** `pip-audit --format=cyclonedx-json` gave a first
+result but it emitted random `bom-ref` values on every invocation, which broke the
+`--check` mode the chaos and performance scripts already establish as the project's
+habit — the committed file would go stale visibly with every regen even when nothing
+had changed. Switched to `cyclonedx-py environment --output-reproducible`, which is
+deterministic by design. `docs/evidence/sbom.json` is now CycloneDX 1.5, 136
+components, and `python scripts/generate_sbom.py` in `--check` mode (default) exits
+non-zero if the venv drifts from what is committed. Same shape as `generate_chaos_
+results.py` and `generate_benchmark_results.py`; CI runs the same `--check`.
+
+**The test is where the ticket found something in shipped code.** Two layers, and each
+was worth building for a different reason. The static AST scan (`tests/security/
+test_secret_scanning.py`, §A) walks every `logger.<level>(...)` call site in
+`packages/**/*.py` — 25 sites, from `emitter.py`'s permanent-rejection error through
+`nl_compiler/llm.py`'s Gemini/Groq retry warnings — and refuses to pass a positional
+argument whose *variable name* is in a forbidden set (`token`, `private_key`,
+`nl_statement`, `body_bytes`, ...). The runtime `caplog` layer (§B) drives the shape-
+check-accepted sites and scans the emitted records at every level for forbidden
+*content* — PEM headers, biscuit-shaped tokens (`{300,}` base64url chars), 64-hex-char
+key material, e-mails, JWT-shaped triple-dot strings, Gemini and Groq API-key patterns.
+Detector self-tests on both sides — `test_a_planted_bad_log_call_fails_the_scanner`
+plants a `logger.info("token=%s", token)` in a scratch file and confirms it fires;
+`test_the_runtime_scanner_would_actually_catch_a_leak` plants a JWT-shaped string and
+confirms it fires — mirror the pattern `test_core_purity.py` established for
+`agentiam-core`'s I/O-free rule. A guard whose reachability is not proven can be
+silently disarmed by a refactor, and this test is a security guard.
+
+**The finding, on the first run:** `agentiam_controlplane.nl_compiler.compiler.
+compile_nl_to_policy` was logging the user's full natural-language statement verbatim
+at INFO. A policy like *"Only alice@example.com approves >5000 BDT"* — the shape
+`docs/DEMO.md` names as beat 5 — put an e-mail address into logs by design. Nothing in
+`threat-model.md` had this as a threat; nothing in the red-team suite would have
+caught it (the operator's own console typed it, not an adversary). Fixed by hashing
+the statement (`sha256[:16]`, matching `arg_digest`'s shape from spec 10 §5.4) and
+logging the raw length alongside. `test_compile_nl_to_policy_does_not_log_the_
+statement_verbatim` pins the fix behaviourally; the AST scanner refuses any future
+reintroduction of the pattern. **The static half saw it; the runtime half was written
+because the static half cannot see a library's exception-chain rendering.** Both
+layers are load-bearing.
+
+`.env.example` also gets its own deterministic guard (`test_env_example_carries_only_
+placeholders`) — the file is tracked deliberately (`.gitignore` has `!.env.example`),
+and `CLAUDE.md` records that a real key nearly landed there once before. Gitleaks
+allowlists the file wholesale; this test is the semantic half of that allowlist.
+
+Full check clean: 9 new tests (8 security + 1 unit), one product fix in
+`nl_compiler/compiler.py`, `pyproject.toml` grows three dev deps (bandit, pip-audit,
+cyclonedx-bom) and a `[tool.bandit]` section, one new CI job (`security-scan`), two
+new Makefile targets (`security`, `sbom`), the SBOM committed, and the existing
+2011-test suite unaffected. `make check` clean, `make security` clean, `bandit -c
+pyproject.toml -r packages scripts` reports zero issues with **8 `# nosec` suppressions
+each with a rationale in `docs/evidence/security-scan.md`**.
+
 ---
 
 ## What the numbers looked like at T-033

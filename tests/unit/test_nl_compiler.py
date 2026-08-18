@@ -97,6 +97,44 @@ def test_the_prompt_does_not_contain_any_evaluation_prompt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_compile_nl_to_policy_does_not_log_the_statement_verbatim(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The user's natural-language statement never lands in a log line — T-054, NFR-5.
+
+    A policy like *"Only alice@example.com approves >5000 BDT"* names an individual and
+    the operator's own console typed it. The log line must carry a stable handle
+    (sha256 digest, first 16 hex chars) plus the raw length, and nothing else —
+    ``ENGINEERING-RULES`` rule 10 forbids PII in logs, ``PLAN.md`` NFR-5 makes the
+    scanner in ``tests/security/test_secret_scanning.py`` the automation of that rule.
+    """
+    mock_response: dict[str, Any] = {
+        "clarifying_question": None,
+        "cedar_source": "permit(principal, action, resource);",
+        "tests": [
+            {
+                "name": "trivial",
+                "description": "a stub",
+                "expected": True,
+                "operation": "invoice:read",
+            }
+        ],
+    }
+    mock_client = AsyncMock(spec=OllamaClient)
+    mock_client.generate_structured.return_value = mock_response
+
+    statement = "Only alice@example.com may approve expenses over 5000 BDT."
+
+    with caplog.at_level("INFO", logger="agentiam_controlplane.nl_compiler.compiler"):
+        await compile_nl_to_policy(statement, client=mock_client)
+
+    combined = " ".join(record.getMessage() for record in caplog.records)
+    assert statement not in combined
+    assert "alice@example.com" not in combined
+    assert "sha256[:16]=" in combined
+
+
+@pytest.mark.asyncio
 async def test_compile_nl_to_policy_handles_ambiguity() -> None:
     """Ensure the compiler surfaces a clarifying question when the input is ambiguous."""
     mock_response: dict[str, Any] = {

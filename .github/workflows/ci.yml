@@ -181,6 +181,91 @@ jobs:
       - name: Check core purity
         run: uv run pytest tests/unit/test_core_purity.py -v
 
+  security-scan:
+    name: Security scanning + SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Runs on every push, PR, and nightly cron. `PLAN.md` T-054 asks for all four
+    # scanners `clean or waived`; waivers live in `docs/evidence/security-scan.md` and
+    # in the per-tool config files (`pyproject.toml [tool.bandit]`, `.gitleaks.toml`,
+    # `.trivyignore`). A dedicated job so a security finding is unmissable in the
+    # checks list rather than buried in the main test log.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs the whole history to scan every commit, not just HEAD.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync workspace
+        run: uv sync
+
+      # bandit — Python-code static analysis. Config in `pyproject.toml`
+      # `[tool.bandit]`; waivers are the ruff-`S`-rule twins already documented there
+      # and inline `# nosec Bxxx` in `scripts/run_load_test.py`.
+      - name: bandit
+        run: uv run bandit -c pyproject.toml -r packages scripts
+
+      # pip-audit — advisories against the resolved lock. Export `uv.lock` rather than
+      # scan the venv so `--disable-pip` is honest and CI does not depend on network
+      # calls from the installed environment.
+      - name: pip-audit
+        run: |
+          uv export --no-emit-workspace --no-editable --format=requirements-txt > /tmp/requirements.txt
+          uv run pip-audit --disable-pip -r /tmp/requirements.txt --strict
+
+      # SBOM — regenerated and asserted identical to the committed file. Same `--check`
+      # pattern the chaos results and performance benchmarks use, so a dependency bump
+      # that alters the SBOM fails visibly rather than drifting.
+      - name: SBOM up to date
+        run: uv run python scripts/generate_sbom.py
+
+      # gitleaks — history and staged/uncommitted scans. Config in `.gitleaks.toml`
+      # names the two documented waivers (dev-only placeholders in `.env.example` and
+      # the Keycloak realm export).
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      # trivy filesystem — CVE scan of the whole tree. Overlaps `pip-audit` on Python
+      # deps intentionally: a CVE indexed in Aqua's DB but not PyPA's still fails here.
+      # `--scanners misconfig,vuln,secret` runs the config and secret checks too, so
+      # this one step covers `docker-compose.yml`, GitHub Actions workflow syntax, and
+      # committed secret patterns as well as vulns. `.trivyignore` documents waivers.
+      - name: trivy fs
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: 1
+          severity: HIGH,CRITICAL
+          scanners: vuln,misconfig,secret
+          trivyignores: .trivyignore
+
+      # Deterministic surface: the log secret-scanning test T-054 requires. Marked
+      # `security`, and `make check` excludes that marker, so this job is where it
+      # runs by default.
+      - name: Log secret-scanning test
+        run: uv run pytest tests/security/test_secret_scanning.py -v
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: docs/evidence/sbom.json
+          if-no-files-found: ignore
+
   infrastructure:
     name: Compose reaches healthy
     runs-on: ubuntu-latest
