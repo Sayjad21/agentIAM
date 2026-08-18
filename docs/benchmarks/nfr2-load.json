@@ -1,0 +1,239 @@
+{
+  "measured_at": "2026-08-18T14:51:07.250221+00:00",
+  "nfr2_budget_ms": 8.0,
+  "note": "Three tiers measured at *every* rate, over the same loopback transport, so each subtraction compares like with like. (1) the stub upstream alone; (2) the same request through the PEP in T-018 transport mode with no pipeline attached; (3) through the enforcing PEP. (2)-(1) is what a proxy hop costs on this host and is not AgentIAM's doing; (3)-(2) is what authorization costs and is the number T-053 is actually about. Measuring the tiers at one fixed rate and the profiles at another produced negative overheads on the first run \u2014 the baseline was saturated and the profile was not. Latency is `service_ms` (send to response); `scheduled_ms` is the coordinated-omission-aware figure and `generator_lag_ms` says how far the generator itself fell behind, quoted so a reader can judge whether the run measured the server or the harness. `achieved_rps` matters as much as any latency here: where it falls far short of the target, the host could not offer the load and every latency in that row is a queueing artefact. None of this is NFR-1, the in-process decision, which is measured separately in tests/perf/test_pipeline_breakdown.py.",
+  "profiles": [
+    {
+      "target_rps": 100,
+      "saturated": false,
+      "tiers": {
+        "upstream_only": {
+          "target_rps": 100,
+          "achieved_rps": 99.4,
+          "sent": 1500,
+          "ok": 1500,
+          "duration_s": 15.09,
+          "statuses": {
+            "200": 1500
+          },
+          "errors": [],
+          "service_ms": {
+            "p50": 4.535,
+            "p95": 8.201,
+            "p99": 15.112,
+            "max": 43.239,
+            "median": 4.535
+          },
+          "scheduled_ms": {
+            "p50": 8.774,
+            "p95": 18.579,
+            "p99": 25.745,
+            "max": 49.421,
+            "median": 8.775
+          },
+          "generator_lag_ms": {
+            "p50": 4.067,
+            "p95": 11.801,
+            "p99": 14.672,
+            "max": 31.652,
+            "median": 4.069
+          }
+        },
+        "proxy_no_enforcement": {
+          "target_rps": 100,
+          "achieved_rps": 99.4,
+          "sent": 1500,
+          "ok": 1500,
+          "duration_s": 15.09,
+          "statuses": {
+            "200": 1500
+          },
+          "errors": [],
+          "service_ms": {
+            "p50": 7.309,
+            "p95": 16.975,
+            "p99": 28.435,
+            "max": 63.988,
+            "median": 7.311
+          },
+          "scheduled_ms": {
+            "p50": 10.868,
+            "p95": 26.434,
+            "p99": 37.434,
+            "max": 65.155,
+            "median": 10.872
+          },
+          "generator_lag_ms": {
+            "p50": 2.661,
+            "p95": 14.196,
+            "p99": 15.55,
+            "max": 16.102,
+            "median": 2.666
+          }
+        },
+        "enforcing_pep": {
+          "target_rps": 100,
+          "achieved_rps": 99.2,
+          "sent": 1500,
+          "ok": 1500,
+          "duration_s": 15.12,
+          "statuses": {
+            "200": 1500
+          },
+          "errors": [],
+          "service_ms": {
+            "p50": 8.5,
+            "p95": 24.729,
+            "p99": 60.899,
+            "max": 152.7,
+            "median": 8.509
+          },
+          "scheduled_ms": {
+            "p50": 13.162,
+            "p95": 31.475,
+            "p99": 67.631,
+            "max": 167.901,
+            "median": 13.163
+          },
+          "generator_lag_ms": {
+            "p50": 2.686,
+            "p95": 13.428,
+            "p99": 15.562,
+            "max": 41.044,
+            "median": 2.687
+          }
+        }
+      },
+      "proxy_hop_ms": {
+        "p50": 2.774,
+        "p99": 13.323
+      },
+      "enforcement_overhead_ms": {
+        "p50": 1.191,
+        "p99": 32.464
+      },
+      "total_overhead_ms": {
+        "p50": 3.965,
+        "p99": 45.787
+      },
+      "meets_nfr2_total": false,
+      "meets_nfr2_enforcement": false
+    },
+    {
+      "target_rps": 500,
+      "saturated": true,
+      "tiers": {
+        "upstream_only": {
+          "target_rps": 500,
+          "achieved_rps": 136.9,
+          "sent": 7500,
+          "ok": 7500,
+          "duration_s": 54.77,
+          "statuses": {
+            "200": 7500
+          },
+          "errors": [],
+          "service_ms": {
+            "p50": 328.794,
+            "p95": 1333.726,
+            "p99": 2006.72,
+            "max": 4992.878,
+            "median": 328.86
+          },
+          "scheduled_ms": {
+            "p50": 20747.841,
+            "p95": 37900.05,
+            "p99": 39383.353,
+            "max": 40379.138,
+            "median": 20754.938
+          },
+          "generator_lag_ms": {
+            "p50": 20338.222,
+            "p95": 37430.361,
+            "p99": 38867.274,
+            "max": 39339.002,
+            "median": 20338.404
+          }
+        },
+        "proxy_no_enforcement": {
+          "target_rps": 500,
+          "achieved_rps": 124.5,
+          "sent": 7500,
+          "ok": 7500,
+          "duration_s": 60.22,
+          "statuses": {
+            "200": 7500
+          },
+          "errors": [],
+          "service_ms": {
+            "p50": 363.921,
+            "p95": 1465.759,
+            "p99": 2175.099,
+            "max": 3830.026,
+            "median": 364.009
+          },
+          "scheduled_ms": {
+            "p50": 22507.778,
+            "p95": 43070.588,
+            "p99": 44839.127,
+            "max": 45557.345,
+            "median": 22511.069
+          },
+          "generator_lag_ms": {
+            "p50": 22024.601,
+            "p95": 42563.028,
+            "p99": 44273.038,
+            "max": 44763.651,
+            "median": 22036.851
+          }
+        },
+        "enforcing_pep": {
+          "target_rps": 500,
+          "achieved_rps": 115.2,
+          "sent": 7500,
+          "ok": 7500,
+          "duration_s": 65.11,
+          "statuses": {
+            "200": 7500
+          },
+          "errors": [],
+          "service_ms": {
+            "p50": 389.043,
+            "p95": 1615.778,
+            "p99": 2326.181,
+            "max": 4218.105,
+            "median": 389.075
+          },
+          "scheduled_ms": {
+            "p50": 24239.495,
+            "p95": 47348.413,
+            "p99": 49624.797,
+            "max": 50285.498,
+            "median": 24241.095
+          },
+          "generator_lag_ms": {
+            "p50": 23638.986,
+            "p95": 46824.996,
+            "p99": 48907.774,
+            "max": 49589.708,
+            "median": 23644.465
+          }
+        }
+      },
+      "proxy_hop_ms": {
+        "p50": 35.127,
+        "p99": 168.379
+      },
+      "enforcement_overhead_ms": {
+        "p50": 25.122,
+        "p99": 151.082
+      },
+      "total_overhead_ms": {
+        "p50": 60.249,
+        "p99": 319.461
+      },
+      "meets_nfr2_total": false,
+      "meets_nfr2_enforcement": false
+    }
+  ]
+}
