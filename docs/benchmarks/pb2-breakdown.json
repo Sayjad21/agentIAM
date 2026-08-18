@@ -1,0 +1,30 @@
+{
+  "measured_at": "2026-08-18T14:23:44.468758+00:00",
+  "unit": "microseconds",
+  "steps": {
+    "caveats": {
+      "p99_us": 8.8,
+      "median_us": 3.7
+    },
+    "decide_total": {
+      "p99_us": 278.8,
+      "median_us": 144.6
+    },
+    "extract": {
+      "p99_us": 55.5,
+      "median_us": 19.1
+    },
+    "policy": {
+      "p99_us": 381.0,
+      "median_us": 138.0
+    },
+    "record_hash": {
+      "p99_us": 83.0,
+      "median_us": 16.3
+    },
+    "verify": {
+      "p99_us": 482.0,
+      "median_us": 209.4
+    }
+  }
+}
