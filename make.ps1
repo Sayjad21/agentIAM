@@ -18,7 +18,7 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'install', 'up', 'down', 'logs', 'ps', 'test', 'test-unit',
                  'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt', 'typecheck', 'check',
-                 'bench', 'cov',
+                 'bench', 'cov', 'security', 'sbom', 'evidence',
                  'clean', 'nuke')]
     [string]$Target = 'help'
 )
@@ -59,6 +59,9 @@ switch ($Target) {
             'check'            = 'Everything CI runs'
             'bench'            = 'Run benchmarks (PLAN.md §13.1, NFR-1)'
             'cov'              = 'Run tests with a coverage report'
+            'security'         = 'Run bandit, pip-audit, the SBOM check, and the secret-scan test'
+            'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
+            'evidence'         = 'Regenerate docs/evidence/evidence-pack.html (T-055)'
             'clean'            = 'Remove caches and build artifacts'
             'nuke'             = 'Stop infrastructure and delete its volumes (destroys local data)'
         }).GetEnumerator() | ForEach-Object {
@@ -117,6 +120,22 @@ switch ($Target) {
         Invoke-Step @('uv', 'run', 'pytest', '--cov',
                       '--cov-report=term-missing', '--cov-report=html')
     }
+    'security' {
+        # Mirrors the Makefile step for step. The one difference forced by the platform:
+        # the Makefile pipes `uv export` to `/tmp/agentiam-requirements.txt`, which does
+        # not exist on Windows — `$env:TEMP` is the native equivalent, same file format,
+        # same downstream `pip-audit` call.
+        Invoke-Step @('uv', 'run', 'bandit', '-c', 'pyproject.toml', '-r', 'packages', 'scripts')
+        $reqFile = Join-Path $env:TEMP 'agentiam-requirements.txt'
+        & uv export --no-emit-workspace --no-editable --format=requirements-txt |
+            Out-File -FilePath $reqFile -Encoding utf8
+        if ($LASTEXITCODE -ne 0) { throw "'uv export' failed with exit code $LASTEXITCODE" }
+        Invoke-Step @('uv', 'run', 'pip-audit', '--disable-pip', '-r', $reqFile, '--strict')
+        Invoke-Step @('uv', 'run', 'python', 'scripts/generate_sbom.py')
+        Invoke-Step @('uv', 'run', 'pytest', 'tests/security/test_secret_scanning.py')
+    }
+    'sbom' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_sbom.py', '--write') }
+    'evidence' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_evidence_pack.py') }
     'clean' {
         @('.pytest_cache', '.mypy_cache', '.ruff_cache', '.hypothesis',
           'htmlcov', '.coverage', 'dist', 'build') | ForEach-Object {

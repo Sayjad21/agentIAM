@@ -181,6 +181,40 @@ jobs:
       - name: Check core purity
         run: uv run pytest tests/unit/test_core_purity.py -v
 
+  evidence-pack:
+    name: Evidence pack matches its sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync workspace
+        run: uv sync
+
+      # T-055. Needs no live infrastructure — it folds already-committed sources
+      # (chaos/benchmark JSON, security-scan.md, threat-model.md, sbom.json), the same
+      # `--check` pattern as chaos-results.md / performance.md / sbom.json. Its own test
+      # suite runs in the `quality` job with everything else under `tests/unit/`; this
+      # job is only the drift check against the committed HTML file.
+      - name: Evidence pack up to date
+        run: uv run python scripts/generate_evidence_pack.py --check
+
+      - name: Upload evidence pack
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-pack
+          path: docs/evidence/evidence-pack.html
+          if-no-files-found: ignore
+
   security-scan:
     name: Security scanning + SBOM
     runs-on: ubuntu-latest
@@ -242,7 +276,7 @@ jobs:
       # this one step covers `docker-compose.yml`, GitHub Actions workflow syntax, and
       # committed secret patterns as well as vulns. `.trivyignore` documents waivers.
       - name: trivy fs
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           scan-type: fs
           scan-ref: .

@@ -20,25 +20,25 @@ No averages appear below. Every figure is a percentile or a median, per `PLAN.md
 
 ## NFR-1 — the authorization decision, in process
 
-Budget: **p99 < 1 ms**. Measured 2026-08-18T14:58:32.111067+00:00.
+Budget: **p99 < 1 ms**. Measured 2026-08-18T15:59:52.635510+00:00.
 
 Every step is the real implementation: a real biscuit chain, the real Cedar engine, real Datalog evaluation. The ledger and the audit sink are absent because they are off the hot path by construction — including them would measure the thing the design removed.
 
 | Step | median µs | p99 µs |
 |---|---|---|
-| step 1 — extract (route, args, digest) | 20.3 | 55.0 |
-| step 2 — verify (biscuit signature) | 212.5 | 415.7 |
-| step 4 — caveats (4 clauses, Datalog) | 3.6 | 8.7 |
-| step 5 — policy (Cedar) | 143.1 | 298.2 |
-| step 10 — audit record hash | 16.1 | 58.5 |
-| **`decide()` total — NFR-1** | 151.1 | 373.7 |
+| step 1 — extract (route, args, digest) | 19.8 | 58.3 |
+| step 2 — verify (biscuit signature) | 221.2 | 417.0 |
+| step 4 — caveats (4 clauses, Datalog) | 3.6 | 9.8 |
+| step 5 — policy (Cedar) | 135.3 | 307.3 |
+| step 10 — audit record hash | 16.0 | 58.4 |
+| **`decide()` total — NFR-1** | 151.3 | 350.0 |
 
-**NFR-1 holds**: `decide()` p99 is 373.7 µs against a 1000 µs budget, and `PLAN.md` §17's R-2 trigger (2 ms, port to Rust) is not approached.
+**NFR-1 holds**: `decide()` p99 is 350.0 µs against a 1000 µs budget, and `PLAN.md` §17's R-2 trigger (2 ms, port to Rust) is not approached.
 
 Two things the breakdown says that a single number cannot:
 
-- **Policy evaluation is nearly the whole decision** — 143.1 µs of a 151.1 µs median. Everything else inside `decide()` is single-digit microseconds.
-- **`verify()` is the most expensive step and sits *outside* `decide()`** at 212.5 µs median. Per-request in-process cost is verify + decide + extract, so roughly 384 µs — that, not NFR-1 alone, is what bounds throughput.
+- **Policy evaluation is nearly the whole decision** — 135.3 µs of a 151.3 µs median. Everything else inside `decide()` is single-digit microseconds.
+- **`verify()` is the most expensive step and sits *outside* `decide()`** at 221.2 µs median. Per-request in-process cost is verify + decide + extract, so roughly 392 µs — that, not NFR-1 alone, is what bounds throughput.
 
 > An earlier figure of **~5 µs** was published for NFR-1 in `STATUS.md` and the T-019 commit. It is a real measurement of `decide()` with `FakePolicy`, a stub that returns one fixed verdict, and it therefore excludes the most expensive thing in the path. It is superseded here. `tests/unit/test_decision.py::TestNfr1` still measures the stubbed path and is still useful — it isolates everything *except* policy — but the number to quote is the one above.
 

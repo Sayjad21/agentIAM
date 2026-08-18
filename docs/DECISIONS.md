@@ -2792,3 +2792,137 @@ restructuring. Trivy and gitleaks run only in CI — both need binaries CI insta
 from action steps rather than uv-installable Python packages, so `make security`
 targets what is locally reproducible and the CI `security-scan` job is
 authoritative on the full set.
+
+---
+
+## ADR-055 — T-055's evidence pack: HTML over PDF, folding over re-deriving, and
+## two gaps found while building it that belong to earlier tickets
+
+**Date:** 2026-08-19
+**Status:** accepted
+**Affects:** `scripts/generate_evidence_pack.py`, `Makefile`, `make.ps1`,
+`.github/workflows/ci.yml`, `docs/benchmarks/performance.md`, `docs/STATUS.md`, T-055
+
+**Context:** `PLAN.md` T-055 asks for "a single PDF/HTML bundle containing architecture
+diagrams, benchmark tables, chaos results, red-team results, the drift model card, the
+audit-chain verification transcript, and the coverage report." `STATUS.md`'s own scoped
+description narrows this to "one command that folds `chaos-results.md`, `performance.md`,
+`security-scan.md`, and the SBOM into a single submission artifact." Several decisions had
+no single obviously-correct answer.
+
+**1. HTML, not PDF.** `PLAN.md` names both, joined by "/", so either satisfies the letter.
+Every PDF library available without a paid service pulls in something this project does not
+otherwise need: `weasyprint` needs Cairo/Pango system packages (a real cross-platform
+liability on exactly the two hosts, Linux and Windows, this project targets);
+`reportlab`/`fpdf2` avoid the native toolchain but are still a new dependency requiring an
+ADR under rule 7, for a document a browser can already print to PDF with no code at all.
+`scripts/generate_evidence_pack.py` therefore needs nothing beyond the standard library and
+its two sibling generator modules — no new entry in `pyproject.toml`.
+
+**2. Folding, not re-deriving.** `chaos-results.md` and `performance.md` are `render()`ed
+by importing `generate_chaos_results` / `generate_benchmark_results` directly and calling
+their existing functions, rather than re-implementing table rendering a second time against
+the same JSON. `security-scan.md` and `threat-model.md` are read and embedded verbatim
+(escaped, inside `<pre>`). None of these four can drift from the document they summarize,
+because they *are* that document, byte for byte, inside a `<pre>` tag.
+
+The formal invariants table, the PB-1..PB-12 coverage table, and the A-01..A-33 red-team
+table have no committed machine-readable source — they summarize prose spread across
+`docs/specs/03-attenuation.md`, `PLAN.md` §13.1 and §12. These are hardcoded as literal
+Python data, the same way `generate_chaos_results.SCENARIOS` already hardcodes `PLAN.md`
+§13.2's twelve scenarios: a transcription, not a derivation, and
+`tests/unit/test_generate_evidence_pack.py` checks specific values in it against
+independently-known facts (e.g. that INV-5 cites `P-10`, that INV-4 cites no property test
+at all since spec 03 §6's own table gives it none, that the three accepted-risk red-team
+rows match `threat-model.md` §7's three accepted risks) rather than only checking the data
+structure against itself.
+
+**3. No fabrication where `PLAN.md` §14.1 asks for something not actually built.** The
+drift model card (T-034/T-035 deferred), a `mutmut` report (`STATUS.md` gap 4, never run),
+a live audit-tamper transcript (would need a real database this generator does not assume),
+and OSS traction (pre-release, T-061 reduced) each get a section that says so plainly, with
+a citation to what *is* measured or proven instead, rather than an empty table or an
+invented number. Rule 9's spirit extended past tests: a missing measurement reported as
+missing is honest; a missing measurement papered over is not.
+
+**4. A thirteenth section beyond `PLAN.md` §14.1's twelve.** `security-scan.md` folds in
+with its own numbered section (6, before the red-team table) even though §14.1's list has
+no dedicated "security scanning" line — item 8 is "coverage + mutation-testing report,"
+which is a different thing. `security-scan.md`'s own header states plainly that it exists
+*because* the evidence pack has to carry it ("The submission's evidence pack (`PLAN.md`
+§14) has to carry a security-scan result and an SBOM"), and `STATUS.md`'s narrower T-055
+description names it explicitly. Omitting it to keep the section count at exactly twelve
+would satisfy the letter of one document and contradict two others.
+
+**5. `sys.path` bootstrap — a real bug, not a defensive guess.** This is the first script
+under `scripts/` to import a sibling module (`generate_benchmark_results`,
+`generate_chaos_results`) rather than only `agentiam_*` packages. `python
+scripts/generate_evidence_pack.py`, run as a plain subprocess, failed with
+`ModuleNotFoundError: No module named 'scripts'` on the first real invocation — pytest's own
+`pythonpath = ["."]` config is what makes the same import work under the test suite, and
+that config has no effect on a bare interpreter invocation. Fixed by inserting the repo root
+into `sys.path` before the import, guarded so it is a no-op under pytest.
+`TestRunsFromAnyWorkingDirectory` in the test file exercises this as a real subprocess from
+an unrelated directory, per this project's standing rule that a guard never seen to fire is
+not a guard — the bug was found once by hand and is now pinned so it cannot silently return.
+
+**6. Byte-exact `--check`, because the file is compared across platforms.** `Path.write_text`
+and `Path.read_text` translate line endings to the platform default unless told not to —
+`write_text` since Python 3.10 accepts `newline="\n"`; `read_text` gained a `newline`
+parameter only in Python 3.13, which this project (`>=3.12,<3.13`) does not have, so the
+`--check` read goes through `Path.open(..., newline="")` instead. Without both fixes, a
+committed file written on Windows (CRLF) would read back as LF under Python's universal-
+newline default and compare *equal* to a freshly rendered one — `--check` would pass on a
+file whose actual bytes are not what this script produces. Pinned by
+`TestLineEndingsAreStableAcrossPlatforms`, which writes a deliberately CRLF copy of the
+correct content and asserts `--check` rejects it.
+
+**7. `make.ps1` gains `security`, `sbom` and `evidence` — the first two close a gap T-054
+left, not one T-055 introduced.** `ADR-003` states the rule plainly: "the shim is a
+convenience wrapper only... a target added to one and not the other is a real, if small,
+drift risk." T-054 added `security:` and `sbom:` to the `Makefile` and never mirrored
+either into `make.ps1` — confirmed by grep, not assumed. Given this ticket's explicit
+brief (both platforms, zero scope for error) and that the fix is small and mechanical, all
+three land here rather than leaving two of them as a known gap to trip over later. The one
+platform-forced difference: the Makefile's `security` target redirects `uv export` to
+`/tmp/agentiam-requirements.txt`, which does not exist on Windows — the shim uses
+`$env:TEMP` instead, same file format, same downstream `pip-audit` call. Not verified by
+executing PowerShell (none was available on the machine this ticket was built on, and
+installing one meant adding a new package repository for a syntax check alone); written
+to match every existing pattern already proven correct elsewhere in the same file, and
+called out here rather than presented as verified when it was not.
+
+**8. `docs/benchmarks/performance.md` was stale at HEAD, found while folding it, fixed
+because the fix is safe and left otherwise alone.** `generate_benchmark_results.py --check`
+reported the committed file did not match its own already-committed source
+(`pb2-breakdown.json`) — confirmed via `git diff --stat HEAD`, which showed the working
+tree already matched HEAD exactly, so this predates this ticket and was not introduced by
+it. Root cause: `generate_benchmark_results.py` is referenced by no CI job, no Makefile
+target, and no `make.ps1` target — grepped for it in all three, zero hits — so nothing
+regenerates or checks it after `pb2-breakdown.json` changes, unlike `chaos-results.md`
+(wired into `make chaos` and a nightly CI job). Re-running the existing, already-tested
+generator against the already-committed JSON is safe and mechanical — it invokes no new
+benchmark and touches no source of truth, only re-renders text from static files — so it is
+fixed here rather than left stale while this ticket's own evidence pack embeds it.
+
+**What is deliberately *not* fixed here: a CI `--check` gate for `performance.md`.**
+Chaos's `--check` step works inside a job that regenerates the JSON in the same run;
+`performance.md`'s PB-2 numbers are raw microsecond timings that vary run to run by design
+(compare two real runs in this repository's own history: policy step median 143.1 µs vs
+135.3 µs, a few seconds apart, same machine, same code) — a naive byte-exact `--check`
+wired into CI would fail on ordinary timing noise, not on an actual regression, the first
+time CI re-ran the benchmark and re-checked in the same job. Deciding the right shape for
+that check — a tolerance band, a check against structure rather than values, or something
+else — is a design question that belongs to whoever owns `performance.md`'s generation
+(T-053), not a drive-by decision inside an evidence-pack ticket. Recorded as a new gap in
+`docs/STATUS.md` §3 rather than silently left for the next person to rediscover.
+
+**Consequences.** `docs/evidence/evidence-pack.html` (~90 KB, single file, no network
+reference of any kind — checked by `TestRenderShape`) is generated and committed, verified
+by `--check` in a new CI job (`evidence-pack`) that needs no live infrastructure since every
+source it folds is already committed. `make evidence` / `.\make.ps1 evidence` regenerate it.
+34 tests in `tests/unit/test_generate_evidence_pack.py`. Two pre-existing, unrelated gaps
+were found and are tracked rather than silently absorbed: `make.ps1` previously missing
+`security`/`sbom` (closed here), and `performance.md` having no CI drift-check at all
+(left open, `STATUS.md` §3, because closing it correctly is a T-053-shaped decision this
+ticket should not make unilaterally).
