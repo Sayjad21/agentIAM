@@ -3422,3 +3422,58 @@ environment in a container and read a real diff. That is the more reliable order
 operations whenever "local" and "CI" can structurally diverge (a different OS, a
 different venv history, a different checkout path), not only after a first fix attempt
 has already failed once.
+
+### Addendum — Part 7: `deploy/k3s/` had never actually been scanned by `trivy fs`
+
+**Date:** 2026-08-19
+**Affects:** every container in `deploy/k3s/` (ADR-056), `tests/unit/test_k3s_manifests.py`
+
+**The `security-scan` job runs `bandit`, `pip-audit`, the SBOM `--check`, `gitleaks`, then
+`trivy fs`, in that order, and a step failure stops the job by default.** The SBOM step
+had been failing since T-054's own commit (Part 5/6 above), which means `trivy fs` —
+added in that same commit, T-054 — had **never once reached the point of scanning
+anything** in a real CI run before Part 6's fix let the job proceed past the SBOM step for
+the first time. `deploy/k3s/` did not exist yet when T-054 shipped, so this is not "a
+check regressed" — it is a check meeting manifests written under T-056 Part 3 for the
+first time, immediately, and finding something real.
+
+**`trivy fs`'s Kubernetes misconfiguration scanner (`ksv014`) flagged all 9 containers
+across `deploy/k3s/` for not setting `securityContext.readOnlyRootFilesystem: true`.**
+Reproduced locally rather than iterated against CI a third time: `docker run
+ghcr.io/aquasecurity/trivy:0.53.0` — the exact version `aquasecurity/trivy-action@v0.24.0`
+pins (`Dockerfile: FROM ghcr.io/aquasecurity/trivy:0.53.0`, checked rather than assumed,
+since a newer local `trivy:latest` gave a different, larger finding count against a newer
+checks bundle and was not representative of what CI actually runs). This is a legitimate
+hardening recommendation, not a false positive, for a project whose whole premise is
+authorization and money-safety — fixed by setting it on every container rather than
+waiving it, the same posture the project already takes toward genuine findings (T-054's
+`nl_compiler` log leak) over documented exceptions.
+
+**Two containers needed real work, not just the flag.** `agentiam:latest`'s six
+containers (Python apps, no local disk writes in this codebase's own code paths) took the
+setting with no other change. `postgres:16-alpine` and `redis:7-alpine` did not start
+under it without additional `emptyDir` mounts — confirmed by actually deploying to the
+real `kind` cluster rather than assumed from general Kubernetes knowledge:
+- **postgres** needs `/var/run/postgresql` (its unix socket and startup lockfile) and
+  `/tmp` (sorts/temp files) writable independent of the already-mounted PVC at
+  `/var/lib/postgresql/data`.
+- **redis** needs `/tmp` writable independent of the already-mounted PVC at `/data`.
+
+**Verified past "the pod is Running" into real reads and writes**, the same standard T-056
+Part 3's original live verification set: `select count(*) from budgets` against the
+now-read-only-root postgres, a real `SET`/`GET` against the now-read-only-root redis, and
+the same `controlplane`/`pep` `/readyz`/`/healthz` and unauthenticated-proxy-401 checks as
+before — all passing with the security hardening in place, not merely with it removed to
+get something running. `trivy fs` re-run locally against the fixed manifests: clean, exit
+0. `tests/unit/test_k3s_manifests.py` gained
+`TestImages::test_every_container_sets_read_only_root_filesystem` so a future container
+added without the setting fails a fast local test instead of only being caught by `trivy`
+reaching that far in CI again.
+
+**Consequence for the "confirm CI" habit two addenda above**: this is the third distinct,
+real, previously-hidden defect this one push's CI failure surfaced (the SBOM ordering bug,
+the SBOM checkout-path/OS-metadata bug, and now this) — none of them found by reading a
+step's name, all of them found by either reproducing the exact CI environment or, here,
+running the exact pinned tool version against the exact manifests. `security-scan` failing
+silently for three tickets did not just hide one bug; it hid a whole scanning pass that had
+never executed.

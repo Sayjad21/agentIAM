@@ -30,6 +30,8 @@ spec:
         - name: wait-for-migration
           image: agentiam:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            readOnlyRootFilesystem: true
           command:
             - python3
             - -c
@@ -63,6 +65,8 @@ spec:
           image: agentiam:latest
           imagePullPolicy: IfNotPresent
           command: ["python", "scripts/pep_service.py", "--host", "0.0.0.0", "--port", "8080"]
+          securityContext:
+            readOnlyRootFilesystem: true
           ports:
             - containerPort: 8080
           env:

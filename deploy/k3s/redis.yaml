@@ -24,9 +24,16 @@ spec:
           command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
           ports:
             - containerPort: 6379
+          securityContext:
+            readOnlyRootFilesystem: true
           volumeMounts:
             - name: data
               mountPath: /data
+            # redis needs somewhere writable beyond `data` even with `--dir` unset
+            # (defaults to the image's own working directory) — live-verified against
+            # a real kind cluster with a real SET/GET, not just a healthy pod status.
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             exec:
               command: ["redis-cli", "ping"]
@@ -41,6 +48,8 @@ spec:
             requests: { cpu: 50m, memory: 64Mi }
             limits: { cpu: 250m, memory: 256Mi }
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: redis-data

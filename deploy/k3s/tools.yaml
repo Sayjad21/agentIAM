@@ -19,6 +19,8 @@ spec:
           image: agentiam:latest
           imagePullPolicy: IfNotPresent
           command: ["python", "scripts/serve_tools.py", "--host", "0.0.0.0", "--port", "8081"]
+          securityContext:
+            readOnlyRootFilesystem: true
           ports:
             - containerPort: 8081
           readinessProbe:

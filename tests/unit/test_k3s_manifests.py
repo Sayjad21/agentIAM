@@ -108,6 +108,23 @@ class TestImages:
                     f"{doc['metadata']['name']}/{container['name']}"
                 )
 
+    def test_every_container_sets_read_only_root_filesystem(self) -> None:
+        # trivy's `ksv014` check (security-scan CI job) — found this only after fixing
+        # an unrelated SBOM bug let the job reach the trivy step for the first time ever,
+        # not by reading the check list. postgres/redis needed real `emptyDir` mounts
+        # added (`/var/run/postgresql` + `/tmp`, `/tmp` respectively) before this held;
+        # live-verified against a real kind cluster with real reads/writes, not just a
+        # healthy pod status — see postgres.yaml/redis.yaml's own comments.
+        for doc in _all_docs():
+            if doc.get("kind") not in ("Deployment", "Job"):
+                continue
+            spec = doc["spec"]["template"]["spec"]
+            for container in spec.get("containers", []) + spec.get("initContainers", []):
+                security_context = container.get("securityContext", {})
+                assert security_context.get("readOnlyRootFilesystem") is True, (
+                    f"{doc['metadata']['name']}/{container['name']}"
+                )
+
 
 class TestMigrateJob:
     def test_it_runs_alembic_upgrade_head_from_the_right_working_directory(self) -> None:

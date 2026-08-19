@@ -26,6 +26,8 @@ spec:
         - name: wait-for-postgres
           image: agentiam:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            readOnlyRootFilesystem: true
           command:
             - python3
             - -c
@@ -45,6 +47,8 @@ spec:
           imagePullPolicy: IfNotPresent
           workingDir: /app/packages/agentiam-controlplane
           command: ["alembic", "upgrade", "head"]
+          securityContext:
+            readOnlyRootFilesystem: true
           env:
             - name: DATABASE_URL
               value: postgresql+asyncpg://agentiam:agentiam@postgres:5432/agentiam

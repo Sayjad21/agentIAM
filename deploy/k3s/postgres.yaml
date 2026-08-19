@@ -33,9 +33,20 @@ spec:
               value: "--encoding=UTF8 --locale=C"
           ports:
             - containerPort: 5432
+          securityContext:
+            readOnlyRootFilesystem: true
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            # postgres writes its unix socket and startup lockfile here, and uses /tmp
+            # for sorts/temp files independent of the data directory — both need to be
+            # writable even though `data` above already covers the actual database
+            # files. Live-verified against a real kind cluster with real reads/writes
+            # (`select count(*) from budgets`), not just a healthy pod status.
+            - name: run-postgresql
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "agentiam", "-d", "agentiam"]
@@ -50,6 +61,10 @@ spec:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 512Mi }
       volumes:
+        - name: run-postgresql
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: postgres-data
