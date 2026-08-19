@@ -359,8 +359,8 @@ jobs:
       - name: The PEP enforces for real
         run: |
           curl -sf http://localhost:8000/readyz
-          curl -sf http://localhost:8080/readyz | grep -q '"enforcing":true'
-          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/proxy/invoices/inv-1)
+          curl -sf http://localhost:8082/readyz | grep -q '"enforcing":true'
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8082/proxy/invoices/inv-1)
           test "$status" = "401"
 
       - name: Tear down

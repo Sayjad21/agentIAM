@@ -3288,3 +3288,69 @@ procedure (Part 4) — against `PLAN.md`'s stated T-056 acceptance criteria in f
 thing this ticket's own final pass could not close is new, not old: gap 27, found by the
 same habit this project has applied to every other ticket, applied here to this project's
 own prior claim about itself.
+
+### Addendum — Part 5: two bugs a merged, "verified live" ticket still shipped with
+
+**Date:** 2026-08-19
+**Affects:** `scripts/generate_sbom.py` (ADR-054), `docker-compose.demo.yml`,
+`.env.example`, `.github/workflows/ci.yml` (ADR-056)
+
+**Context.** After Parts 1–4 landed, real CI (not this session's local Docker) ran
+`security-scan` and `demo-stack` against the pushed HEAD and both failed. Neither had ever
+actually run to completion in CI before this push — `demo-stack` because it was new in
+Part 2 and Parts 1–3 were never individually pushed (they landed in the same push as Part
+4), `security-scan` because it had been failing since **T-054's own commit**, three
+tickets earlier, unnoticed. Both are real product bugs, not CI flakiness, and both were
+root-caused by reproducing them locally rather than reading the failing step's name and
+guessing.
+
+**1. `docs/evidence/sbom.json`'s "reproducible" claim was reproducible only within one
+venv, not across two.** `generate_sbom.py`'s own docstring says
+`cyclonedx-py environment --output-reproducible` is "deterministic by construction," and
+`json.dumps(..., sort_keys=True)` was assumed to finish the job. Locally,
+`uv run python scripts/generate_sbom.py` always reported "up to date" — including a
+freshly `uv lock --check`ed, frozen-synced venv — which is exactly why this shipped in
+T-054 and stayed broken through two more tickets without anyone noticing: the check
+passes trivially against the *same* long-lived local venv every time. **`sort_keys=True`
+sorts each JSON object's own keys; it does nothing to the order of items inside a JSON
+array**, and `cyclonedx-py environment` enumerates installed packages via
+`importlib.metadata`, whose order follows site-packages filesystem layout — not
+guaranteed identical between two independently-built venvs, which is exactly what CI
+builds on every run (`enable-cache: true` caches downloads, not directory-listing order).
+Confirmed directly rather than inferred: the committed `components` array was not
+alphabetically sorted (`is sorted: False`, checked by hand), and neither `components` nor
+`dependencies` carried any stable ordering key applied by the script itself. Fixed by
+sorting both arrays explicitly — `components` by `bom-ref`, `dependencies` by `ref` —
+before serialization. This is the same class of lesson `ADR-053`'s intra-batch dedup
+finding and `ADR-017`'s TOCTOU finding both are: a "the two orderings agree" argument
+that was never actually forced to run against two different orderings.
+
+**2. `docker-compose.demo.yml`'s `pep` and `keycloak` services both defaulted to host
+port 8080.** `PEP_PORT:-8080` was chosen without checking what `docker-compose.yml`'s own
+`keycloak` service already claims — measured now: `KEYCLOAK_PORT:-8080`, same file
+family, same default. CI's `demo-stack` job sets neither override, so it hit the raw
+collision: `Bind for 0.0.0.0:8080 failed: port is already allocated`. **This shipped
+un-caught by Part 2's own "verified live, twice" claim because every local verification
+in this session used a non-default `PEP_PORT`** — set to work around a *different*,
+pre-existing collision on this dev machine (port 8000 from an unrelated container,
+documented in Part 2's own notes) — which incidentally also dodged the 8080 collision
+without anyone testing the shipped defaults on their own. The general lesson, not only
+this instance: **a workaround applied for one reason can silently mask an unrelated
+default-configuration bug**, and "verified live" is only as strong as the configuration
+actually exercised. Fixed: `PEP_PORT` now defaults to **8082** (a genuinely free host
+port — `tools` never claims a host port at all, only an internal one at 8081, checked
+before picking 8082 rather than assumed free); `.env.example` and `ci.yml`'s `demo-stack`
+health-check step both updated to match. Re-verified live, for real, against the actual
+shipped defaults this time (no `PEP_PORT` override): `make demo-up`-equivalent reaches
+every service healthy in **19s**, `pep`'s `/readyz` reports `enforcing: true`, and an
+unauthenticated proxy call returns a real `401` — the same three checks `demo-stack`
+itself runs, now checked locally against the configuration CI actually uses.
+
+**Consequences.** Both fixes are mechanical and narrow — an explicit sort key, a changed
+default port — and neither touches anything on the money hot path or the enforcement
+pipeline. The real lesson is procedural: **this session never once checked the CI run's
+actual status after a push, for any of T-054, T-055, or T-056's four parts**, trusting
+local verification instead. Local verification is necessary but was not sufficient here
+in two different, unrelated ways in the same push. Checking `gh`/the Actions API after a
+push — the same habit already applied to version-pin claims — belongs in the per-ticket
+loop going forward, not only invoked after a failure is reported.

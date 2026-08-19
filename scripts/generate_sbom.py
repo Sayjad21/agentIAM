@@ -94,8 +94,18 @@ def _generate_sbom() -> str:
     finally:
         out_path.unlink(missing_ok=True)
 
-    # `sort_keys=True` on top of `--output-reproducible` gives us a diff that is stable
-    # under `sort_keys` orderings from tools that consume the file later.
+    # `--output-reproducible` only strips `serialNumber`/timestamps — it does not
+    # guarantee a stable *order* for the `components`/`dependencies` arrays, and
+    # `sort_keys=True` below sorts each JSON object's own keys, never array element
+    # order. `cyclonedx-py environment` enumerates installed packages via
+    # `importlib.metadata`, whose order follows filesystem/site-packages layout — not
+    # deterministic across two separately-built venvs. Measured: byte-identical output
+    # across repeated runs against the *same* venv, but a real diff (component order
+    # only, no content difference) between a local venv and a fresh one, which is
+    # exactly what CI builds every run. Sorting both arrays explicitly closes that gap.
+    parsed["components"] = sorted(parsed.get("components", []), key=lambda c: c["bom-ref"])
+    parsed["dependencies"] = sorted(parsed.get("dependencies", []), key=lambda d: d["ref"])
+
     return json.dumps(parsed, indent=2, sort_keys=True) + "\n"
 
 

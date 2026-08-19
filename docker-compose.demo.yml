@@ -115,8 +115,12 @@ services:
     container_name: agentiam-pep
     volumes:
       - demo-secrets:/secrets:ro
+    # Host-side default is 8082, not 8080: `keycloak` above already claims host 8080,
+    # and both defaulting to 8080 is a real collision, not a hypothetical one — measured
+    # in CI (`docker compose up` failed with "Bind for 0.0.0.0:8080 failed: port is
+    # already allocated"). The container's own internal port stays 8080, unaffected.
     ports:
-      - "${PEP_PORT:-8080}:8080"
+      - "${PEP_PORT:-8082}:8080"
     environment:
       AGENTIAM_PEP_UPSTREAM_BASE_URL: http://tools:8081
       AGENTIAM_PEP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
