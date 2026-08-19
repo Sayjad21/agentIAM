@@ -1,0 +1,175 @@
+# AgentIAM — the demo stack. T-056 Part 2.
+#
+# An OVERLAY on top of docker-compose.yml, not a standalone file — the same pattern
+# `docker-compose.observability.yml` uses for the same reason: postgres/redis/keycloak
+# stay defined once, in one place, rather than duplicated. Bring up the whole demo with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --wait
+#   # or: make demo-up
+#
+# **Why five extra services for two application processes.** `bootstrap` and `migrate`
+# are one-shot: neither the control plane nor the PEP can start without real credentials
+# (a root keypair, a signed policy bundle — ADR-056) or a migrated schema, and nothing
+# in this repository can invent either at image-build time. Both gate the two app
+# services via `service_completed_successfully`, so `docker compose up --wait` only
+# reports healthy once the whole chain — not just the containers starting — has actually
+# succeeded. `tools` is the M4 stub upstream (`agentiam_demo.tools`) so there is
+# something for the PEP to proxy to.
+#
+# **Secrets cross container boundaries as files, not environment variables.** `bootstrap`
+# writes into the `demo-secrets` named volume; `controlplane` and `pep` mount it read-only
+# and read the root private key / policy bundle / signature / public keys from it at
+# startup via a small shell wrapper — `ControlPlaneSettings.from_env()` and
+# `pep_service.ServiceSettings.from_env()` both read plain environment variables, not
+# `_FILE`-suffixed indirection, so the wrapper is what bridges the two without changing
+# either settings class for a demo-only concern.
+#
+# **Ollama is a separate, opt-in profile** (`--profile llm`), not part of the default
+# bring-up: `AGENTIAM_LLM_BACKEND` defaults to hosted inference (ADR-040), a model pull is
+# several GB, and NFR-8's 90 s budget is measured against the stack an operator actually
+# needs to run the enforcement demo — the compiler beat (5) works identically against the
+# hosted default without it. Bring it up explicitly when demonstrating the local-inference
+# fallback (`DEMO.md` F-1):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile llm up -d --wait
+
+services:
+  bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentiam-bootstrap
+    volumes:
+      - demo-secrets:/secrets
+    command: ["python", "scripts/bootstrap_demo_secrets.py", "--out", "/secrets"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentiam-migrate
+    working_dir: /app/packages/agentiam-controlplane
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentiam-tools
+    command: ["python", "scripts/serve_tools.py", "--host", "0.0.0.0", "--port", "8081"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+
+  controlplane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentiam-controlplane
+    volumes:
+      - demo-secrets:/secrets:ro
+    ports:
+      - "${CONTROLPLANE_PORT:-8000}:8000"
+    environment:
+      AGENTIAM_CONTROLPLANE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
+      AGENTIAM_CONTROLPLANE_REDIS_URL: redis://redis:6379/0
+      AGENTIAM_CONTROLPLANE_APPROVERS: ${AGENTIAM_CONTROLPLANE_APPROVERS:-kc:11111111-1111-1111-1111-111111111111,kc:22222222-2222-2222-2222-222222222222}
+      AGENTIAM_CONTROLPLANE_SESSION_SECRET_KEY: ${AGENTIAM_CONTROLPLANE_SESSION_SECRET_KEY:-dev-change-me-session-secret}
+      # OIDC is deliberately not wired here: it needs the console's redirect URI reachable
+      # from a browser on the host, which depends on how the demo is being viewed. Set
+      # AGENTIAM_CONTROLPLANE_OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET to enable login; without
+      # them /readyz reports auth:false and the escalation queue still works via a
+      # hand-signed session cookie, same as every integration test does.
+    command: >
+      sh -c "export AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY=$$(cat /secrets/root_private_key.hex) &&
+             uvicorn agentiam_controlplane.app:create_app_from_env --factory --host 0.0.0.0 --port 8000"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  pep:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentiam-pep
+    volumes:
+      - demo-secrets:/secrets:ro
+    ports:
+      - "${PEP_PORT:-8080}:8080"
+    environment:
+      AGENTIAM_PEP_UPSTREAM_BASE_URL: http://tools:8081
+      AGENTIAM_PEP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
+      AGENTIAM_PEP_REDIS_URL: redis://redis:6379/0
+      AGENTIAM_PEP_CONTROL_PLANE_URL: http://controlplane:8000
+      # The PEP is scoped to exactly one mandate (ADR-056, STATUS gap 25). T-057's demo
+      # script is what creates a real one via the control plane's issuance path; this
+      # placeholder lets the container start and prove the pipeline wiring on its own.
+      AGENTIAM_PEP_MANDATE_ID: ${AGENTIAM_PEP_MANDATE_ID:-00000000-0000-0000-0000-000000000000}
+      AGENTIAM_PEP_ID: pep-1
+      AGENTIAM_PEP_POLICY_BUNDLE_PATH: /secrets/policy_bundle.json
+      AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH: /secrets/policy_bundle.sig
+      AGENTIAM_PEP_ROUTES_PATH: /secrets/routes.json
+      AGENTIAM_PEP_OLLAMA_URL: ${AGENTIAM_PEP_OLLAMA_URL:-}
+    command: >
+      sh -c "export AGENTIAM_PEP_ROOT_PUBLIC_KEYS=$$(cat /secrets/root_public_key.hex) &&
+             export AGENTIAM_PEP_POLICY_PUBLIC_KEY=$$(cat /secrets/policy_public_key.hex) &&
+             python scripts/pep_service.py --host 0.0.0.0 --port 8080"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      tools:
+        condition: service_healthy
+      controlplane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  # Opt-in — see the file header. `docker compose --profile llm up`.
+  ollama:
+    image: ollama/ollama:0.5.4
+    container_name: agentiam-ollama
+    profiles: ["llm"]
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  demo-secrets:
+  ollama-data:

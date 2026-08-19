@@ -26,12 +26,17 @@ than assumed:
 * `RedisRevocationSet` (T-038/T-039) had **never been constructed outside a test**. Both
   reference assemblies — `serve_pep.py` and `tests/chaos/pepstack.py` — use
   `InMemoryRevocationSet()`, which never revokes anything. So the push/pull consumer and
-  the Bloom filter measured for NFR-4 had never run in an assembled PEP.
-* `RuleBasedDriftOracle` (T-032/T-036) is wired only by a chaos-test helper.
-
-Both are now required rather than defaulted, because the fallbacks are silent failures:
-an in-memory revocation set is a PEP that cannot be told to stop trusting a stolen token,
-which is INV-10 enforced by nothing.
+  the Bloom filter measured for NFR-4 had never run in an assembled PEP. **Required**,
+  not defaulted: an in-memory revocation set is a PEP that cannot be told to stop
+  trusting a stolen token, which is INV-10 enforced by nothing.
+* `RuleBasedDriftOracle` (T-032/T-036) had been wired only by a chaos-test helper.
+  **Optional**, not required, and for a different reason than revocation: `decide()`'s
+  own contract is that `drift=None` means *no assessment*, not a failure (spec 06 §2.1 —
+  an oracle failure is advisory, never fatal, which is the opposite posture from
+  revocation). Configuring `AGENTIAM_PEP_OLLAMA_URL` wires a real
+  `RuleBasedDriftOracle`; leaving it unset is a legitimate, safe configuration and
+  `Service.drift_oracle` reports which one is in effect rather than leaving it to be
+  inferred.
 
 **Policy is a signed bundle read from disk, verified, and used directly** — not through
 `PolicyCache`. That looks like the wrong choice and is not. `PolicyCache` adds staleness
@@ -70,6 +75,7 @@ if TYPE_CHECKING:
     from biscuit_auth import PublicKey
     from fastapi import FastAPI
 
+    from agentiam_core.decision import DriftOracle
     from agentiam_pep.config import PepSettings
     from agentiam_pep.policy import CedarEngine
 
@@ -140,6 +146,9 @@ class ServiceSettings:
     #: What `principal.role` a Cedar policy sees. Configurable because the real role lives
     #: in an attenuation block fact this PEP cannot yet read back (`STATUS.md` gap 2).
     default_role: str = "agent"
+    #: Where `RuleBasedDriftOracle` reaches an embedding model. `None` disables drift
+    #: entirely — a legitimate configuration, not a degraded one (spec 06 §2.1).
+    ollama_url: str | None = None
 
     @classmethod
     def from_env(cls) -> ServiceSettings:
@@ -174,6 +183,7 @@ class ServiceSettings:
             policy_bundle_sig_path=Path(_require(f"{ENV_PREFIX}POLICY_BUNDLE_SIG_PATH")),
             policy_public_key_hex=_require(f"{ENV_PREFIX}POLICY_PUBLIC_KEY"),
             routes_path=Path(_require(f"{ENV_PREFIX}ROUTES_PATH")),
+            ollama_url=os.environ.get(f"{ENV_PREFIX}OLLAMA_URL", "").strip() or None,
         )
 
 
@@ -263,6 +273,10 @@ class Service:
     app: FastAPI
     revocation: object
     policy: CedarEngine
+    #: `None` when `AGENTIAM_PEP_OLLAMA_URL` is unset — a legitimate, safe configuration
+    #: (spec 06 §2.1), not a degraded one. Exposed rather than left implicit so a caller
+    #: (or a test) does not have to infer it from an absent constructor argument.
+    drift_oracle: DriftOracle | None
 
 
 def build_service(settings: ServiceSettings) -> Service:
@@ -283,6 +297,7 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_core.models import BudgetDimension
     from agentiam_core.tokens import RootKeySet, VerifiedToken
     from agentiam_pep.app import create_app
+    from agentiam_pep.drift import RuleBasedDriftOracle
     from agentiam_pep.emitter import DecisionEmitter, EmitterSettings
     from agentiam_pep.extractor import RouteTable
     from agentiam_pep.pipeline import Pipeline, PipelineSettings
@@ -348,6 +363,10 @@ def build_service(settings: ServiceSettings) -> Service:
         control_plane_client=httpx.AsyncClient(base_url=settings.control_plane_url),
     )
 
+    drift_oracle = (
+        RuleBasedDriftOracle(base_url=settings.ollama_url) if settings.ollama_url else None
+    )
+
     def principal_for(token: VerifiedToken) -> AgentPrincipal:
         """Read the policy principal off the verified token.
 
@@ -377,6 +396,7 @@ def build_service(settings: ServiceSettings) -> Service:
         settlement=settlement,
         settings=PipelineSettings(pep_id=settings.pep_id),
         now=lambda: datetime.now(UTC),
+        drift_oracle=drift_oracle,
     )
 
     @asynccontextmanager
@@ -391,6 +411,17 @@ def build_service(settings: ServiceSettings) -> Service:
         await emitter.start()
         await settlement.start()
         await revocation.start()
+        if drift_oracle is not None:
+            # `EmbeddingClient.warm()` is synchronous and can take up to 60 s cold
+            # (ADR-037 measured 14,244 ms for the embedding call alone) — run it off the
+            # loop via `asyncio.to_thread` (ADR-012's established primitive for exactly
+            # this) rather than block every other request during startup. A failed
+            # warm-up is not fatal: `warm()` returns a bool and never raises, and an
+            # unwarmed model just pays the cost on the first scored request instead
+            # (spec 06 §2.1 — drift fails open, never the process).
+            import asyncio
+
+            await asyncio.to_thread(drift_oracle.embeddings.warm)
         try:
             yield
         finally:
@@ -401,7 +432,7 @@ def build_service(settings: ServiceSettings) -> Service:
             await engine.dispose()
 
     app = create_app(settings=settings.pep, pipeline=pipeline, lifespan=lifespan)
-    return Service(app=app, revocation=revocation, policy=policy)
+    return Service(app=app, revocation=revocation, policy=policy, drift_oracle=drift_oracle)
 
 
 def build_parser() -> argparse.ArgumentParser:

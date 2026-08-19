@@ -16,9 +16,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'up', 'down', 'logs', 'ps', 'test', 'test-unit',
-                 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt', 'typecheck', 'check',
-                 'bench', 'cov', 'security', 'sbom', 'evidence',
+    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-down', 'logs', 'ps',
+                 'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
+                 'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'evidence',
                  'clean', 'nuke')]
     [string]$Target = 'help'
 )
@@ -46,6 +46,8 @@ switch ($Target) {
             'install'          = 'Sync the workspace and install pre-commit hooks'
             'up'               = 'Start infrastructure (Postgres, Redis) and wait for healthy'
             'down'             = 'Stop infrastructure, keeping volumes'
+            'demo-up'          = 'Build and start the full demo stack, wait for healthy'
+            'demo-down'        = 'Stop the demo stack, keeping volumes'
             'logs'             = 'Tail infrastructure logs'
             'ps'               = 'Show infrastructure status'
             'test'             = 'Run the test suite, excluding tests that need infrastructure'
@@ -74,6 +76,14 @@ switch ($Target) {
     }
     'up'        { Invoke-Step @('docker', 'compose', 'up', '-d', '--wait') }
     'down'      { Invoke-Step @('docker', 'compose', 'down') }
+    'demo-up'   {
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'up', '-d', '--wait', '--build')
+    }
+    'demo-down' {
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'down')
+    }
     'logs'      { Invoke-Step @('docker', 'compose', 'logs', '-f') }
     'ps'        { Invoke-Step @('docker', 'compose', 'ps') }
     'test'      {

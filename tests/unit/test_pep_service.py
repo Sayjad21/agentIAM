@@ -269,6 +269,37 @@ class TestAssembly:
         body = TestClient(service.app).get("/readyz").json()
         assert body["enforcing"] is True
 
+    def test_without_an_ollama_url_drift_is_off_not_silently_absent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # `decide()`'s own docstring: "drift=None means no assessment, which is not a
+        # failure" (spec 06 §2.1 — an oracle failure is advisory, not fatal, unlike
+        # revocation). So no `AGENTIAM_PEP_OLLAMA_URL` is a legitimate, safe
+        # configuration, and `Service` says so explicitly rather than the caller having
+        # to infer it from an absent attribute.
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.delenv("AGENTIAM_PEP_OLLAMA_URL", raising=False)
+        settings = pep_service.ServiceSettings.from_env()
+
+        service = pep_service.build_service(settings)
+        assert service.drift_oracle is None
+
+    def test_an_ollama_url_wires_a_real_drift_oracle(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # The finding this test exists for: `RuleBasedDriftOracle` (T-032/T-036) had
+        # never been constructed outside `tests/chaos/pepstack.py`'s helper. Demo Beat 6
+        # (goal drift escalates to a human) has no implementation in any deployed PEP
+        # without this.
+        from agentiam_pep.drift import RuleBasedDriftOracle
+
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("AGENTIAM_PEP_OLLAMA_URL", "http://ollama:11434")
+        settings = pep_service.ServiceSettings.from_env()
+
+        service = pep_service.build_service(settings)
+        assert isinstance(service.drift_oracle, RuleBasedDriftOracle)
+
     def test_it_uses_lifespan_not_the_deprecated_on_event(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

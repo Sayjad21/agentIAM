@@ -326,3 +326,43 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  demo-stack:
+    name: Demo stack reaches healthy (NFR-8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # T-056. The `infrastructure` job above measures the three dev-infra services
+      # (T-001's own criterion); this measures NFR-8 for real — the complete deployable
+      # stack: postgres, redis, keycloak, the one-shot bootstrap/migrate jobs, the stub
+      # tools upstream, the control plane, and the PEP. Ollama is excluded on purpose
+      # (docker-compose.demo.yml's own header explains why: opt-in, several-GB model
+      # pull, not needed for the enforcement demo).
+      - name: Build the image
+        run: docker compose -f docker-compose.yml -f docker-compose.demo.yml build
+
+      - name: Bring up the full demo stack, timed
+        run: |
+          start=$(date +%s)
+          docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --wait --wait-timeout 90
+          elapsed=$(( $(date +%s) - start ))
+          echo "Demo stack cold start: ${elapsed}s (NFR-8 budget: 90s)"
+          echo "### Demo stack cold start: ${elapsed}s / 90s budget (NFR-8)" >> "$GITHUB_STEP_SUMMARY"
+          docker compose -f docker-compose.yml -f docker-compose.demo.yml ps
+
+      # The one-shot jobs report health as "completed successfully", so the wait above
+      # already proves the credential bootstrap and the migration both ran for real.
+      # This step is the actual authorization pipeline, end to end, through the built
+      # image rather than through pytest: verify -> revocation -> policy -> lease.
+      - name: The PEP enforces for real
+        run: |
+          curl -sf http://localhost:8000/readyz
+          curl -sf http://localhost:8080/readyz | grep -q '"enforcing":true'
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/proxy/invoices/inv-1)
+          test "$status" = "401"
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v

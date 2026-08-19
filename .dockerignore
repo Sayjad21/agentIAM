@@ -1,0 +1,31 @@
+# T-056. Keep the build context to what an image actually needs: the workspace and its
+# lockfile, `scripts/` (the composition roots), and `deploy/` (bind-mounted config, not
+# copied in, but harmless either way). Everything test/dev/doc-only stays out — smaller
+# image, and no test fixtures or coverage data ever end up in a shipped layer.
+
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+htmlcov/
+.coverage
+dist/
+build/
+
+.git/
+.github/
+
+docs/
+tests/
+
+# Compose/deploy files are read by the host, not copied into the image.
+docker-compose*.yml
+deploy/
+
+*.md
+LICENSE
+.env
+.env.example

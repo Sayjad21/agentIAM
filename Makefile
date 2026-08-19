@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down logs ps test test-unit test-integration test-e2e chaos lint fmt \
-        typecheck check bench cov clean nuke security sbom evidence
+.PHONY: help install up down demo-up demo-down logs ps test test-unit test-integration \
+        test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom evidence
 
 UV ?= uv
 
@@ -17,6 +17,15 @@ up: ## Start infrastructure (Postgres, Redis) and wait for healthy
 
 down: ## Stop infrastructure, keeping volumes
 	docker compose down
+
+# T-056. An overlay on docker-compose.yml, not a second stack — same shape
+# docker-compose.observability.yml uses. `demo-up` is the "one-command demo bring-up"
+# T-056 asks for; NFR-8 (<90s) is measured against this in the `demo-stack` CI job.
+demo-up: ## Build and start the full demo stack (control plane, PEP, tools) and wait healthy
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --wait --build
+
+demo-down: ## Stop the demo stack, keeping volumes
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml down
 
 logs: ## Tail infrastructure logs
 	docker compose logs -f
