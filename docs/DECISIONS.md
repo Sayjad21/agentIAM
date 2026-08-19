@@ -3354,3 +3354,71 @@ local verification instead. Local verification is necessary but was not sufficie
 in two different, unrelated ways in the same push. Checking `gh`/the Actions API after a
 push — the same habit already applied to version-pin claims — belongs in the per-ticket
 loop going forward, not only invoked after a failure is reported.
+
+### Addendum — Part 6: Part 5's own SBOM fix was pushed, and CI still failed
+
+**Date:** 2026-08-19
+
+**Part 5's array-sort fix was real but incomplete — checked by pushing and confirming CI,
+exactly as Part 5 itself concluded should happen, and the check caught it.** The
+`demo-stack` port fix went green. `security-scan` did not:
+`docs/evidence/sbom.json: OUT OF DATE` again, same message, after a fix that had already
+been verified locally to produce a stable `components`/`dependencies` order. Rather than
+guess at a second array-ordering theory, this was reproduced directly: a throwaway
+`ubuntu:latest` container (`docker run -v $(pwd):/repo:ro,z`, matching CI's
+`ubuntu-latest`), a fresh `uv python install 3.12` + `UV_FROZEN=1 uv sync`, and the exact
+`scripts/generate_sbom.py` CI runs. It reproduced the failure immediately and gave a real
+diff to read instead of a theory to test by pushing again.
+
+**Two more findings, from that diff — neither is an ordering problem:**
+
+1. **The SBOM embedded this machine's absolute checkout path.** Each of the five local
+   workspace packages (editable installs) carries an `externalReferences` entry with
+   `"comment": "PackageSource: Local"` and `"url": "file:///home/tawhidumar/codes/agentIAM/
+   packages/agentiam-core"` — read straight from the editable install's own
+   `direct_url.json`. That path is wherever *this particular checkout* happens to live on
+   disk; it can never match CI's checkout path (`/home/runner/work/...` or similar) by
+   construction, regardless of how careful the rest of the generation is. Not
+   reproducible information and not useful evidence in a submitted SBOM. Fixed: strip any
+   `externalReferences` entry whose `url` starts with `file://`, dropping the key
+   entirely if the filtered list is empty (matching how the tool already omits the key
+   for components that never had one).
+2. **A `cdx:python:package:required-extra` property was present on five components in a
+   fresh Ubuntu build and absent on this Fedora dev machine — reproducibly, in both
+   directions, confirmed three separate ways.** Two independent fresh Ubuntu containers
+   produced byte-identical SBOMs (`CacheControl`, `coverage`, `cyclonedx-python-lib`,
+   `jsonschema`, `uvicorn` each correctly annotated with the extra that pulled them in —
+   e.g. `uvicorn[standard]`, which `packages/agentiam-pep/pyproject.toml` and
+   `packages/agentiam-controlplane/pyproject.toml` both genuinely declare). This
+   machine's long-lived venv lacked all five properties — expected, a stale-venv theory
+   fit the symptom — **but deleting and rebuilding `.venv` from scratch on this same
+   machine still lacked them.** So it is not venv staleness; it tracks the host OS (or a
+   Python patch version tied to it, 3.12.13 here vs. the container's 3.12.14), not fully
+   root-caused beyond that. `cyclonedx_py._internal.environment.__finalize_dependencies`
+   derives the property by walking every installed package's `Requirement` objects
+   (parsed from `importlib.metadata`'s `dist.requires`) and tagging the target package
+   with `req.extras` — and `importlib.metadata.distribution('agentiam-pep').requires`
+   was directly checked and *does* return `'uvicorn[standard]>=0.32'` correctly on this
+   machine too, so the divergence is downstream of that call, inside `cyclonedx-py`
+   itself or a dependency of it, not in this repository's own metadata. Not fixed at the
+   root cause — not worth the time against a submission deadline once the practical fix
+   was in hand — but the practical fix is solid: **generate and commit this file only
+   from a Linux x86_64 environment matching CI**, verified reproducible across two
+   independent builds of exactly that environment, and documented as a hard requirement
+   in the script's own docstring with the container recipe so a future regeneration
+   doesn't rediscover this by guessing again.
+
+**Verified clean, a third time, independently of the two builds that produced the
+committed file**: a fresh fourth container, built from the final committed state, ran
+`uv run python scripts/generate_sbom.py` (no `--write`, the exact CI invocation) and
+reported `up to date`.
+
+**The lesson from Part 5 — "confirm CI after a push" — held, and is worth restating
+sharper for it: confirming CI means confirming the fix actually passes, not confirming
+that a plausible-sounding fix was pushed.** The first attempt was a reasonable, verified,
+locally-tested theory that turned out to explain only part of the symptom. The second
+attempt did not trust local reasoning at all — it reproduced the *exact* failing
+environment in a container and read a real diff. That is the more reliable order of
+operations whenever "local" and "CI" can structurally diverge (a different OS, a
+different venv history, a different checkout path), not only after a first fix attempt
+has already failed once.

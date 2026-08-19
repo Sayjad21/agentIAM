@@ -16,6 +16,22 @@ The output is CycloneDX 1.5 JSON produced by ``cyclonedx-py environment`` with
 ``--output-reproducible``, so ``serialNumber`` and timestamps are elided and diffs
 against the committed file are meaningful. Format version and component count are
 printed for the CI job summary.
+
+**Regenerate this only from a fresh ``uv sync`` on Linux x86_64 (matching CI's
+``ubuntu-latest``), not from an arbitrary local venv or OS.** Measured directly, twice,
+after this file first shipped with a check that had actually been silently broken for
+three tickets: (1) a long-lived local venv can be missing ``cdx:python:package:required-
+extra`` properties a genuinely fresh install has, for reasons not fully root-caused —
+confirmed present in both a from-scratch Ubuntu container and this repository's own
+``pyproject.toml``/``uv.lock`` inputs, confirmed *absent* even after deleting and
+rebuilding a local ``.venv`` on Fedora; the difference tracks the host OS, not venv
+staleness. (2) Two *independent* fresh Ubuntu containers, same lock file, produced
+byte-identical SBOMs after this file's sorting fix — so the committed file only needs to
+match *one specific, reproducible-within-itself* environment, and that environment is
+whatever CI actually runs, not whatever happens to be closest at hand locally. Reproduce
+with a throwaway container rather than guessing from a local run:
+``docker run --rm -v $(pwd):/repo:ro,z ubuntu:latest`` — install ``uv``, ``uv sync``,
+run this script with ``--write``, copy the result out.
 """
 
 from __future__ import annotations
@@ -93,6 +109,28 @@ def _generate_sbom() -> str:
         parsed = json.loads(out_path.read_text(encoding="utf-8"))
     finally:
         out_path.unlink(missing_ok=True)
+
+    # The five local workspace packages (editable installs) each carry a
+    # `PackageSource: Local` externalReference whose `url` is `file://<absolute checkout
+    # path>/packages/...` — read straight from the editable install's `direct_url.json`.
+    # That path is wherever *this* checkout happens to live, so it can never match
+    # between two different clones — confirmed by diffing a fresh install in a throwaway
+    # container against this machine's long-lived venv: identical packages, identical
+    # versions, and the only difference was this absolute path. Not reproducible
+    # information and not useful evidence in a submitted SBOM; drop any `file://`
+    # externalReference, and drop the now-possibly-empty key entirely rather than leave
+    # `"externalReferences": []`, matching how the tool omits the key when there was
+    # never one to report.
+    for component in parsed.get("components", []):
+        refs = [
+            ref
+            for ref in component.get("externalReferences", [])
+            if not ref.get("url", "").startswith("file://")
+        ]
+        if refs:
+            component["externalReferences"] = refs
+        else:
+            component.pop("externalReferences", None)
 
     # `--output-reproducible` only strips `serialNumber`/timestamps — it does not
     # guarantee a stable *order* for the `components`/`dependencies` arrays, and

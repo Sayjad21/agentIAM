@@ -82,6 +82,12 @@
         }
       ],
       "name": "CacheControl",
+      "properties": [
+        {
+          "name": "cdx:python:package:required-extra",
+          "value": "filecache"
+        }
+      ],
       "purl": "pkg:pypi/cachecontrol@0.14.4",
       "type": "library",
       "version": "0.14.4"
@@ -331,13 +337,6 @@
     {
       "bom-ref": "agentiam-controlplane==0.1.0",
       "description": "AgentIAM control plane: issuance, ledger, policy, revocation, audit, console.",
-      "externalReferences": [
-        {
-          "comment": "PackageSource: Local",
-          "type": "distribution",
-          "url": "file:///home/tawhidumar/codes/agentIAM/packages/agentiam-controlplane"
-        }
-      ],
       "licenses": [
         {
           "license": {
@@ -352,13 +351,6 @@
     {
       "bom-ref": "agentiam-core==0.1.0",
       "description": "Pure domain logic for AgentIAM: tokens, caveats, attenuation, budgets, decisions.",
-      "externalReferences": [
-        {
-          "comment": "PackageSource: Local",
-          "type": "distribution",
-          "url": "file:///home/tawhidumar/codes/agentIAM/packages/agentiam-core"
-        }
-      ],
       "licenses": [
         {
           "license": {
@@ -373,13 +365,6 @@
     {
       "bom-ref": "agentiam-demo==0.1.0",
       "description": "Reference procurement agent, stub tool servers, and scripted demo scenarios.",
-      "externalReferences": [
-        {
-          "comment": "PackageSource: Local",
-          "type": "distribution",
-          "url": "file:///home/tawhidumar/codes/agentIAM/packages/agentiam-demo"
-        }
-      ],
       "licenses": [
         {
           "license": {
@@ -394,13 +379,6 @@
     {
       "bom-ref": "agentiam-pep==0.1.0",
       "description": "AgentIAM Policy Enforcement Point: the hot-path gateway.",
-      "externalReferences": [
-        {
-          "comment": "PackageSource: Local",
-          "type": "distribution",
-          "url": "file:///home/tawhidumar/codes/agentIAM/packages/agentiam-pep"
-        }
-      ],
       "licenses": [
         {
           "license": {
@@ -415,13 +393,6 @@
     {
       "bom-ref": "agentiam-sdk==0.1.0",
       "description": "Client SDK for AgentIAM: attenuation, spend contexts, escalation.",
-      "externalReferences": [
-        {
-          "comment": "PackageSource: Local",
-          "type": "distribution",
-          "url": "file:///home/tawhidumar/codes/agentIAM/packages/agentiam-sdk"
-        }
-      ],
       "licenses": [
         {
           "license": {
@@ -1117,6 +1088,12 @@
         }
       ],
       "name": "coverage",
+      "properties": [
+        {
+          "name": "cdx:python:package:required-extra",
+          "value": "toml"
+        }
+      ],
       "purl": "pkg:pypi/coverage@7.15.4",
       "type": "library",
       "version": "7.15.4"
@@ -1261,6 +1238,12 @@
         }
       ],
       "name": "cyclonedx-python-lib",
+      "properties": [
+        {
+          "name": "cdx:python:package:required-extra",
+          "value": "validation"
+        }
+      ],
       "purl": "pkg:pypi/cyclonedx-python-lib@11.12.0",
       "type": "library",
       "version": "11.12.0"
@@ -2087,6 +2070,12 @@
         }
       ],
       "name": "jsonschema",
+      "properties": [
+        {
+          "name": "cdx:python:package:required-extra",
+          "value": "format-nongpl"
+        }
+      ],
       "purl": "pkg:pypi/jsonschema@4.26.0",
       "type": "library",
       "version": "4.26.0"
@@ -4282,6 +4271,12 @@
         }
       ],
       "name": "uvicorn",
+      "properties": [
+        {
+          "name": "cdx:python:package:required-extra",
+          "value": "standard"
+        }
+      ],
       "purl": "pkg:pypi/uvicorn@0.52.3",
       "type": "library",
       "version": "0.52.3"
