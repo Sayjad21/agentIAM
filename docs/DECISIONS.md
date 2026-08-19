@@ -2926,3 +2926,122 @@ were found and are tracked rather than silently absorbed: `make.ps1` previously 
 `security`/`sbom` (closed here), and `performance.md` having no CI drift-check at all
 (left open, `STATUS.md` §3, because closing it correctly is a T-053-shaped decision this
 ticket should not make unilaterally).
+
+---
+
+## ADR-056 — T-056 Part 1: the deployment composition roots, and three components that
+## had never been assembled
+
+**Date:** 2026-08-19
+**Status:** accepted
+**Affects:** `LICENSE` (new), `scripts/pep_service.py` (new),
+`agentiam_controlplane.app` (`/healthz`, `/readyz`, `create_app_from_env`),
+`agentiam_pep.app.create_app` (`lifespan` parameter), `docker-compose.yml`,
+`docker-compose.observability.yml`, `tests/integration/test_oidc_login.py`, T-056
+
+**Context:** T-056 asks for a one-command demo bring-up, k3s manifests, signed images, a
+rollback procedure, and NFR-8 under 90 s. None of it is reachable without something to
+deploy, and probing found there was nothing: no Dockerfile anywhere in the tree, and no
+production composition root for either service.
+
+**1. The PEP's composition root lives in `scripts/`, not in `agentiam_pep`.**
+
+An assembled PEP needs the ledger, the audit sink and the settlement sink, all in
+`agentiam_controlplane.db`. The obvious move — declare `agentiam-controlplane` as a
+dependency of `agentiam-pep` — was rejected after checking what the package actually does:
+every mention of `agentiam_controlplane` inside `packages/agentiam-pep/src/` is a
+**docstring**, never an import, and the sinks are declared as structural `Protocol`s
+precisely so the two remain independent deployables (ADR-043 pt 4, ADR-051 pt 4). Adding
+the dependency would invert the architecture to save one file. A composition root is the
+one component allowed to know about both, so it sits at the repository layer next to
+`serve_pep.py`.
+
+Measured, and the reason this mattered: `uv export --package agentiam-pep` resolves **zero**
+sqlalchemy/asyncpg/alembic. A package-scoped container build would have failed at runtime
+on the first import, not at build time.
+
+**`serve_pep.py` is left exactly as it is.** It is T-053's load-test harness — ephemeral
+root keypair per run, mints a mandate, seeds a budget, hardcoded policy, a pool sized so
+500 RPS cannot exhaust it — and `docs/benchmarks/performance.md`'s published numbers depend
+on it not moving. `pep_service.py` takes all of that from configuration and seeds nothing.
+The duplication in the object graph is real and accepted; a future ticket may collapse them
+once the deployment shape has stopped changing.
+
+**2. Three components had never been assembled outside a test.** Each was found by grepping
+for constructor calls rather than by reading, and each is now wired or explicitly refused:
+
+* **`RedisRevocationSet`** (T-038/T-039) — both reference assemblies use
+  `InMemoryRevocationSet()`, which never revokes anything. T-038's push/pull consumer and
+  T-039's Bloom filter, measured for NFR-4, had never run in an assembled PEP. Now
+  required: `AGENTIAM_PEP_REDIS_URL` and `AGENTIAM_PEP_CONTROL_PLANE_URL` are both
+  mandatory, because an in-memory revocation set in a deployment is INV-10 enforced by
+  nothing, and spec 07 §5.2 makes the pull path the *correctness* backstop rather than an
+  optimisation.
+* **`RuleBasedDriftOracle`** (T-032/T-036) — wired only by a chaos-test helper.
+* **`PolicyCache`** (T-025) — had never met a `Pipeline`, and wiring it would have been
+  *worse* than not. It exposes `.bound()` but no `.bundle`, which `Pipeline` reads when
+  building a decision record, so it would have raised `AttributeError` on the first
+  decision. More fundamentally its staleness clock needs something to publish a newer
+  bundle, and no such service exists (ADR-039 — `DummyBundleStore` is still a stub), so
+  against a file loaded once at boot the PEP would begin refusing every request after
+  `max_staleness` (300 s). **Decision: load a signed bundle from disk, verify the signature
+  directly, and use `CedarEngine`.** T-025's signature and tamper guarantees are preserved;
+  hot reload and staleness are not, and `POLICY_BUNDLE_STALE` is therefore unreachable in a
+  deployed configuration. Recorded as a gap rather than left for a reader of spec 09 §7 to
+  find.
+
+**3. The PEP is scoped to one mandate, and this is stated rather than hidden.** `LeasePool`
+binds a `mandate_id` at construction and `Pipeline.reserve()` takes none, so one process
+enforces budget for exactly one mandate. Verification, revocation, policy, drift and audit
+are all mandate-agnostic; only the lease pool is bound. Building a multi-mandate pool would
+change both `LeasePool` and `Pipeline` on the money hot path, touching ADR-049's
+settle-before-release invariant — a ticket of its own, not a T-056 side quest.
+`AGENTIAM_PEP_MANDATE_ID` is therefore required, and the limitation is a new `STATUS.md`
+gap.
+
+**4. The control plane gains health endpoints and an env factory; the module-level `app`
+stays.** `app = create_app()` takes no arguments — no database, so no escalations, no
+revocations, no session middleware, no login. A first grep suggested nothing imported it;
+that was wrong, and re-checking found `tests/unit/test_controlplane_ui.py` drives it for
+T-027's console. So it is console-only rather than dead, and removing it would have broken
+eleven passing tests. `create_app_from_env()` is added alongside it as the deployment entry
+point, and both are pinned by tests so a future reader cannot "fix" one by breaking the
+other. `/healthz` and `/readyz` follow the PEP's rule — report what is verified, never dial
+a dependency — because every database-backed route here already answers 503 rather than
+failing to boot, and a probe that dialled Postgres would pull every replica at once,
+including the console an operator would diagnose with.
+
+**5. `create_app(lifespan=...)` rather than `@app.on_event`.** The latter is deprecated as
+of FastAPI 0.141 (confirmed by triggering the warning; `serve_pep.py` still uses it). The
+parameter defaults to `None`, so every existing test and benchmark is untouched. Shutdown
+order is settlement → pool → emitter, which is not arbitrary: a lease retired while it
+still owes the ledger is ADR-049's second double-spend route.
+
+**Two cross-platform defects, found by running `docker compose up` on Fedora rather than on
+Docker Desktop, and both silent:**
+
+* **SELinux labels.** Six bind mounts across the two compose files carried no `z`/`Z`
+  option. On an enforcing host the container gets `Permission denied`; Keycloak reports it
+  as `ERROR: directory not found` and crash-loops, so `make up` never reached healthy at
+  all. Measured both ways on the same mount. The label is a **no-op on Docker Desktop**,
+  which is what makes `:ro,z` the portable spelling rather than a Linux-only workaround.
+* **Keycloak's realm-import naming convention.** Keycloak 26's `DirImportProvider` imports
+  only `<realm>-realm.json`. Given any other name it logs *"Import finished successfully"*
+  and imports **nothing**. The compose file mounted the directory containing
+  `realm-export.json`, and `testcontainers`' `with_realm_import_file` hardcodes the
+  destination `realm.json` — so neither the demo stack nor T-043's three OIDC tests had a
+  realm, and the tests had been failing on `404` for the discovery document. Measured:
+  identical bytes at `realm.json` import nothing and 404; at `agentiam-realm.json` they log
+  `Realm 'agentiam' imported` and answer 200. Compose now mounts the file to the correct
+  name; the test uses `with_copy_into_container`, the one API that lets the destination be
+  chosen. `tests/unit/test_compose_config.py` cross-checks the filename against the `realm`
+  field inside the file, so a rename on either side fails a test rather than silently
+  disabling login.
+
+**Consequences.** `make up` reaches healthy on Fedora in **23 s** against NFR-8's 90 s
+budget (three services; the full stack is Part 2's measurement). T-043's three OIDC tests
+pass for the first time since the dependency versions moved. `LICENSE` closes `STATUS.md`
+gap 3 — byte-identical to apache.org's canonical text, verified by sha256, rather than
+retyped. A native PostgreSQL on `127.0.0.1:5432` shadows the compose one on this host
+exactly as `CLAUDE.md` records for Windows; `POSTGRES_PORT` already parameterises it, and
+the deployment documentation in Part 4 should say so.

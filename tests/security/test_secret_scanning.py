@@ -453,6 +453,20 @@ def test_env_example_carries_only_placeholders() -> None:
             "AGENTIAM_CONTROLPLANE_OIDC_ISSUER",
             "AGENTIAM_CONTROLPLANE_OIDC_CLIENT_ID",
             "AGENTIAM_PEP_OTEL_EXPORTER_ENDPOINT",
+            # T-056's deployment variables. Every one names an endpoint, a filesystem
+            # path or an instance id — none of them unlocks anything, which is the same
+            # reasoning as the OIDC issuer and the OTEL endpoint above. The two
+            # `*_DATABASE_URL` variables are deliberately NOT here: a DSN carries a
+            # password, so those stay empty in the tracked file with the shape shown in a
+            # comment, exactly like `AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY`.
+            "AGENTIAM_PEP_UPSTREAM_BASE_URL",
+            "AGENTIAM_PEP_CONTROL_PLANE_URL",
+            "AGENTIAM_PEP_REDIS_URL",
+            "AGENTIAM_PEP_ID",
+            "AGENTIAM_PEP_POLICY_BUNDLE_PATH",
+            "AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH",
+            "AGENTIAM_PEP_ROUTES_PATH",
+            "AGENTIAM_CONTROLPLANE_REDIS_URL",
         }:
             continue
         if stripped in _ENV_EXAMPLE_PLACEHOLDERS:

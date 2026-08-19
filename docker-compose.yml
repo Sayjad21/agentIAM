@@ -69,7 +69,20 @@ services:
     ports:
       - "${KEYCLOAK_PORT:-8080}:8080"
     volumes:
-      - ./deploy/keycloak:/opt/keycloak/data/import
+      # Two things here are load-bearing and neither is obvious, both found by running
+      # this on Fedora rather than on Docker Desktop (T-056):
+      #
+      # 1. The destination filename must be `<realm>-realm.json`. Keycloak 26's
+      #    DirImportProvider silently skips anything else — it still logs "Import
+      #    finished successfully" while importing nothing, and `/realms/agentiam/...`
+      #    then 404s. Measured both ways. `tests/unit/test_compose_config.py`
+      #    cross-checks this name against the `realm` field inside the file.
+      # 2. `z` is the SELinux shared label. Without it an enforcing host (Fedora, RHEL,
+      #    CentOS) gives the container `Permission denied`, which Keycloak reports as
+      #    `ERROR: directory not found` and then crash-loops, so `make up` never reaches
+      #    healthy. Docker Desktop ignores the option, so this is the portable spelling
+      #    rather than a Linux-only workaround.
+      - ./deploy/keycloak/realm-export.json:/opt/keycloak/data/import/agentiam-realm.json:ro,z
       - keycloak-data:/opt/keycloak/data
     healthcheck:
       # Keycloak 26 splits health checks onto the management port (9000), same reasoning

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import cedarpy
 from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -167,6 +167,39 @@ def create_app(
     app = FastAPI(title="AgentIAM Control Plane")
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+    @app.get("/healthz")
+    async def healthz() -> JSONResponse:
+        """Liveness. Deliberately checks nothing external — T-056.
+
+        Same rule as the PEP's (`agentiam_pep.app`): a liveness probe that depends on
+        Postgres turns one database outage into a restart loop that cannot converge,
+        because restarting this process does nothing to fix the database.
+        """
+        return JSONResponse({"status": "ok"})
+
+    @app.get("/readyz")
+    async def readyz() -> JSONResponse:
+        """Readiness, reporting only what is actually wired — T-056.
+
+        This reflects *wiring*, not *reachability*, and that is deliberate. Every
+        database-backed route here already answers 503 without one rather than failing to
+        boot (T-046/T-047/T-048's "visibly not wired" shape), so the process can genuinely
+        serve without Postgres. A probe that dialled the database would pull every replica
+        out of rotation on a blip — including the console an operator would use to
+        diagnose it — converting a degraded state into a total outage.
+        """
+        return JSONResponse(
+            {
+                "status": "ready",
+                "checks": {
+                    "database": session_factory is not None,
+                    "escalations": session_factory is not None and escalation_settings is not None,
+                    "auth": oidc_settings is not None,
+                    "revocation_publisher": revocation_publisher is not None,
+                },
+            }
+        )
 
     if session_factory is not None and escalation_settings is not None:
         app.add_middleware(
@@ -536,4 +569,77 @@ def create_app(
     return app
 
 
+def create_app_from_env() -> FastAPI:
+    """Build the control plane from environment variables — the deployment entry point.
+
+    T-056. A container runs this as a uvicorn factory:
+
+        uvicorn agentiam_controlplane.app:create_app_from_env --factory --host 0.0.0.0
+
+    **This is not `app` below, and the difference matters.** `app` is `create_app()` with
+    no arguments — no database, so no escalation router, no revocation router, no session
+    middleware and no login. That is correct for the Cedar authoring console (T-027) and
+    is what `tests/unit/test_controlplane_ui.py` drives, but pointing a deployment at it
+    yields a control plane that silently cannot approve an escalation or revoke a token.
+
+    What is required versus optional follows the shape the rest of the package already
+    uses. `ControlPlaneSettings.from_env()` is **required** and raises if the signing key,
+    the approver allowlist or the session secret is missing — a control plane that booted
+    without them would accept an approval it could not mint a token for, and only find out
+    when a human clicked the button. The database URL is **optional**: without it the app
+    still boots and `/readyz` reports `database: false`, because the console is useful
+    without one and a misconfigured deployment should be diagnosable through the endpoint
+    that reports the problem rather than through a crash loop. OIDC is optional as a
+    *whole* — but `OIDCSettings.from_env()` raises on a partial configuration, so the
+    dangerous middle state (login routes that exist and cannot complete a flow) is refused
+    at boot rather than discovered at the redirect.
+
+    Raises:
+        ValueError: A required `AGENTIAM_CONTROLPLANE_*` variable is missing or malformed,
+            or OIDC is partially configured.
+    """
+    import os
+
+    from agentiam_controlplane.db.base import make_engine, make_session_factory
+    from agentiam_controlplane.settings import ControlPlaneSettings, OIDCSettings
+
+    settings = ControlPlaneSettings.from_env()
+
+    # `DATABASE_URL` is the fallback because that is the name `alembic.ini` and
+    # `.env.example` already use; a deployment that sets only that must not come up
+    # database-less without saying so.
+    database_url = os.environ.get("AGENTIAM_CONTROLPLANE_DATABASE_URL") or os.environ.get(
+        "DATABASE_URL"
+    )
+    session_factory = make_session_factory(make_engine(database_url)) if database_url else None
+
+    # Absent entirely means "login not wired"; partially present raises inside `from_env`.
+    oidc_settings = (
+        OIDCSettings.from_env()
+        if any(
+            os.environ.get(f"AGENTIAM_CONTROLPLANE_OIDC_{name}")
+            for name in ("ISSUER", "CLIENT_ID", "CLIENT_SECRET")
+        )
+        else None
+    )
+
+    redis_url = os.environ.get("AGENTIAM_CONTROLPLANE_REDIS_URL")
+    revocation_publisher = None
+    if redis_url:
+        from redis.asyncio import Redis
+
+        from agentiam_controlplane.db.revocation_publisher import RedisRevocationPublisher
+
+        revocation_publisher = RedisRevocationPublisher(Redis.from_url(redis_url))
+
+    return create_app(
+        session_factory=session_factory,
+        escalation_settings=settings,
+        oidc_settings=oidc_settings,
+        revocation_publisher=revocation_publisher,
+    )
+
+
+#: The console-only app: no database, no auth, no escalations. Imported by T-027's UI
+#: tests. **Not a deployment entry point** — use `create_app_from_env()` for that.
 app = create_app()

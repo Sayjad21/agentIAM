@@ -64,10 +64,27 @@ _INTENT_HASH = hashlib.sha256(b"an oidc-gated escalation").hexdigest()
 
 @pytest.fixture(scope="module")
 def keycloak() -> Generator[KeycloakContainer]:
-    """A real Keycloak, realm/client/users pinned by `deploy/keycloak/realm-export.json`."""
-    container = KeycloakContainer("quay.io/keycloak/keycloak:26.0").with_realm_import_file(
-        str(_REALM_EXPORT)
+    """A real Keycloak, realm/client/users pinned by `deploy/keycloak/realm-export.json`.
+
+    **Not `with_realm_import_file`, deliberately.** That helper hardcodes the destination
+    to `/opt/keycloak/data/import/realm.json`, and Keycloak 26's `DirImportProvider` only
+    imports files named `<realm>-realm.json`. Given any other name it logs *"Import
+    finished successfully"* and imports nothing, so every test here failed with a 404 on
+    the realm's discovery document while the container looked perfectly healthy.
+
+    Measured both ways on this host: identical bytes at `realm.json` produce no realm and
+    a 404; at `agentiam-realm.json` they log `Realm 'agentiam' imported` and answer 200.
+    `with_copy_into_container` is used because it is the one API that lets the destination
+    filename be chosen. `docker-compose.yml` carries the same fix for the same reason, and
+    `tests/unit/test_compose_config.py` pins the convention on that side (T-056).
+    """
+    container = KeycloakContainer("quay.io/keycloak/keycloak:26.0")
+    container.with_copy_into_container(
+        _REALM_EXPORT.read_bytes(), "/opt/keycloak/data/import/agentiam-realm.json"
     )
+    # `with_copy_into_container` does not set this, and it is what appends `--import-realm`
+    # to the start command.
+    container.has_realm_imports = True
     with container as kc:
         yield kc
 

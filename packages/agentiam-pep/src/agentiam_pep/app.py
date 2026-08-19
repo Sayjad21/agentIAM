@@ -52,6 +52,8 @@ from agentiam_pep.tracing import configure_tracing
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from starlette.types import Lifespan
+
     from agentiam_pep.pipeline import Pipeline
 
 #: Where proxied traffic enters. `PLAN.md` §8: `ANY /proxy/{upstream_path}`.
@@ -84,6 +86,7 @@ def create_app(
     settings: PepSettings,
     upstream_client: httpx.AsyncClient | None = None,
     pipeline: Pipeline | None = None,
+    lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
     """Build the gateway.
 
@@ -93,6 +96,13 @@ def create_app(
             upstream can be an in-process ASGI app; built from `settings` otherwise.
         pipeline: The ten steps (T-023). Supplied means the gateway enforces; omitted means
             it is the T-018 transport and says so on `/readyz`.
+        lifespan: Startup/shutdown for whatever the caller assembled around this app —
+            the emitter's drain task, the settlement queue, the revocation consumer, the
+            lease pool's release. Supplied by the deployment composition root
+            (`scripts/pep_service.py`, T-056); `None` everywhere else, which is why every
+            existing test and benchmark is unaffected. This is a parameter rather than
+            `@app.on_event` because the latter is deprecated as of FastAPI 0.141, and
+            because *what* to start belongs to whoever built the object graph, not here.
 
     Returns:
         A FastAPI application.
@@ -108,6 +118,7 @@ def create_app(
         summary="Policy enforcement point.",
         docs_url=None,
         redoc_url=None,
+        lifespan=lifespan,
     )
 
     @app.get("/healthz")
