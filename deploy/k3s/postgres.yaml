@@ -1,0 +1,78 @@
+# Same image and locale pinning as docker-compose.yml's postgres service, for the same
+# reason: money is NUMERIC(20,4), and ordering/formatting must not depend on the host.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: agentiam
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # a second postgres pod would mean two writers on one PVC
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: agentiam
+            - name: POSTGRES_PASSWORD
+              value: agentiam # dev-only, throwaway — same footing as docker-compose.yml's
+            - name: POSTGRES_DB
+              value: agentiam
+            - name: LANG
+              value: C
+            - name: POSTGRES_INITDB_ARGS
+              value: "--encoding=UTF8 --locale=C"
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "agentiam", "-d", "agentiam"]
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "agentiam", "-d", "agentiam"]
+            periodSeconds: 10
+            initialDelaySeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: agentiam
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: agentiam
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

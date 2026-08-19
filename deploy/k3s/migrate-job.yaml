@@ -1,0 +1,53 @@
+# The one-shot schema migration — the k8s equivalent of docker-compose.demo.yml's
+# `migrate` service. A Job rather than an initContainer on the app Deployments: two
+# replicas racing `alembic upgrade head` is a real hazard (T-013's own concurrency
+# tests exist because concurrent writers on one row are not automatically safe), and a
+# Job runs it exactly once, cleanly, before anything depends on its result.
+#
+# `workingDir` matters and is not decoration — measured while building the Dockerfile
+# (T-056 Part 2): `packages/agentiam-controlplane/alembic.ini`'s `script_location` is a
+# path relative to alembic's *working directory*, not to the ini file.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: agentiam
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        # No `depends_on` in k8s — wait for Postgres to accept connections before the
+        # migration runs, rather than relying on `backoffLimit` retries to paper over a
+        # cold start. Plain stdlib `socket`, matching the healthcheck precedent already
+        # set in `docker-compose.demo.yml` (python:3.12-slim ships neither curl nor
+        # wget — measured in Part 2).
+        - name: wait-for-postgres
+          image: agentiam:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import socket, time
+              for _ in range(60):
+                  try:
+                      socket.create_connection(("postgres", 5432), timeout=2).close()
+                      break
+                  except OSError:
+                      time.sleep(2)
+              else:
+                  raise SystemExit("postgres did not become reachable")
+      containers:
+        - name: migrate
+          image: agentiam:latest
+          imagePullPolicy: IfNotPresent
+          workingDir: /app/packages/agentiam-controlplane
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              value: postgresql+asyncpg://agentiam:agentiam@postgres:5432/agentiam
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }

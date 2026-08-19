@@ -1,0 +1,5 @@
+# T-056 Part 3. Every other manifest in this directory targets this namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentiam

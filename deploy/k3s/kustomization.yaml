@@ -1,0 +1,26 @@
+# kubectl apply -k deploy/k3s/
+#
+# Every manifest here references `agentiam:latest` for the image name; override it for a
+# real deployment with:
+#   kubectl kustomize deploy/k3s/ | sed 's|agentiam:latest|ghcr.io/sayjad21/agentiam:vX.Y.Z|' | kubectl apply -f -
+# or the equivalent `images:` transformer in a local overlay. Part 4 publishes signed,
+# tagged images to that registry; nothing here assumes it exists.
+#
+# The `agentiam-secrets` Secret is deliberately NOT a resource in this list — see
+# README.md in this directory. Generating it is one command
+# (`scripts/bootstrap_demo_secrets.py` + `kubectl create secret generic --from-file`),
+# and committing a template with placeholder values next to real manifests is exactly
+# the kind of near-miss `tests/security/test_secret_scanning.py` (T-054) exists to catch.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: agentiam
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - redis.yaml
+  - migrate-job.yaml
+  - tools.yaml
+  - controlplane.yaml
+  - pep.yaml

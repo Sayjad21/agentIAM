@@ -1,0 +1,46 @@
+# The M4 stub upstream (`agentiam_demo.tools`) — something for the PEP to proxy to.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tools
+  namespace: agentiam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tools
+  template:
+    metadata:
+      labels:
+        app: tools
+    spec:
+      containers:
+        - name: tools
+          image: agentiam:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "scripts/serve_tools.py", "--host", "0.0.0.0", "--port", "8081"]
+          ports:
+            - containerPort: 8081
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            periodSeconds: 2
+            failureThreshold: 15
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            periodSeconds: 10
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tools
+  namespace: agentiam
+spec:
+  selector:
+    app: tools
+  ports:
+    - port: 8081
+      targetPort: 8081

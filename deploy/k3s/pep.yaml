@@ -1,0 +1,130 @@
+# T-056 Part 1's PEP composition root — `scripts/pep_service.py`. Every credential and
+# bundle path is required at boot (ADR-056): this Deployment supplies all of them, or the
+# pod does not come up, which is the intended failure mode.
+#
+# Unlike `docker-compose.demo.yml`, no shell wrapper is needed to turn a mounted secret
+# file into an environment variable — `secretKeyRef` injects a Secret key's *value*
+# directly as an env var, which is a genuine k8s/Compose difference worth stating rather
+# than mirroring the workaround unnecessarily. The three values that are genuinely
+# *files* on disk (the policy bundle, its signature, the route table — `pep_service.py`
+# reads each with `Path(...).read_text()`) are mounted as a volume instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pep
+  namespace: agentiam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pep
+  template:
+    metadata:
+      labels:
+        app: pep
+    spec:
+      initContainers:
+        # Same reasoning as controlplane.yaml's initContainer: `pep_service.build_service`
+        # also builds its engine lazily, so waiting on the real schema precondition rather
+        # than on the `migrate` Job's own resource status avoids new RBAC surface.
+        - name: wait-for-migration
+          image: agentiam:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import asyncio, asyncpg
+
+              async def main() -> None:
+                  for _ in range(60):
+                      try:
+                          conn = await asyncpg.connect(
+                              "postgresql://agentiam:agentiam@postgres:5432/agentiam"
+                          )
+                      except OSError:
+                          await asyncio.sleep(2)
+                          continue
+                      try:
+                          exists = await conn.fetchval(
+                              "select exists (select 1 from information_schema.tables "
+                              "where table_name = 'budgets')"
+                          )
+                      finally:
+                          await conn.close()
+                      if exists:
+                          return
+                      await asyncio.sleep(2)
+                  raise SystemExit("migration did not complete in time")
+
+              asyncio.run(main())
+      containers:
+        - name: pep
+          image: agentiam:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "scripts/pep_service.py", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AGENTIAM_PEP_UPSTREAM_BASE_URL
+              value: http://tools:8081
+            - name: AGENTIAM_PEP_DATABASE_URL
+              value: postgresql+asyncpg://agentiam:agentiam@postgres:5432/agentiam
+            - name: AGENTIAM_PEP_REDIS_URL
+              value: redis://redis:6379/0
+            - name: AGENTIAM_PEP_CONTROL_PLANE_URL
+              value: http://controlplane:8000
+            # The PEP is scoped to exactly one mandate (ADR-056, STATUS gap 25) — same
+            # placeholder `docker-compose.demo.yml` uses; T-057's demo script mints a
+            # real one through the control plane's issuance path.
+            - name: AGENTIAM_PEP_MANDATE_ID
+              value: "00000000-0000-0000-0000-000000000000"
+            - name: AGENTIAM_PEP_ID
+              value: pep-1
+            - name: AGENTIAM_PEP_POLICY_BUNDLE_PATH
+              value: /secrets/policy_bundle.json
+            - name: AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH
+              value: /secrets/policy_bundle.sig
+            - name: AGENTIAM_PEP_ROUTES_PATH
+              value: /secrets/routes.json
+            - name: AGENTIAM_PEP_ROOT_PUBLIC_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: agentiam-secrets
+                  key: root_public_key.hex
+            - name: AGENTIAM_PEP_POLICY_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentiam-secrets
+                  key: policy_public_key.hex
+          volumeMounts:
+            - name: secrets
+              mountPath: /secrets
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: secrets
+          secret:
+            secretName: agentiam-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pep
+  namespace: agentiam
+spec:
+  selector:
+    app: pep
+  ports:
+    - port: 8080
+      targetPort: 8080

@@ -3135,3 +3135,96 @@ built image, against real Postgres and Redis, for the first time in this project
 scope (gap 25) is unchanged by this ticket: `docker-compose.demo.yml` starts it against a
 placeholder all-zero mandate id so the containers prove their wiring; T-057 is where a real
 mandate gets minted through the control plane's own issuance path.
+
+### Addendum — Part 3: k3s manifests, and a bug static validation cannot see
+
+**Date:** 2026-08-19
+
+**No live k3s in CI — a locked decision, not an oversight.** `deploy/k3s/` is validated on
+every `make check` by `tests/unit/test_k3s_manifests.py` (every file parses, every env var
+name matches `ServiceSettings.from_env()`/`ControlPlaneSettings.from_env()` — the real
+classes, not retyped strings — every `secretKeyRef` key matches what
+`bootstrap_demo_secrets.py` actually writes) plus a documented manual
+`kubectl apply --dry-run=server` check. Standing up a real cluster in CI is real
+infrastructure work with no existing pattern in this project to lean on (`test-integration`
+spins Postgres via testcontainers; nothing here spins a control-plane node), and the
+per-ticket budget does not cover building one from nothing. Recorded as a deliberate scope
+line, not left implicit.
+
+**The migration-readiness gate re-derives Part 1's own lesson, not a new one.**
+`make_engine()` builds an async engine lazily, so `create_app_from_env()` boots and
+`/readyz` reports `database: true` against a database with no schema at all — this is
+exactly why Part 1's compose healthchecks exist. The k8s equivalent is an initContainer on
+both `controlplane` and `pep` that polls `information_schema.tables` for the `budgets`
+table directly via `asyncpg`, not the `migrate` Job's own `status.succeeded` field: reading
+Job status needs a ServiceAccount with RBAC to `get`/`list` Jobs, a new permission surface
+for a check that querying the actual precondition avoids entirely. `asyncpg` is already a
+dependency of this image.
+
+**`secretKeyRef` replaces `docker-compose.demo.yml`'s shell-wrapper — a genuine platform
+difference, not a stylistic one.** Compose has no primitive that turns a mounted secret
+*file's contents* into an environment variable, so Part 2 shipped
+`command: sh -c "export VAR=$(cat /secrets/file) && <real command>"`. Kubernetes's
+`secretKeyRef` does this natively: a Secret key's *value* is injected as an env var
+directly, no shell indirection needed. The three values that are genuinely files on disk
+in `pep_service.py` (`Path(...).read_text()` — the policy bundle, its signature, the route
+table) are still mounted as a volume, since those are read as files by the code, not env
+vars, in both deployment shapes.
+
+**Keycloak and Ollama are deliberately absent from `deploy/k3s/`**, matching Part 2's
+Compose posture but stated explicitly for k8s: `AGENTIAM_CONTROLPLANE_OIDC_*` unset means
+`/readyz` reports `auth: false` (a legitimate T-043 configuration), and the LLM backend
+defaults to hosted inference (ADR-040) so no local model pull is needed for the enforcement
+path this manifest set demonstrates. Bringing either to Kubernetes — a real realm-import
+and a several-GB model volume — is scoped out rather than half-built.
+
+**Measured, not assumed: `kubectl apply --dry-run=client --validate=strict` does not do
+real schema validation.** A deliberately broken field (`containers: "not-a-list"` on a Pod)
+passed `--dry-run=client` clean on this kubectl/server version (v1.36.1) and was only
+caught by `--dry-run=server`, which needs a reachable API server. `deploy/k3s/README.md`
+documents both the finding and the reproduction command, so a reader does not mistake the
+cheaper check for the real one.
+
+**Found and fixed by the one live deployment this ticket actually ran, not by
+inspection: every `agentiam:latest` container needs `imagePullPolicy: IfNotPresent` set
+explicitly.** Kubernetes defaults `imagePullPolicy` to `Always` for any `:latest`-tagged
+image regardless of whether it is already present on the node, so even a successful
+`kind load docker-image agentiam:latest` still produced `ImagePullBackOff` on every
+`agentiam:latest` container and initContainer (`controlplane`, `pep`, `tools`, `migrate`'s
+two containers, plus both `wait-for-migration` initContainers — 7 sites) — there is no
+registry configured for kubelet to pull `agentiam:latest` *from*, and `Always` does not
+mean "prefer what's local." Adding `imagePullPolicy: IfNotPresent` to all seven fixed it
+immediately, confirmed by the same cluster reaching `Running`/`Completed` on every pod on
+the next apply. `tests/unit/test_k3s_manifests.py`'s
+`TestImages::test_every_agentiam_latest_container_sets_imagepullpolicy_ifnotpresent` pins
+it, following this file's own stated posture that a real gotcha found by running the
+system belongs in a test, not only in prose.
+
+**Two more findings while getting `postgres:16-alpine`/`redis:7-alpine` into this specific
+kind node — both host-environment artifacts, not AgentIAM defects, and not the same
+finding as the fix above.** `kind load docker-image` failed with
+`ctr: content digest sha256:...: not found` for both images, reproduced even after a fresh
+`docker pull --platform linux/amd64`; the proximate cause is `kind load`'s `--all-platforms`
+default choking on this host's locally-cached multi-arch manifest lists being incomplete,
+independent of anything in this repository. A first pull attempt also hit an IPv6 egress
+timeout from inside the kind node's network namespace against Docker Hub, while the host
+itself has working egress (confirmed against apache.org earlier in this project) — a
+routing asymmetry specific to this kind installation. The working fix, used only to
+complete this one manual verification and not part of the shipped manifests: pull directly
+into the node's containerd, bypassing `kind load` entirely —
+`docker exec <node> ctr --namespace=k8s.io images pull --platform linux/amd64
+docker.io/library/postgres:16-alpine`. `deploy/k3s/README.md` documents this so a future
+run on different infrastructure is not blocked chasing the same dead end.
+
+**Consequences.** `kubectl apply -k deploy/k3s/` against a real `kind` cluster reached
+every pod `Running`/`Completed` and stayed there: `migrate`'s Job completed and
+`controlplane`'s `/readyz` reported `database: true` against the schema it had actually
+created (not the lazy-engine false positive Part 1 designed around); a request through the
+real PEP proxy path with no bearer token returned a genuine `401`
+(`reason_code: MALFORMED_REQUEST`, `"token is absent or empty"`) — verify, policy and lease
+all exercised for real inside the cluster, the first time this project's manifests have run
+against a live orchestrator rather than only being parsed. All test resources (the
+`agentiam` namespace and everything in it) were deleted afterward; the pre-existing `demo`
+namespace and its own workload were left untouched — confirmed by listing namespaces
+before and after. 26 new/changed unit tests (`test_k3s_manifests.py`, 25 tests, plus the
+`imagePullPolicy` regression test added after the live finding).

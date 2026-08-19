@@ -1,0 +1,108 @@
+# `create_app_from_env()` — T-056 Part 1's deployment entry point, not the module-level
+# `app` (which is console-only, database-less by design).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controlplane
+  namespace: agentiam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: controlplane
+  template:
+    metadata:
+      labels:
+        app: controlplane
+    spec:
+      initContainers:
+        # `make_engine()` builds an async engine lazily — it does not connect at
+        # construction — so `create_app_from_env()` boots successfully and `/readyz`
+        # reports `database: true` even against an unmigrated database (that check is
+        # "is a session factory configured", not "does the schema exist"). Waiting for
+        # the `migrate` Job's own resource status would need a ServiceAccount with RBAC
+        # to read Jobs; querying the actual precondition directly — does the `budgets`
+        # table exist — is simpler, needs no new RBAC surface, and is what genuinely
+        # matters. `asyncpg` is already a dependency of this image, so nothing new here.
+        - name: wait-for-migration
+          image: agentiam:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import asyncio, asyncpg
+
+              async def main() -> None:
+                  for _ in range(60):
+                      try:
+                          conn = await asyncpg.connect(
+                              "postgresql://agentiam:agentiam@postgres:5432/agentiam"
+                          )
+                      except OSError:
+                          await asyncio.sleep(2)
+                          continue
+                      try:
+                          exists = await conn.fetchval(
+                              "select exists (select 1 from information_schema.tables "
+                              "where table_name = 'budgets')"
+                          )
+                      finally:
+                          await conn.close()
+                      if exists:
+                          return
+                      await asyncio.sleep(2)
+                  raise SystemExit("migration did not complete in time")
+
+              asyncio.run(main())
+      containers:
+        - name: controlplane
+          image: agentiam:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - uvicorn
+            - agentiam_controlplane.app:create_app_from_env
+            - --factory
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8000"
+          ports:
+            - containerPort: 8000
+          env:
+            - name: AGENTIAM_CONTROLPLANE_DATABASE_URL
+              value: postgresql+asyncpg://agentiam:agentiam@postgres:5432/agentiam
+            - name: AGENTIAM_CONTROLPLANE_REDIS_URL
+              value: redis://redis:6379/0
+            - name: AGENTIAM_CONTROLPLANE_APPROVERS
+              value: "kc:11111111-1111-1111-1111-111111111111,kc:22222222-2222-2222-2222-222222222222"
+            - name: AGENTIAM_CONTROLPLANE_SESSION_SECRET_KEY
+              value: dev-change-me-session-secret
+            - name: AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentiam-secrets
+                  key: root_private_key.hex
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 10
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controlplane
+  namespace: agentiam
+spec:
+  selector:
+    app: controlplane
+  ports:
+    - port: 8000
+      targetPort: 8000
