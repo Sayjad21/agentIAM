@@ -3228,3 +3228,63 @@ against a live orchestrator rather than only being parsed. All test resources (t
 namespace and its own workload were left untouched — confirmed by listing namespaces
 before and after. 26 new/changed unit tests (`test_k3s_manifests.py`, 25 tests, plus the
 `imagePullPolicy` regression test added after the live finding).
+
+### Addendum — Part 4: signed images, and a rollback safety claim that was not true
+
+**Date:** 2026-08-19
+**Affects:** `.github/workflows/release.yml` (new), `docs/deployment.md` (new),
+`docs/STATUS.md` (gap 27, gap 21 corrected), T-056
+
+**GHCR + cosign, keyless, tag-triggered only — the locked decision from this ticket's
+planning, implemented as specified.** `release.yml` runs on `push: tags: v*` and nowhere
+else; an ordinary push to `main` never publishes anything. Signing is keyless: the job's
+short-lived GitHub OIDC token buys a Fulcio certificate, the signature lands in the public
+Rekor log, and no private key exists anywhere in this repository or its secrets to leak,
+rotate, or lose — the verifiable identity is the workflow's own OIDC subject
+(`https://github.com/<owner>/agentiam/.github/workflows/release.yml@<ref>`), which is also
+what `cosign verify`/`verify-attestation` check in the same job immediately after
+publishing, so a broken keyless setup fails the release rather than shipping an
+unverifiable signature. The attested SBOM predicate is the same `docs/evidence/sbom.json`
+T-054 already produces — not a second one invented for this workflow.
+
+**Every action version pin was checked against the real GitHub API before being written
+down** (`docker/login-action@v4`, `docker/setup-buildx-action@v4`,
+`docker/build-push-action@v7`, `sigstore/cosign-installer@v4.1.2` — the last has no
+floating major tag, confirmed by listing the repository's actual tags, so it is pinned to
+an exact point release rather than a guessed one), the same discipline that caught the
+missing `v` prefix on `trivy-action` in T-055. **What was not possible to verify**: the
+workflow has not run end to end, because that needs a real `vX.Y.Z` tag pushed to the real
+repository — a visible, public, hard-to-reverse action this project's own working rules
+hold back for explicit confirmation rather than take unilaterally while documenting a
+different ticket. A local `cosign` CLI dry run was attempted as a fallback and could not
+complete either — this sandbox's network egress could not reach GitHub's release-asset
+host to install the binary. `docs/deployment.md` §1 states both limits plainly rather than
+overclaim a measurement that was not made.
+
+**Found while writing the rollback procedure, not while reading: the recovery story
+gap 21 and CH-4's own docstring tell is only half true in the deployed system.** Both say
+a `SIGKILL`ed PEP's stranded lease is safe because *"the lease expires and `REAP`
+reclaims it."* Writing `docs/deployment.md`'s rollback section required actually tracing
+where `REAP` runs in production, and grepping every non-test call site of
+`agentiam_controlplane.db.ledger.reap` found **none** — not in `scripts/pep_service.py`,
+not in `scripts/serve_pep.py`, not in either compose file, not in `deploy/k3s/`. Spec 04's
+own pseudocode prescribes `REAP() # background, every TTL/4`; `tests/chaos/pepstack.py`'s
+own docstring confirms CH-3/CH-4 observe reclamation only by injecting an advanced clock
+and calling `reap()` directly, not by waiting on anything scheduled. Confirmed the
+function itself is not the problem — a throwaway Postgres, a real migration, and the exact
+snippet now in `docs/deployment.md` §2.3 reclaimed a real stranded lease cleanly — the gap
+is purely that nothing calls it on a cadence. **Recorded as new gap 27, gap 21's own text
+corrected to stop stating the old claim as settled**, and not fixed here: a scheduled
+reaper is a money-hot-path addition needing its own design (which process runs it, how
+concurrent instances avoid duplicate work), the same posture Part 1 took with gap 25
+rather than patching the hot path inside a deployment-documentation ticket.
+`docs/deployment.md` §2.3 gives the manual invocation as the honest interim step, and the
+rollback checklist (§2.4) makes running it after any forced pod kill an explicit item
+rather than an implicit assumption.
+
+**Consequences.** T-056 is complete — one-command demo bring-up (Part 2), k3s manifests
+live-verified against a real cluster (Part 3), signed images and a documented rollback
+procedure (Part 4) — against `PLAN.md`'s stated T-056 acceptance criteria in full. The one
+thing this ticket's own final pass could not close is new, not old: gap 27, found by the
+same habit this project has applied to every other ticket, applied here to this project's
+own prior claim about itself.
