@@ -30,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from agentiam_core.attenuation import attenuate
 from agentiam_core.caveats import evaluate as evaluate_caveat
 from agentiam_core.decision import BudgetVerdict, decide
 from agentiam_core.hashing import hash_object
@@ -43,7 +44,13 @@ from agentiam_core.models import (
     ScopeSubset,
     ToolAllow,
 )
-from agentiam_core.tokens import RootKeySet, generate_keypair, mint_root, verify
+from agentiam_core.tokens import (
+    RootKeySet,
+    authorize_request,
+    generate_keypair,
+    mint_root,
+    verify,
+)
 from agentiam_pep.extractor import RouteTable, extract
 from agentiam_pep.policy import AgentPrincipal, CedarEngine, PolicyBundle, ToolFacts
 
@@ -195,6 +202,31 @@ class TestPerStepBreakdown:
 
         benchmark(all_four)
         _record("caveats", benchmark)
+
+    def test_step_4b_token_authority(self, benchmark: Any) -> None:
+        """The token's own Datalog, evaluated by biscuit — the step `decide()` gained.
+
+        Measured separately because it is the largest single thing inside `decide()` after
+        Cedar, and folding it into the total would leave the breakdown claiming that
+        everything but policy is single-digit microseconds when it no longer is.
+
+        A depth-1 chain rather than the root: the authority block's own six checks are the
+        floor, and an attenuation block is what a real sub-agent presents.
+        """
+        child = attenuate(
+            verify(mint_root(_mandate(), _ROOT.private_key), KEY_SET, now=NOW),
+            [
+                ScopeSubset(scopes=frozenset({"payment:initiate"})),
+                BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=Decimal(1000)),
+            ],
+            agent_id="agt-perf",
+            role="worker",
+        )
+        verified = verify(child, KEY_SET, now=NOW)
+        context = _context()
+
+        benchmark(lambda: authorize_request(verified, context))
+        _record("token_authority", benchmark)
 
     def test_step_5_policy(self, benchmark: Any) -> None:
         """T-024: the real Cedar engine, bound to a principal."""

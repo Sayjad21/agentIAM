@@ -59,11 +59,20 @@ def _table(rows: list[list[str]], headers: list[str]) -> list[str]:
 
 
 def _render_pb2(data: dict[str, Any]) -> list[str]:
-    order = ["extract", "verify", "caveats", "policy", "record_hash", "decide_total"]
+    order = [
+        "extract",
+        "verify",
+        "caveats",
+        "token_authority",
+        "policy",
+        "record_hash",
+        "decide_total",
+    ]
     labels = {
         "extract": "step 1 — extract (route, args, digest)",
         "verify": "step 2 — verify (biscuit signature)",
         "caveats": "step 4 — caveats (4 clauses, Datalog)",
+        "token_authority": "step 4b — token authority (biscuit authorizer, depth 1)",
         "policy": "step 5 — policy (Cedar)",
         "record_hash": "step 10 — audit record hash",
         "decide_total": "**`decide()` total — NFR-1**",
@@ -95,15 +104,25 @@ def _render_pb2(data: dict[str, Any]) -> list[str]:
         + total.get("median_us", 0)
         + steps.get("extract", {}).get("median_us", 0)
     )
+    authority = steps.get("token_authority", {})
     lines += [
         f"**NFR-1 holds**: `decide()` p99 is {total.get('p99_us')} µs against a 1000 µs "
         f"budget, and `PLAN.md` §17's R-2 trigger (2 ms, port to Rust) is not approached.",
         "",
-        "Two things the breakdown says that a single number cannot:",
+        "Three things the breakdown says that a single number cannot:",
         "",
-        f"- **Policy evaluation is nearly the whole decision** — {policy.get('median_us')} µs "
-        f"of a {total.get('median_us')} µs median. Everything else inside `decide()` is "
-        f"single-digit microseconds.",
+        f"- **Two steps are the decision.** Cedar at {policy.get('median_us')} µs and the "
+        f"token's own Datalog at {authority.get('median_us')} µs together account for "
+        f"almost all of a {total.get('median_us')} µs median. Everything else inside "
+        f"`decide()` is single-digit microseconds.",
+        "",
+        f"- **Enforcing the token costs about as much as the policy does, and buys more.** "
+        f"Step 4b evaluates every check in every block — the mandate's grant and every "
+        f"attenuation caveat — against a token that may have arrived from anywhere. It was "
+        f"absent until the manual test pass found that nothing on the PEP path called "
+        f"`authorize()`, so the {authority.get('median_us')} µs is new cost against a "
+        f"budget that still has room, not a regression.",
+        "",
         f"- **`verify()` is the most expensive step and sits *outside* `decide()`** at "
         f"{verify.get('median_us')} µs median. Per-request in-process cost is verify + "
         f"decide + extract, so roughly {per_request} µs — that, not NFR-1 alone, is what "
