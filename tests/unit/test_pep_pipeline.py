@@ -364,14 +364,23 @@ class TestRefusals:
         assert result.status == 403
 
     async def test_a_policy_denial_is_403(self) -> None:
+        """The amount must sit *between* the two ceilings, or this tests the wrong step.
+
+        `POLICY` refuses above 100,000; `a_mandate()` grants 500,000. The original 999,999
+        was over both, and once the token's own budget checks started binding (spec 01
+        §2.3) it was refused at step 4 and never reached Cedar at all — so the test passed
+        for years while measuring the step above the one it names. 200,000 is inside the
+        mandate and outside the policy, which is the only band that isolates step 5.
+        """
         pipeline, _, _ = await a_pipeline()
         result = await pipeline.authorize(
             method="POST",
             path="/payments",
             headers=bearer(a_mandate()),
-            body=b'{"amount": "999999.0000", "recipient": {"account_id": "acct_1"}}',
+            body=b'{"amount": "200000.0000", "recipient": {"account_id": "acct_1"}}',
         )
         assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.POLICY_DENIED
         assert result.status == 403
 
     async def test_a_revoked_token_is_401(self) -> None:

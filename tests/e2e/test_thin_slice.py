@@ -83,10 +83,16 @@ ROUTES: dict[str, object] = {
     "default": {"action": "deny"},
 }
 
+#: The Cedar ceiling sits *below* the mandate's own (`POOL_TOTAL`, 1,000) on purpose.
+#: It used to be 100,000 — a hundred times the mandate — which meant no request could ever
+#: be refused by Cedar without the token's budget checks refusing it first, and once those
+#: started binding (spec 01 §2.3) `test_the_denial_never_reached_the_tool` was measuring
+#: step 4 while claiming to measure step 5. 300 leaves a band, 300 < amount <= 1,000, that
+#: only Cedar can refuse.
 POLICY = """
 permit(principal, action == Action::"invoice:read", resource);
 permit(principal, action == Action::"payment:initiate", resource)
-when { context.amount.lessThanOrEqual(decimal("100000.0")) };
+when { context.amount.lessThanOrEqual(decimal("300.0")) };
 """
 
 TOOLS = {
@@ -333,11 +339,16 @@ class TestTheSlice:
         assert spent > 0, "nothing was spent before the refusal"
 
     async def test_the_denial_never_reached_the_tool(self, slice_: Slice) -> None:
-        """A policy denial that still calls the tool is not a policy."""
+        """A policy denial that still calls the tool is not a policy.
+
+        500 sits in the band only Cedar refuses: inside the mandate's 1,000 ceiling, over
+        the bundle's 300. The amount used to be 500,000, which the token's own budget
+        checks refuse first — so this asserted a 403 it was no longer getting.
+        """
         response = await slice_.client.post(
             "/proxy/payments",
             headers=slice_.auth,
-            json={"amount": "500000.0000", "recipient": {"account_id": "acct_1001"}},
+            json={"amount": "500.0000", "recipient": {"account_id": "acct_1001"}},
         )
         assert response.status_code == 403
         assert "payment_id" not in response.text

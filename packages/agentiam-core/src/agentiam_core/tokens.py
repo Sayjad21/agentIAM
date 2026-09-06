@@ -54,7 +54,7 @@ from agentiam_core.models import Budget, BudgetDimension, Mandate, RequestContex
 WARN_SIZE_LIMIT_B64: Final = 4096
 
 #: Base64 length past which a token is refused outright. Measured: a chain at the maximum
-#: permitted depth of 8 reaches 4,940 characters, so this is never hit in normal operation.
+#: permitted depth of 8 reaches 4,892 characters, so this is never hit in normal operation.
 HARD_SIZE_LIMIT_B64: Final = 8192
 
 
@@ -132,8 +132,13 @@ def mint_root(mandate: Mandate, private_key: PrivateKey) -> str:
     """Mint a root token for `mandate`, signed with the root key.
 
     Emits the authority block described in spec 01 §5: identity and binding facts, the
-    grant, and the six checks. Budgets are scaled integers so a single Datalog comparison
-    covers every dimension.
+    grant, and its checks — grant membership, depth, intent, the validity window, and
+    **one budget check per dimension**. Budgets are scaled integers so every dimension is
+    compared the same way.
+
+    The budget checks are per-dimension rather than one comparison over a ranging `$dim`,
+    and spec 01 §2.3 has the measurement showing why: the ranging form is existential, so a
+    dimension inside its ceiling silently rescued one that was over it.
 
     Args:
         mandate: The grant to encode.
@@ -167,8 +172,27 @@ def mint_root(mandate: Mandate, private_key: PrivateKey) -> str:
         f"check if current_depth($d), $d <= {mandate.max_depth};",
         # The request must be bound to the approved task.
         "check if request_intent($h), intent($h);",
-        # Per-dimension ceiling from the mandate.
-        "check if requested($dim, $v), budget($dim, $max), $v <= $max;",
+    ]
+    lines += [
+        # One check per dimension, naming it literally — spec 01 §2.3.
+        #
+        # This was a single `check if requested($dim, $v), budget($dim, $max), $v <= $max;`
+        # until it was measured. `check if` is satisfied by *some* binding, `$dim` ranges
+        # over every dimension, and §2.2 requires the verifier to supply all of them — so
+        # `requested("tool_calls", 0)` against its own ceiling satisfied the check on its
+        # own and whatever `spend_bdt` asked for never decided anything. A dimension inside
+        # its ceiling rescued one that was over it, on every request shaped the way §2.2
+        # mandates. Omitting a dimension was allowed too, for the same reason, which is not
+        # what §2.2 claims happens.
+        #
+        # Naming the dimension makes `$v` range over exactly one fact, so the check is
+        # universal by construction and an absent fact still denies. It is also the form
+        # `BudgetCeiling` has always compiled to, which is why the caveat ceilings were
+        # never affected — only this one ranging check was.
+        f"check if requested({quote_string(d.value)}, $v), $v <= {mandate.budget.scaled(d)};"
+        for d in sorted(BudgetDimension)
+    ]
+    lines += [
         # not_before is inclusive; expires_at is EXCLUSIVE (EC-T06).
         f"check if time($t), $t >= {datalog_date(mandate.not_before)};",
         f"check if time($t), $t < {datalog_date(mandate.expires_at)};",

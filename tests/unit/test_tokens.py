@@ -18,7 +18,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from biscuit_auth import AuthorizationError, AuthorizerBuilder, KeyPair
+from biscuit_auth import AuthorizationError, AuthorizerBuilder, Biscuit, KeyPair
 
 from agentiam_core.errors import (
     DepthExceededError,
@@ -394,6 +394,97 @@ class TestMintedStructure:
         token = mint_root(a_mandate(budget=Budget()), root_key.private_key)
         verified = verify(token, key_set, now=MID_WINDOW)
         assert set(verified.scaled_budget) == set(BudgetDimension)
+
+
+class TestMandateBudgetIsUniversal:
+    """Spec 01 §2.3 — the mandate's budget ceiling binds on *every* dimension.
+
+    It did not, for the whole of M1-M11. The authority block carried one check,
+    `check if requested($dim, $v), budget($dim, $max), $v <= $max;`, and `check if` is
+    satisfied by *some* binding. `$dim` ranges over every dimension, and §2.2 requires the
+    verifier to supply all of them — so `requested("tool_calls", 0)` against its own
+    ceiling satisfied the check and whatever `spend_bdt` asked for never decided anything.
+
+    These tests authorize a real biscuit rather than reading facts back, because the bug
+    was invisible to fact extraction: `verified.scaled_budget` reported the right ceilings
+    the whole time. Only `authorize()` could see that nothing enforced them.
+    """
+
+    @staticmethod
+    def _allows(token: str, key_set: RootKeySet, requested: dict[BudgetDimension, int]) -> bool:
+        facts = [
+            'operation("invoice:read");',
+            "current_depth(0);",
+            f'request_intent("{INTENT}");',
+            f"time({MID_WINDOW.strftime('%Y-%m-%dT%H:%M:%SZ')});",
+        ]
+        facts += [f'requested("{d.value}", {v});' for d, v in requested.items()]
+        biscuit = Biscuit.from_base64(token, key_set.current)
+        try:
+            source = "\n".join(facts) + "\nallow if true;"
+            AuthorizerBuilder(source).build(biscuit).authorize()
+        except AuthorizationError:
+            return False
+        return True
+
+    def test_an_over_budget_dimension_is_refused_on_its_own(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        token = mint_root(a_mandate(), root_key.private_key)
+        assert not self._allows(token, key_set, {BudgetDimension.SPEND_BDT: 6_000_000_000})
+
+    def test_a_satisfied_dimension_does_not_rescue_an_over_budget_one(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """The regression itself: adding a dimension that passes used to flip this to allow."""
+        token = mint_root(a_mandate(), root_key.private_key)
+        assert not self._allows(
+            token,
+            key_set,
+            {BudgetDimension.SPEND_BDT: 6_000_000_000, BudgetDimension.TOOL_CALLS: 10_000},
+        )
+
+    def test_the_shape_adr_007_mandates_is_refused_when_one_dimension_is_over(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """Every dimension supplied, most of them zero — what a real verifier sends."""
+        token = mint_root(a_mandate(), root_key.private_key)
+        requested = dict.fromkeys(BudgetDimension, 0)
+        requested[BudgetDimension.SPEND_BDT] = 6_000_000_000
+        assert not self._allows(token, key_set, requested)
+
+    def test_a_non_money_dimension_is_enforced_too(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """`rows_read` over its ceiling, with spend comfortably inside its own."""
+        token = mint_root(a_mandate(), root_key.private_key)
+        requested = dict.fromkeys(BudgetDimension, 0)
+        requested[BudgetDimension.ROWS_READ] = 500_000 * 10_000 + 1
+        assert not self._allows(token, key_set, requested)
+
+    def test_an_omitted_dimension_still_denies(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """Spec 01 §2.2. The ranging form allowed this too — it simply bound elsewhere.
+
+        This is why `reject if requested($dim, $v), budget($dim, $max), $v > $max;` was
+        rejected as the fix: it gets the quantifier right and this wrong, because
+        `reject if` is vacuous when the fact is absent.
+        """
+        token = mint_root(a_mandate(), root_key.private_key)
+        requested: dict[BudgetDimension, int] = {
+            d: 0 for d in BudgetDimension if d is not BudgetDimension.SPEND_BDT
+        }
+        assert not self._allows(token, key_set, requested)
+
+    def test_a_request_inside_every_ceiling_is_allowed(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """The control. Tightening a check is only correct if it still permits the legal case."""
+        token = mint_root(a_mandate(), root_key.private_key)
+        requested = dict.fromkeys(BudgetDimension, 0)
+        requested[BudgetDimension.SPEND_BDT] = 10_000_000
+        assert self._allows(token, key_set, requested)
 
 
 class TestDatalogExecutionLimits:

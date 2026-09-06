@@ -202,9 +202,11 @@ class TestA02And03StructuralTampering:
         token, so comparing it here would test nothing. `depth` (`block_count() - 1`) is
         the honest signal: if a truncation that still verifies has a shallower depth than
         the full chain, the narrowing block was silently stripped while the token kept
-        working. Measured: across every cut point, exactly one survives at all (one
-        character short of the full length — a redundant trailing base64 bit, not a
-        structural weakness), and it still carries the full, un-stripped depth.
+        working. Measured: across every cut point, at most one survives at all — a token
+        one character short of the full length, which is a redundant trailing base64 bit
+        rather than a structural weakness — and it carries the full, un-stripped depth.
+        Whether that one survives at all depends on the token's length modulo the base64
+        alignment, so the assertion below is over survivors, not over their count.
         """
         key = generate_keypair()
         mandate = a_mandate()
@@ -228,7 +230,14 @@ class TestA02And03StructuralTampering:
                 continue
             surviving_depths.append(result.depth)
 
-        assert surviving_depths, "the probe that shaped this test found exactly one survivor"
+        # No assertion that *some* truncation survives. The original probe found exactly
+        # one — a token one character short of the full length, which is a redundant
+        # trailing base64 bit rather than a structural weakness — and requiring it made
+        # this test depend on the token's length modulo the base64 alignment. Widening the
+        # authority block by 208 characters (spec 01 §2.3's per-dimension budget checks)
+        # moved that alignment and left zero survivors, failing a test whose security
+        # property was not violated. Zero survivors satisfies the property trivially; the
+        # property is about what a survivor may look like, not that one must exist.
         assert all(d == full_depth for d in surviving_depths), (
             "a truncated token that happens to still parse must never do so with fewer "
             "blocks than the full chain — that would mean the narrowing block was "
@@ -434,7 +443,7 @@ class TestA09DeeplyNestedChainDos:
     assumed. `tests/unit/test_tokens.py::TestDepth` proves the depth check itself at the
     mandate model permits (`max_depth` capped at 8, EC-T10). A genuine depth-100 chain is
     a second, independent question: `STATUS.md`'s deferred ticket T-010 and ADR-006 already
-    measured that a depth-8 chain is 4,940 base64 characters, 60% of the 8,192 hard size
+    measured that a depth-8 chain is 4,892 base64 characters, 60% of the 8,192 hard size
     limit — so a 100-block chain is structurally guaranteed to trip `TestA08`'s size guard
     (A-08) long before any depth check runs, since `verify()` checks size first (step 1)
     and depth last (step 5). Both tests below use raw `biscuit_auth` blocks, bypassing

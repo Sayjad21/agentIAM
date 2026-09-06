@@ -63,6 +63,60 @@ Therefore: the verifier MUST supply a `requested(dimension, value)` fact for **e
 dimension in §5.2 on **every** authorization, defaulting to `0` for dimensions the call does
 not consume. Omitting a dimension is not "no constraint" — it is a denial.
 
+### 2.3 Third trap: a check whose variable *ranges* is satisfied by one lucky binding
+
+`check if` succeeds when **some** binding of its variables satisfies the body. That is fine
+when the variables range over one fact, and wrong when they range over several.
+
+This version of the mandate's budget check was written for the whole of M1–M11:
+
+```datalog
+check if requested($dim, $v), budget($dim, $max), $v <= $max;   // WRONG — do not use
+```
+
+`$dim` ranges over every dimension. §2.2 requires the verifier to supply a `requested` fact
+for **all** of them, so `requested("tool_calls", 0)` against `budget("tool_calls", 2000)`
+satisfies the body on its own — and the check passes no matter what `spend_bdt` asked for.
+**A dimension within its ceiling rescues one that is over it.**
+
+Measured against `biscuit-python`, on a mandate granting ৳500,000:
+
+| Request facts supplied | Verdict | Should be |
+|---|---|---|
+| `spend_bdt=600000` alone | denied | denied |
+| `spend_bdt=600000` **and** `tool_calls=1` | **allowed** | denied |
+| every dimension, `spend_bdt=600000`, rest `0` | **allowed** | denied |
+
+The third row is the shape §2.2 mandates, so the check was ineffective on every real
+request. The same measurement shows §2.2's own guarantee does not hold here either: omitting
+`spend_bdt` entirely was **allowed**, because the ranging variable simply bound to a
+different dimension.
+
+#### Normative consequence
+
+A check MUST NOT rely on a variable that ranges over multiple facts to express a constraint
+that has to hold for *all* of them. Where a per-item ceiling is meant, emit **one check per
+item, naming it literally**:
+
+```datalog
+check if requested("spend_bdt", $v), $v <= 5000000000;
+check if requested("tool_calls", $v), $v <= 2000;
+```
+
+Now `$v` ranges over exactly one fact per check, so the check is universal by construction
+and an absent fact still denies (§2.2). This is the form `BudgetCeiling` has always compiled
+to (spec 02 §3), which is why the *caveat* ceilings were never affected — only the authority
+block's single ranging check was.
+
+`reject if requested($dim, $v), budget($dim, $max), $v > $max;` was measured as the obvious
+alternative. It gets the quantifier right and the absence semantics wrong: `reject if` is
+vacuous when the fact is missing, so an omitted dimension becomes unconstrained. Rejected
+for that reason, not on style.
+
+Cost of the correct form: five checks instead of one, **+220 base64 characters** on the
+authority block — measured by minting the same mandate both ways, so only the checks differ.
+§9's limits are unaffected: the deepest permitted chain is still 60% of the hard limit.
+
 ---
 
 ## 3. Identifiers and encodings
@@ -162,17 +216,25 @@ zero, not as unlimited.
 check if operation($op), scope($op);
 check if current_depth($d), $d <= 8;
 check if request_intent($h), intent($h);
-check if requested($dim, $v), budget($dim, $max), $v <= $max;
+check if requested("spend_bdt", $v), $v <= 5000000000;
+check if requested("tool_calls", $v), $v <= 2000;
+check if requested("rows_read", $v), $v <= 500000;
+check if requested("external_emails", $v), $v <= 50;
+check if requested("wall_clock_s", $v), $v <= 3600;
 check if time($t), $t >= 2026-08-14T11:45:00Z;   // not_before, inclusive
 check if time($t), $t <  2026-08-14T12:00:00Z;   // expires_at, EXCLUSIVE
 ```
+
+**One budget check per dimension, naming it literally** — never a single check with a
+ranging `$dim`. §2.3 has the measurement showing why: a ranging variable makes the check
+existential, and one dimension within its ceiling then rescues one that is over it.
 
 | Check | Enforces | Invariant |
 |---|---|---|
 | grant membership | the attempted operation was granted | — |
 | depth | `current_depth ≤ max_depth` | INV-6 |
 | intent | the request is bound to the approved task | INV-7 |
-| budget | per-dimension ceiling from the mandate | — |
+| budget (one per dimension) | that dimension's ceiling from the mandate | — |
 | `not_before` / `expires_at` | validity window | INV-9 |
 
 Expiry is **exclusive at the boundary**: a token whose `expires_at` equals the verification
@@ -283,23 +345,26 @@ of exact-set storage per PEP. Comfortable.
 ### 9.1 Measured growth
 
 Measured with the format in §10: a realistic authority block (5 scopes, 5 budget dimensions,
-6 checks) and typical attenuation blocks (2 identity facts, 3–5 checks).
+10 checks — one budget check per dimension, per §2.3) and attenuation blocks each carrying
+`ScopeSubset` + `ToolAllow` + `BudgetCeiling`, so 2 identity facts and 3 checks apiece. The
+attenuation shape is named because the per-block figure depends on it and the table is
+otherwise not reproducible.
 
 | Depth | Raw bytes | Base64 chars | Status |
 |---|---|---|---|
-| 0 (root) | 1,051 | 1,404 | ok |
-| 1 | 1,491 | 1,988 | ok |
-| 2 | 1,854 | 2,472 | ok |
-| 3 | 2,169 | 2,892 | ok |
-| 4 | 2,476 | 3,304 | ok |
-| 5 | 2,783 | 3,712 | ok |
-| 6 | 3,090 | 4,120 | warn |
-| 7 | 3,397 | 4,532 | warn |
-| 8 | 3,704 | 4,940 | warn |
+| 0 (root) | 1,298 | 1,732 | ok |
+| 1 | 1,638 | 2,184 | ok |
+| 2 | 1,928 | 2,572 | ok |
+| 3 | 2,218 | 2,960 | ok |
+| 4 | 2,508 | 3,344 | ok |
+| 5 | 2,798 | 3,732 | ok |
+| 6 | 3,088 | 4,120 | warn |
+| 7 | 3,378 | 4,504 | warn |
+| 8 | 3,668 | 4,892 | warn |
 
-Growth is ~307 raw / ~410 base64 bytes per attenuation block.
+Growth is ~296 raw / ~395 base64 bytes per attenuation block.
 
-**At `max_depth = 8` the token is 4,940 base64 characters — over the 4 KB warning threshold but
+**At `max_depth = 8` the token is 4,892 base64 characters — over the 4 KB warning threshold but
 only 60% of the 8 KB hard limit.** The reference-handle path therefore cannot trigger within
 the permitted depth range, which is the measured justification for deferring T-010. The warning
 threshold does fire at depth 6, so the warning path is reachable and must be tested (EC-T11).
@@ -337,7 +402,11 @@ budget("wall_clock_s", 3600);
 check if operation($op), scope($op);
 check if current_depth($d), $d <= 8;
 check if request_intent($h), intent($h);
-check if requested($dim, $v), budget($dim, $max), $v <= $max;
+check if requested("spend_bdt", $v), $v <= 5000000000;
+check if requested("tool_calls", $v), $v <= 2000;
+check if requested("rows_read", $v), $v <= 500000;
+check if requested("external_emails", $v), $v <= 50;
+check if requested("wall_clock_s", $v), $v <= 3600;
 check if time($t), $t >= 2026-08-14T11:45:00Z;
 check if time($t), $t <= 2026-08-14T12:00:00Z;
 ```

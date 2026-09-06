@@ -40,7 +40,7 @@ from agentiam_core.errors import CaveatError, ReasonCode, ScaleError
 #: Matches ``NUMERIC(20,4)``: one unit is 1/10000.
 BUDGET_SCALE: Final = 10_000
 
-#: Hard cap on delegation depth (spec 01 §9). Measured: a depth-8 chain is 4,940 base64
+#: Hard cap on delegation depth (spec 01 §9). Measured: a depth-8 chain is 4,892 base64
 #: characters, over the 4 KB warning and 60% of the 8 KB hard limit.
 MAX_DELEGATION_DEPTH: Final = 8
 
