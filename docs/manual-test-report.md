@@ -1,0 +1,367 @@
+# Manual end-to-end test report
+
+A hand-driven pass over the running system: the control plane, a real PEP, and the stub
+tools, exercised over HTTP the way an agent and an operator would use them. Every case
+below records **what was sent**, **what should have come back** (per `PLAN.md`, the specs,
+and `DEMO.md`), and **what actually came back**.
+
+**Date:** 2026-09-07 · **Commit under test:** `003a06a` plus the console rework
+**Result:** 42 cases across 6 areas. **3 defects found, 1 fixed.** One of them makes the
+system's headline guarantee — holder-side attenuation — unenforced in the deployed PEP.
+
+---
+
+## 1. What was running
+
+Nothing was mocked. Real biscuits, real Ed25519 keys, real Postgres, real Cedar.
+
+| Component | How it was started | Port |
+|---|---|---|
+| Postgres 16 / Redis 7 / Keycloak | `docker compose up -d --wait` | 5433 / 6379 / 8085 |
+| Control plane | `uvicorn agentiam_controlplane.app:create_app_from_env --factory` | 8000 |
+| Stub tools | `python scripts/serve_tools.py` | 8081 |
+| **PEP** | **`python scripts/pep_service.py`** — the real deployment entry point, not a test harness | 8082 |
+
+Credentials came from `scripts/bootstrap_demo_secrets.py`, so the signed policy bundle is
+`agentiam_core.corpus.CORPUS_SOURCE` and the route table is `scripts.serve_pep.ROUTES` —
+the same artefacts `make demo-up` mounts.
+
+### The scenario
+
+One mandate, **BDT 500,000**, delegated two levels deep — the shape `DEMO.md` beat 2
+describes ("root spawns 3 sub-agents"):
+
+```
+agt-root          depth 0   scopes: invoice:read, vendor:read, payment:initiate   (mandate)
+├── agt-doc-reader   depth 1   ScopeSubset{invoice:read, vendor:read}   BudgetCeiling 0
+├── agt-negotiator   depth 1   ScopeSubset{vendor:read}                 BudgetCeiling 50,000
+└── agt-payer        depth 1   ScopeSubset{payment:initiate}            BudgetCeiling 200,000
+    └── agt-settlement  depth 2  ScopeSubset{payment:initiate}          BudgetCeiling 25,000
+```
+
+The signed Cedar bundle permits `invoice:read` and `vendor:read` unconditionally, and
+`payment:initiate` when `amount <= 500,000 && principal.depth <= 2`.
+
+---
+
+## 2. Findings at a glance
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| **1** | **Critical** | The deployed PEP never evaluates token caveats. `ScopeSubset` and `BudgetCeiling` are ignored — a read-only agent successfully moved money. | **Open** |
+| **2** | **Critical** | The deployed PEP never primed its lease pool, so *every* budgeted request was refused and `budgets.committed` never moved. This is the "nothing changes" symptom. | **Fixed** in this pass |
+| **3** | **High** | The identity tree renders **blank** whenever two agents share a depth — `d3.stratify` throws `ambiguous: agt-depth-1` and the error is silently swallowed. | **Open** |
+| 4 | Medium | Max single payment is hard-capped at the 5,000 lease size, with no environment override. A 500,000 mandate cannot authorize a 8,000 payment. | Open |
+| 5 | Low | Authentication and routing failures are **not** written to the audit chain, but still hand the caller a `decision_id` that resolves to nothing. | Open |
+| 6 | Low | Unmapped routes and revoked tokens return `401`, where `403` is the accurate status. | Open |
+
+Everything else behaved as specified. Section 4 lists what works.
+
+---
+
+## 3. Case-by-case results
+
+Legend: **PASS** = matched expectation · **FAIL** = defect · **N/A** = my request was
+malformed, not the app's fault.
+
+### 3.1 Authentication
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| A1 | `GET /proxy/invoices/inv_001`, no `Authorization` header | 401, fail closed | `401 MALFORMED_REQUEST` — "token is absent or empty" | PASS |
+| A2 | Same, `Bearer not-a-real-token` | 401, signature cannot verify | `401 TOKEN_INVALID_SIGNATURE` — "does not verify against any of the 1 accepted root key(s)" | PASS |
+| A3 | Same, root token with its last 8 chars replaced | 401, tampering breaks the chain | `401 TOKEN_INVALID_SIGNATURE` | PASS |
+
+Fail-closed authentication is solid, and the reason codes are specific.
+
+### 3.2 Root authority
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| B1 | `GET /proxy/invoices/inv_001` as root | 200, `invoice:read` unconditionally permitted | `200` `{"id":"inv_001","total":"12500.0000"}` | PASS |
+| B2 | `GET /proxy/invoices/inv_999` as root (no such invoice) | PEP allows, upstream 404 | `404` `{"detail":"no invoice inv_999"}` | PASS |
+| B3 | `POST /proxy/payments {amount: 1000}` as root | 200, under every ceiling | **before fix:** `429 LEASE_UNAVAILABLE`<br>**after fix:** `200` `{"payment_id":"pay_9d728d065d40","status":"accepted"}` | **FAIL → fixed** |
+
+### 3.3 Attenuation — the core guarantee
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| C1 | `GET /proxy/invoices/inv_001` as **agt-doc-reader** (`ScopeSubset{invoice:read, vendor:read}`) | 200, inside its subset | `200` | PASS |
+| C2 | `POST /proxy/payments {amount: 100}` as **agt-doc-reader** — **no `payment:initiate` scope, `BudgetCeiling` 0** | `403 SCOPE_NOT_GRANTED`. This is `DEMO.md` beat 3, the demo's centrepiece. | **`200` `{"payment_id":"pay_1627b670cc75","amount":"100","status":"accepted"}`** | **FAIL** |
+| C3 | `GET /proxy/invoices/inv_001` as **agt-negotiator** (`ScopeSubset{vendor:read}` only) | 403, `invoice:read` was dropped | **`200` — invoice returned in full** | **FAIL** |
+| C4 | `GET /proxy/invoices/inv_001` as **agt-payer** (`ScopeSubset{payment:initiate}` only) | 403, holds no read scope | **`200` — invoice returned in full** | **FAIL** |
+
+> **C2 is the headline failure.** A sub-agent explicitly restricted to reading documents,
+> with a spend ceiling of exactly zero, initiated a payment and the tool accepted it.
+> The README's first promise is *"a parent mints a strictly narrower child token"*. The
+> narrowing is minted correctly — it is simply never checked.
+
+### 3.4 Quantitative caps
+
+All post-fix.
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| D1 | `POST /proxy/payments {amount: 1500}` as agt-payer (ceiling 200,000) | 200 | `200` accepted | PASS |
+| D2 | `POST /proxy/payments {amount: 250000}` as agt-payer (**ceiling 200,000**) | `403 BUDGET_EXCEEDED` — the child's own caveat binds | `429 LEASE_UNAVAILABLE` — refused, but by the **wrong constraint**. The ceiling was never consulted (see finding 1); the 5,000 lease stopped it. | **FAIL** (right outcome, wrong reason) |
+| D3 | `POST /proxy/payments {amount: 600000}` as root (policy limit 500,000) | 403, refused by the signed bundle | `403 POLICY_DENIED` — "denied by policy statement unnamed" | PASS |
+| D4 | `POST /proxy/payments {amount: 900}` as agt-settlement (depth 2, ceiling 25,000) | 200, inside ceiling and `depth <= 2` | `200` accepted | PASS |
+| D5 | `POST /proxy/payments {amount: 30000}` as agt-settlement (**ceiling 25,000**) | `403 BUDGET_EXCEEDED` | `429 LEASE_UNAVAILABLE` — same masking as D2 | **FAIL** (right outcome, wrong reason) |
+| D6 | `POST /proxy/payments {amount: 8000}` as root — a single request larger than the 5,000 lease | 200; the pool tops up to cover it | `429 LEASE_UNAVAILABLE`, **on all 3 retries 3s apart** | **FAIL** (finding 4) |
+
+### 3.5 Routing
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| E1 | `GET /proxy/vendors/ven_01` as root (no route entry) | Refused — `routes.json` default is deny | `401 MALFORMED_REQUEST` — "no route mapping for GET /vendors/ven_01; an unmapped route is an unreviewed route" | PASS (status should be 403/404, finding 6) |
+| E2 | `GET /proxy/invoices` (collection, only `/invoices/{id}` is mapped) | Refused | `401 MALFORMED_REQUEST`, same message | PASS (same caveat) |
+
+The default-deny routing works and the message is genuinely good.
+
+### 3.6 Escalations
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| G1 | `POST /v1/escalations` for agt-payer requesting 75,000 | 201, queued for a human | `201` with the escalation id | PASS |
+| G2 | `GET /v1/escalations` | The pending item is listed | `200`, 1 item, correct fields | PASS |
+| G3 | `GET /escalations` (console page) | Shows the agent, a scope checkbox, an amount capped at the request | `200` — `shows_agent_id: true`, `has_scope_checkbox: true`, `has_amount_max: true` (`max="75000.0000"`) | PASS |
+| G4 | `POST .../approve` narrowing 75,000 → 50,000, **no session cookie** | 401 — approving needs an authenticated approver (T-043) | `401 {"detail":"login required"}` | PASS |
+| G5 | `POST .../approve` asking for **90,000 and an extra scope** — a widening | Refused (EC-A09) | `401 login required` — **the auth gate fires first, so I could not reach the narrowing check** | **NOT TESTED** |
+| G6 | `POST .../deny` | 401 without a session | `401 login required` | PASS |
+
+> **Honest limitation.** G5 is the invariant `DEMO.md` leans on hardest — "approve narrows,
+> never widens" — and this pass did **not** verify it end to end. The 401 is correct
+> behaviour, but it means the widening check was never reached. Verifying it needs a signed
+> session cookie, i.e. the Keycloak login path wired up. It *is* covered by
+> `tests/integration/test_escalations_api.py`, but not by a live request.
+
+### 3.7 Revocation
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| H1 | `POST /v1/revocations` for the root `block_id`, `scope: subtree` | 201, recorded and published | `201` with `seq: 1` | PASS |
+| H2 | `GET /v1/revocations` | Listed for PEPs to pull | `200`, entry present | PASS |
+| H3 | `GET /proxy/invoices/inv_001` as **root**, after revocation | Refused — the revoked root stops working | `401 TOKEN_REVOKED` | PASS |
+| H4 | `GET /proxy/invoices/inv_001` as **agt-doc-reader** (a child of the revoked block) | Refused — children die with their root | `401 ANCESTOR_REVOKED` | PASS |
+| H5 | `GET /v1/tree/{task}` after revocation | Nodes show `revoked: true` with the reason | All 5 nodes `revoked: true`, reason `"drill: revoke the root block"` | PASS |
+
+**Revocation is the strongest part of the system.** Subtree propagation reached the PEP in
+under 6 seconds, the distinction between `TOKEN_REVOKED` and `ANCESTOR_REVOKED` is exactly
+right, and the tree reflected it immediately. (Statuses are 401 where 403 fits better —
+finding 6.)
+
+Two `4xx`s in this section were **my** error, not the app's: `POST /v1/revocations` needs
+`block_id` + `scope ∈ {token, subtree, mandate}` + a `revoked_by` on the approver
+allowlist, and `POST /v1/escalations` needs `decision_id` and `intent_hash`. Both APIs
+rejected my malformed bodies with accurate messages.
+
+### 3.8 Console and audit
+
+| # | Input | Expected | Actual | |
+|---|---|---|---|---|
+| F1 | `GET /v1/decisions?limit=100` | Every decision, with outcome and reason code | `200`, 18 for this task: **11 allow / 6 LEASE_UNAVAILABLE / 1 POLICY_DENIED** | PASS |
+| F2 | `GET /v1/budgets/dashboard` | Pool with `committed > 0`, invariants hold | `200` — `committed 3,600`, `leased 1,400`, `spend_fraction 0.0072`, `lease_utilization 0.72`, `invariants_ok: true` | PASS |
+| F3 | `GET /v1/tree/{task}` | 5 nodes, one per real agent | `200`, 5 nodes — but ids are `["agt-depth-0","agt-depth-1","agt-depth-1","agt-depth-1","agt-depth-2"]` and every `role` is `"unknown"` | **FAIL** (finding 3) |
+| F4 | `GET /v1/audit/search?limit=5` | Hash-chained records, newest first | `200`, `total: 41`, correctly ordered | PASS |
+| F5 | `GET /v1/audit/custody/{task}` | Full principal → agent → caveat narrative | `200`, 13 entries for the task | PASS |
+| F6 | `POST /v1/audit/verify` | `ok: true` | `{"ok":true,"checked":41,"first_bad_seq":null}` | PASS |
+
+The **Budgets & leases** page renders all of this correctly — stacked committed/leased/
+allocated bars, per-pool utilisation, and a green invariant lamp.
+
+---
+
+## 4. What works well
+
+Worth stating plainly, because the defects below are concentrated in two files:
+
+- **Authentication and token verification.** Signature, validity window, and depth are all
+  enforced, with specific reason codes.
+- **Revocation**, including subtree propagation to a live PEP in under 6 seconds.
+- **The Cedar policy layer.** D3 refused a 600,000 payment against the signed bundle. The
+  bundle's signature is verified at boot and an unsigned one refuses to start.
+- **The ledger.** Once primed, leases, settlement, and commit all move correctly, and the
+  invariant sweep stayed green across 41 decisions.
+- **The audit chain.** 41 records, hash-verified intact, with a working custody query.
+- **The escalation queue**, including the console's narrowing controls.
+- **Route default-deny**, with an unusually clear refusal message.
+
+---
+
+## 5. The defects in detail
+
+### Finding 1 — Token caveats are never evaluated (Critical, open)
+
+**Evidence:** cases C2, C3, C4. A token carrying `ScopeSubset{invoice:read, vendor:read}`
+and `BudgetCeiling(spend_bdt, 0)` successfully initiated a payment.
+
+**Root cause.** `Pipeline.__init__` takes a `caveats_for` callback and defaults it to a
+function returning an empty tuple:
+
+```python
+# packages/agentiam-pep/src/agentiam_pep/pipeline.py:193
+self._caveats_for = caveats_for or (lambda _token: ())
+```
+
+which is then handed to the decision function:
+
+```python
+# packages/agentiam-pep/src/agentiam_pep/pipeline.py:268
+decision = decide(token, context, caveats=self._caveats_for(token), ...)
+```
+
+**`scripts/pep_service.py` never passes `caveats_for`.** Neither does `scripts/serve_pep.py`.
+So the deployed PEP calls `decide(..., caveats=())` on every request and enforces no
+caveat of any kind. The biscuit is verified; its contents are ignored.
+
+This is the visible half of `STATUS.md` gap 2 — "`agent_id` and `role` are **not** on
+`VerifiedToken`: they live in attenuation block facts, and there is no Datalog-to-caveat
+parser to recover them". The gap is documented as a *reporting* limitation. It is
+also an *enforcement* one, and that is not currently stated anywhere.
+
+**Not a small fix.** It needs the caveat parser gap 2 describes, so a verified token's
+attenuation blocks can be recovered into `Caveat` objects. Until then, every claim about
+attenuation holds in `agentiam-core` and its property tests, and does not hold in the
+deployed PEP.
+
+### Finding 2 — The lease pool was never primed (Critical, **fixed**)
+
+**Evidence, before the fix:** every budgeted request returned `429 LEASE_UNAVAILABLE`,
+including a 100 BDT payment against a 500,000 pool. The database was unambiguous:
+
+```
+leases:  0 rows
+budgets: total 500000.0000 | committed 0.0000 | leased 0.0000
+```
+
+15 decisions recorded, no money moved. **This is the symptom you hit** — the console shows
+nothing changing because nothing was changing.
+
+**Root cause.** `LeasePool` acquires its first lease in `prime()`. The e2e slice calls it
+by hand (`tests/e2e/test_thin_slice.py:231`); `scripts/pep_service.py`'s `lifespan` started
+the emitter, settlement queue, and revocation set — but never primed the pool. The pool's
+own docstring describes the resulting dead end:
+
+> *"A dimension holding no lease at all is not covered: there is no `_Held` to top up from…
+> That case is a PEP that never primed the dimension, not one that ran dry."*
+
+Because top-ups are only scheduled from an existing lease, a PEP that never primes can
+never recover.
+
+**Fix applied** — `scripts/pep_service.py`, in `lifespan`:
+
+```python
+if not await pool.prime(BudgetDimension.SPEND_BDT):
+    logger.warning("could not acquire an initial %s lease; budgeted requests will be "
+                   "refused until a top-up succeeds", BudgetDimension.SPEND_BDT.value)
+```
+
+Non-fatal by design: an unreachable ledger at boot is already the per-request fail-closed
+case, and crash-looping would take the read-only paths down with it.
+
+**Verified after the fix:** `leases` shows `granted 5000.0000, settled 3600.0000`;
+`budgets` shows `committed 3600.0000, leased 1400.0000`; payments B3/D1/D4 return 200.
+
+**No test caught this.** `tests/unit/test_pep_service.py` passes identically before and
+after — 22 passed both ways. The deployed service's lease priming has no coverage.
+
+### Finding 3 — The identity tree renders blank with sibling agents (High, open)
+
+**Evidence.** `/v1/tree/{task}` returns five nodes with ids
+`["agt-depth-0","agt-depth-1","agt-depth-1","agt-depth-1","agt-depth-2"]`. Replaying
+`identity_tree.html`'s own `updateTree()` against that exact payload:
+
+```
+inferred ids:       ["agt-depth-0","agt-depth-1","agt-depth-1","agt-depth-1","agt-depth-2"]
+inferred parentIds: [null,"agt-depth-0","agt-depth-0","agt-depth-0","agt-depth-1"]
+
+*** d3.stratify THREW: ambiguous: agt-depth-1 ***
+```
+
+The template catches it and returns:
+
+```js
+try { root = stratify(data); }
+catch(e) { console.error("Stratify error", e); return; }
+```
+
+so **nothing is drawn, no error is shown, and the status indicator still reads
+"Connected"**. The page looks like it is working and reporting an empty tree.
+
+**Root cause chain:**
+
+1. `scripts/pep_service.py:382` derives `agent_id=f"agt-depth-{token.depth}"` — a
+   consequence of gap 2, and honestly documented there.
+2. Sibling agents therefore collide on one id, and `role` is the configured default
+   (surfacing as `"unknown"`).
+3. `d3.stratify()` requires unique ids and throws on duplicates.
+4. The catch swallows it.
+
+**Two things worth separating.** The blank canvas is a *display* bug and cheap to improve:
+the tree should key on something unique (the terminal `block_id` is already in the payload
+and *is* unique per agent) and should surface a stratify failure instead of hiding it.
+But real per-agent names still need the gap 2 parser — until then the tree can only ever
+show one node per depth level, which is not what `DEMO.md` beat 2 promises.
+
+### Finding 4 — Single payments are capped at the hardcoded lease size (Medium, open)
+
+`DEFAULT_LEASE_SIZE = Decimal("5000.0000")` and `ServiceSettings.from_env()` reads no
+override for it — every other setting has one. A request larger than the lease is refused
+with `LEASE_UNAVAILABLE` and **retrying never helps** (verified: 3 attempts, 3s apart, all
+429), because the top-up refills to the lease size rather than to cover the request.
+
+So a deployed PEP cannot authorize a single payment over 5,000 BDT regardless of the
+mandate. `DEMO.md` beat 4 — a judge setting a 50,000 ceiling and watching the agent spend
+up to it — is not reachable on the shipped defaults.
+
+### Finding 5 — Auth and routing failures are not audited (Low, open)
+
+An unauthenticated request returns `decision_id: b67e507f-…`, but
+`/v1/audit/search?decision_id=b67e507f-…` returns `{"results":[],"total":0}` and the chain
+total stays at 41. Refusals before token verification take `_refuse` rather than
+`_record_and_refuse`, so they never reach the ledger.
+
+Two consequences: credential-probing leaves no audit trail, and the `decision_id` handed
+to the caller cannot be looked up by the operator it would be quoted to.
+
+### Finding 6 — Status codes (Low, open)
+
+`401` is returned for an unmapped route (a routing decision, not an authentication one)
+and for `TOKEN_REVOKED` / `ANCESTOR_REVOKED` (the token authenticated fine; it is no longer
+authorized). `403` fits both. Cosmetic, but it misleads a client retrying on 401.
+
+---
+
+## 6. Reproducing this
+
+```bash
+docker compose up -d --wait
+cd packages/agentiam-controlplane && DATABASE_URL=<dsn> uv run alembic upgrade head && cd -
+
+uv run python scripts/bootstrap_demo_secrets.py --out /tmp/secrets
+uv run uvicorn agentiam_controlplane.app:create_app_from_env --factory --port 8000 &
+uv run python scripts/serve_tools.py --port 8081 &
+
+# then create a mandate + budget row, mint a root token, attenuate it, and point
+# AGENTIAM_PEP_MANDATE_ID at that mandate before starting scripts/pep_service.py
+```
+
+The scenario builder and the two driver scripts used for this pass live in the session
+scratchpad (`setup_scenario.py`, `drive.py`, `drive2.py`). They are not committed —
+building a proper seeded demo is **T-057**, which `STATUS.md` still lists as outstanding,
+and it is what would make this reproducible with one command.
+
+---
+
+## 7. Bottom line
+
+The **infrastructure** is in good shape: authentication, revocation, the Cedar layer, the
+ledger, and the audit chain all did exactly what the specs say, and the budgets console
+renders live data cleanly.
+
+The **enforcement of attenuation** — the thing the project is named for — does not
+currently happen in the deployed PEP. `agentiam-core` implements it correctly and proves it
+under property tests; `scripts/pep_service.py` never wires it in. Finding 1 and finding 3
+are the same root gap seen from two directions, and both are visible in the demo path.
+
+Finding 2 is fixed. Findings 1, 3, 4, 5 and 6 are open.
