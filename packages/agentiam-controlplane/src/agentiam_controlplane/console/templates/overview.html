@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}Overview{% endblock %}
+{% block page_title %}Control plane{% endblock %}
+{% block page_sub %}Identity, authorization and spend control for AI agents. This is the operator&#39;s view: what the control plane is enforcing right now, and where to go to inspect it.{% endblock %}
+
+{% block head_extra %}
+<style>
+    /* The section cards are the whole point of this page, so their layout lives here
+       rather than in the shared sheet — nothing else uses it. */
+    .tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+        gap: 0.9rem;
+    }
+    .tile {
+        display: block;
+        padding: 1.05rem 1.2rem;
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: inherit;
+        transition: border-color 0.14s, transform 0.14s, background 0.14s;
+    }
+    .tile:hover {
+        text-decoration: none;
+        border-color: var(--accent);
+        background: var(--bg-elevated);
+        transform: translateY(-1px);
+    }
+    .tile .name {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 600;
+        margin-bottom: 0.3rem;
+    }
+    .tile .name .glyph {
+        width: 22px;
+        height: 22px;
+        border-radius: var(--radius-sm);
+        display: grid;
+        place-items: center;
+        background: var(--accent-soft);
+        color: var(--accent-hover);
+        font-size: 0.72rem;
+        font-weight: 700;
+    }
+    .tile p { margin: 0; font-size: 0.82rem; color: var(--text-muted); }
+
+    .checks { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .check {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.3rem 0.7rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--bg-surface);
+        font-size: 0.8rem;
+    }
+    .check .dot { width: 7px; height: 7px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="invariant" id="banner">
+    <span class="lamp"></span>
+    <span class="verdict" id="verdict">checking…</span>
+    <span class="meta" id="checkmeta"></span>
+</div>
+
+<div class="stats">
+    <div class="stat"><div class="label">Budget pools</div><div class="value" id="pools">–</div></div>
+    <div class="stat"><div class="label">Active leases</div><div class="value" id="leases">–</div></div>
+    <div class="stat"><div class="label">Committed spend</div><div class="value" id="committed">–</div></div>
+    <div class="stat"><div class="label">Available</div><div class="value" id="available">–</div></div>
+</div>
+
+<section>
+    <h2>Subsystems</h2>
+    {# Straight from /readyz, so this page agrees with what an orchestrator's probe sees
+       rather than reporting a second, hand-maintained opinion of the same thing. #}
+    <div class="checks" id="checks"><span class="muted">reading /readyz…</span></div>
+</section>
+
+<section>
+    <h2>Where to look</h2>
+    <div class="tiles">
+        <a class="tile" href="/identity-tree">
+            <div class="name"><span class="glyph">IT</span>Identity tree</div>
+            <p>The delegation graph for a task. Every sub-agent, its remaining budget, and the token blocks that narrowed it.</p>
+        </a>
+        <a class="tile" href="/decisions">
+            <div class="name"><span class="glyph">LD</span>Live decisions</div>
+            <p>Allow, deny and escalate as they happen. Each refusal names the caveat that caused it.</p>
+        </a>
+        <a class="tile" href="/budgets">
+            <div class="name"><span class="glyph">BL</span>Budgets &amp; leases</div>
+            <p>Spend against each mandate&#39;s ceiling, what is out on lease, and whether the ledger invariants hold.</p>
+        </a>
+        <a class="tile" href="/policy">
+            <div class="name"><span class="glyph">PA</span>Policy authoring</div>
+            <p>Write a rule in English, compile it to Cedar, and see the corpus diff before it can be activated.</p>
+        </a>
+        <a class="tile" href="/escalations">
+            <div class="name"><span class="glyph">EQ</span>Escalation queue</div>
+            <p>Requests waiting on a human. Approving narrows scope or amount; it can never widen them.</p>
+        </a>
+        <a class="tile" href="/audit">
+            <div class="name"><span class="glyph">AX</span>Audit explorer</div>
+            <p>Search the hash-chained ledger, trace a payment back to the human who approved it, and verify the chain.</p>
+        </a>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const fmt = (s) => Number(s).toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+async function loadChecks() {
+    const box = document.getElementById("checks");
+    try {
+        const resp = await fetch("/readyz", { cache: "no-store" });
+        const data = await resp.json();
+        box.textContent = "";
+        for (const [name, ok] of Object.entries(data.checks || {})) {
+            const el = document.createElement("span");
+            el.className = "check";
+            // `auth: false` means OIDC was never configured, which is a legitimate
+            // deployment rather than a fault (docker-compose.demo.yml ships exactly
+            // this) — so it gets a neutral lamp and "not configured", not a red one.
+            const unconfigured = !ok && name === "auth";
+            const dot = document.createElement("span");
+            dot.className = "dot " + (ok ? "live" : (unconfigured ? "off" : "down"));
+            const label = document.createElement("span");
+            label.textContent = name + " · " + (ok ? "ready" : (unconfigured ? "not configured" : "unavailable"));
+            el.append(dot, label);
+            box.appendChild(el);
+        }
+    } catch (err) {
+        box.textContent = "";
+        const el = document.createElement("span");
+        el.className = "muted";
+        el.textContent = "could not read /readyz: " + err;
+        box.appendChild(el);
+    }
+}
+
+async function loadBudgets() {
+    const banner = document.getElementById("banner");
+    try {
+        const resp = await fetch("/v1/budgets/dashboard", { cache: "no-store" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+
+        banner.className = "invariant " + (data.invariants_ok ? "ok" : "bad");
+        document.getElementById("verdict").textContent = data.invariants_ok
+            ? "All ledger invariants hold"
+            : data.violations.length + " invariant violation(s)";
+        document.getElementById("checkmeta").textContent =
+            data.budgets_checked + " budgets swept in " + data.check_duration_ms + " ms";
+
+        document.getElementById("pools").textContent = data.gauges.length;
+        document.getElementById("leases").textContent =
+            data.gauges.reduce((n, g) => n + g.active_leases, 0);
+        document.getElementById("committed").textContent =
+            fmt(data.gauges.reduce((n, g) => n + Number(g.committed), 0));
+        document.getElementById("available").textContent =
+            fmt(data.gauges.reduce((n, g) => n + Number(g.available), 0));
+    } catch (err) {
+        // Neutral, not green: an unreachable dashboard is not a clean sweep.
+        banner.className = "invariant";
+        document.getElementById("verdict").textContent = "ledger status unavailable";
+        document.getElementById("checkmeta").textContent = String(err);
+    }
+}
+
+loadChecks();
+{% if has_database %}
+loadBudgets();
+setInterval(loadBudgets, 5000);
+{% else %}
+document.getElementById("verdict").textContent = "no database configured";
+document.getElementById("checkmeta").textContent =
+    "the control plane was started without one — authoring still works, nothing is enforced";
+{% endif %}
+</script>
+{% endblock %}

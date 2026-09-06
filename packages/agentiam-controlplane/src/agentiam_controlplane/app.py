@@ -240,13 +240,32 @@ def create_app(
     # scrape target would report as the target itself being down.
     app.include_router(build_metrics_router(session_factory=session_factory, now=now))
 
+    @app.get("/", response_class=HTMLResponse)
+    async def overview_console(request: Request) -> HTMLResponse:
+        """The console landing page.
+
+        There was no `/` at all before this: every console page was reachable only by
+        typing its path, and none of them linked to any other. This is the entry point
+        the nav in `base.html` points home to, and DEMO.md beat 0 ("console open") now
+        has something to be open *on*.
+
+        It reports rather than computes — `/readyz` for subsystem state and
+        `/v1/budgets/dashboard` for the ledger — so it cannot disagree with the pages it
+        links to.
+        """
+        return templates.TemplateResponse(
+            request=request,
+            name="overview.html",
+            context={"active": "overview", "has_database": session_factory is not None},
+        )
+
     @app.get("/budgets", response_class=HTMLResponse)
     async def budgets_console(request: Request) -> HTMLResponse:
         """The budget and lease dashboard — T-047's console surface."""
         return templates.TemplateResponse(
             request=request,
             name="budgets.html",
-            context={"has_database": session_factory is not None},
+            context={"active": "budgets", "has_database": session_factory is not None},
         )
 
     @app.get("/decisions", response_class=HTMLResponse)
@@ -266,6 +285,7 @@ def create_app(
             request=request,
             name="decisions.html",
             context={
+                "active": "decisions",
                 "outcome": outcome or "",
                 "agent_id": agent_id or "",
                 "scope": scope or "",
@@ -281,7 +301,7 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="identity_tree.html",
-            context={"task_id": task_id},
+            context={"active": "identity-tree", "task_id": task_id},
         )
 
     @app.get("/audit", response_class=HTMLResponse)
@@ -295,7 +315,7 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="audit.html",
-            context={"has_database": session_factory is not None},
+            context={"active": "audit", "has_database": session_factory is not None},
         )
 
     @app.get("/escalations", response_class=HTMLResponse)
@@ -340,6 +360,7 @@ def create_app(
             request=request,
             name="escalations.html",
             context={
+                "active": "escalations",
                 "pending": pending,
                 "error": error,
                 "state": state,
@@ -356,6 +377,7 @@ def create_app(
             request=request,
             name="authoring.html",
             context={
+                "active": "policy",
                 "source": store.current_source,
             },
         )

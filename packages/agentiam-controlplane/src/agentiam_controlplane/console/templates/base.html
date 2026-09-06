@@ -1,0 +1,66 @@
+{#
+  The console shell: one `<head>`, one stylesheet, one nav.
+
+  Every page was previously a standalone document that repeated the boilerplate, declared
+  its own palette, and linked nowhere — six pages with no way to get from any one of them
+  to any other. The nav below is the fix, and it lives here so a seventh page inherits it
+  rather than reinventing it.
+
+  Blocks a page may fill:
+    title       — the browser tab, appended to "AgentIAM"
+    page_title  — the <h1>
+    page_sub    — the one-line explanation under it
+    head_extra  — page-local <style>/<script>, for the genuinely local case only
+    content     — the body
+    scripts     — deferred page scripts, after the DOM exists
+    nav_extra   — right-hand side of the top bar (the escalation queue puts sign-in here)
+
+  `active` is a plain string a view passes in ("budgets", "audit", …) to mark the current
+  nav item. Marked with aria-current so the styling and the accessibility tree agree.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Console{% endblock %} · AgentIAM</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%236366f1'/><text x='16' y='23' font-family='sans-serif' font-size='18' font-weight='bold' fill='white' text-anchor='middle'>A</text></svg>">
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+<header class="topbar">
+    <a class="brand" href="/"><span class="mark">AI</span><span>AgentIAM</span></a>
+
+    <nav class="nav">
+        {% set items = [
+            ('/',              'overview',      'Overview'),
+            ('/identity-tree', 'identity-tree', 'Identity tree'),
+            ('/decisions',     'decisions',     'Decisions'),
+            ('/budgets',       'budgets',       'Budgets'),
+            ('/policy',        'policy',        'Policy'),
+            ('/escalations',   'escalations',   'Escalations'),
+            ('/audit',         'audit',         'Audit'),
+        ] %}
+        {% for href, key, label in items %}
+        <a href="{{ href }}"{% if active == key %} aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
+    </nav>
+
+    <div class="topbar-right">{% block nav_extra %}{% endblock %}</div>
+</header>
+
+<main class="page{% block page_class %}{% endblock %}">
+    {% block page_head %}
+    <div class="page-head">
+        <h1>{% block page_title %}{% endblock %}</h1>
+        <div class="sub">{% block page_sub %}{% endblock %}</div>
+    </div>
+    {% endblock %}
+
+    {% block content %}{% endblock %}
+</main>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

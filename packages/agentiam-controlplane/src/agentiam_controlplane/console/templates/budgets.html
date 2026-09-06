@@ -1,109 +1,28 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AgentIAM Control Plane - Budgets &amp; Leases</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-color: #0f172a;
-            --surface-color: rgba(30, 41, 59, 0.7);
-            --surface-border: rgba(255, 255, 255, 0.1);
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --primary: #3b82f6;
-            --success: #10b981;
-            --danger: #ef4444;
-            --warning: #f59e0b;
-        }
-        body, html {
-            margin: 0; padding: 0; width: 100%;
-            background: var(--bg-color); color: var(--text-main);
-            font-family: 'Inter', system-ui, sans-serif;
-        }
-        .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
-        h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
-        .sub { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
+{% extends "base.html" %}
 
-        /* The invariant banner. PLAN.md calls this the single most persuasive thing in the
-           demo, so it is the largest element on the page and reads at a glance. */
-        .invariant {
-            display: flex; align-items: center; gap: 14px;
-            border-radius: 12px; padding: 18px 20px; margin-bottom: 20px;
-            border: 1px solid var(--surface-border); background: var(--surface-color);
-        }
-        .invariant .lamp {
-            width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;
-            background: var(--text-muted);
-        }
-        .invariant.ok .lamp { background: var(--success); box-shadow: 0 0 14px var(--success); }
-        .invariant.bad .lamp { background: var(--danger); box-shadow: 0 0 14px var(--danger); }
-        .invariant .verdict { font-size: 16px; font-weight: 600; }
-        .invariant.ok .verdict { color: var(--success); }
-        .invariant.bad .verdict { color: var(--danger); }
-        .invariant .meta { color: var(--text-muted); font-size: 12px; margin-left: auto; text-align: right; }
+{% block title %}Budgets &amp; leases{% endblock %}
+{% block page_title %}Budgets &amp; leases{% endblock %}
+{% block page_sub %}Spend against each mandate&#39;s pool, how much of it is out on lease, and whether the ledger&#39;s invariants still hold.{% endblock %}
 
-        .stats { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
-        .stat {
-            background: var(--surface-color); border: 1px solid var(--surface-border);
-            border-radius: 10px; padding: 14px 18px; min-width: 150px;
-        }
-        .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-            color: var(--text-muted); margin-bottom: 6px; }
-        .stat .value { font-size: 22px; font-weight: 600; }
-
-        .pool {
-            background: var(--surface-color); border: 1px solid var(--surface-border);
-            border-radius: 10px; padding: 16px 18px; margin-bottom: 12px;
-        }
-        .pool-head { display: flex; justify-content: space-between; align-items: baseline;
-            margin-bottom: 12px; gap: 12px; flex-wrap: wrap; }
-        .pool-head .who { font-weight: 600; font-size: 14px; }
-        .pool-head .dim { color: var(--text-muted); font-size: 12px; }
-
-        /* Stacked bar: committed + leased + allocated + available == total, which is the
-           pool invariant drawn rather than asserted (spec 04 §2.1). */
-        .bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden;
-            background: rgba(255,255,255,.06); }
-        .bar > div { height: 100%; }
-        .seg-committed { background: var(--danger); }
-        .seg-leased { background: var(--warning); }
-        .seg-allocated { background: var(--primary); }
-        .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px;
-            font-size: 12px; color: var(--text-muted); }
-        .legend span.key { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
-            margin-right: 5px; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-        .empty { color: var(--text-muted); padding: 28px; text-align: center; }
-        .viol { margin-top: 10px; font-size: 12px; color: #fca5a5; }
-        .viol div { margin-top: 4px; }
-    </style>
-</head>
-<body>
-<div class="wrap">
-    <h1>Budgets &amp; leases</h1>
-    <div class="sub">Spend against each mandate's pool, how much of it is out on lease, and whether the ledger's invariants still hold.</div>
-
-    <div class="invariant" id="banner">
-        <span class="lamp"></span>
-        <span class="verdict" id="verdict">checking…</span>
-        <span class="meta" id="checkmeta"></span>
-    </div>
-
-    <div class="stats">
-        <div class="stat"><div class="label">Pools</div><div class="value" id="pools">–</div></div>
-        <div class="stat"><div class="label">Active leases</div><div class="value" id="leases">–</div></div>
-        <div class="stat"><div class="label">Top-ups / min</div><div class="value" id="topups">–</div></div>
-        <div class="stat"><div class="label">Lease utilization</div><div class="value" id="util">–</div></div>
-    </div>
-
-    <div id="pools-list"></div>
-    <div class="empty" id="empty">No budget pools yet.</div>
+{% block content %}
+<div class="invariant" id="banner">
+    <span class="lamp"></span>
+    <span class="verdict" id="verdict">checking…</span>
+    <span class="meta" id="checkmeta"></span>
 </div>
 
+<div class="stats">
+    <div class="stat"><div class="label">Pools</div><div class="value" id="pools">–</div></div>
+    <div class="stat"><div class="label">Active leases</div><div class="value" id="leases">–</div></div>
+    <div class="stat"><div class="label">Top-ups / min</div><div class="value" id="topups">–</div></div>
+    <div class="stat"><div class="label">Lease utilization</div><div class="value" id="util">–</div></div>
+</div>
+
+<div id="pools-list"></div>
+<div class="empty" id="empty">No budget pools yet.</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
 // Poll rather than stream. This page shows *levels*, so missing an intermediate value costs
 // nothing — the next poll supersedes it. T-046 streams because it carries events, where a
@@ -153,7 +72,7 @@ function renderPool(g) {
     legend.innerHTML =
         '<span><span class="key" style="background:var(--danger)"></span>committed ' + fmt(g.committed) + '</span>'
       + '<span><span class="key" style="background:var(--warning)"></span>leased ' + fmt(g.leased) + '</span>'
-      + '<span><span class="key" style="background:var(--primary)"></span>allocated ' + fmt(g.allocated) + '</span>'
+      + '<span><span class="key" style="background:var(--accent)"></span>allocated ' + fmt(g.allocated) + '</span>'
       + '<span><span class="key" style="background:rgba(255,255,255,.15)"></span>available ' + fmt(g.available) + '</span>'
       + '<span>' + g.active_leases + ' active lease(s), ' + pct(g.lease_utilization) + ' of held spent</span>';
     card.appendChild(legend);
@@ -224,5 +143,4 @@ document.getElementById("empty").textContent =
     "Nothing to report: the control plane was started without a database.";
 {% endif %}
 </script>
-</body>
-</html>
+{% endblock %}
