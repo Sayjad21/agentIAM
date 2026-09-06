@@ -384,9 +384,11 @@ currently happen in the deployed PEP. `agentiam-core` implements it correctly an
 under property tests; `scripts/pep_service.py` never wires it in. Finding 1 and finding 3
 are the same root gap seen from two directions, and both are visible in the demo path.
 
-Findings 1 and 2 are fixed. Findings 3, 4, 5 and 6 are open, and one new defect came out
-of fixing finding 1: the mandate's own budget check in the authority block is existentially
-quantified, so a satisfied dimension rescues a violated one (`TODO.md` item 3b). It is
-masked in practice by the ledger, which enforces the mandate ceiling when it issues a
-lease — but the token does not enforce it standalone, which is what the offline-verification
-claim rests on.
+Findings 1 and 2 are fixed. Findings 3, 4, 5 and 6 are open.
+
+One new defect came out of fixing finding 1 and has since been fixed too: the mandate's own
+budget check in the authority block was existentially quantified, so a satisfied dimension
+rescued a violated one, and an omitted dimension was allowed rather than denied. It was
+masked in practice by the ledger, which enforces the mandate ceiling when it issues a lease
+— but not for the offline-verification claim, which is the one that rests on the token
+alone. Spec 01 §2.3 now records it; `mint_root` emits one check per dimension.

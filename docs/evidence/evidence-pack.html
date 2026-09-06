@@ -92,29 +92,29 @@ No averages appear below. Every figure is a percentile or a median, per `PLAN.md
 
 ## NFR-1 — the authorization decision, in process
 
-Budget: **p99 &lt; 1 ms**. Measured 2026-09-06T22:48:01.837187+00:00.
+Budget: **p99 &lt; 1 ms**. Measured 2026-09-06T23:10:42.979445+00:00.
 
 Every step is the real implementation: a real biscuit chain, the real Cedar engine, real Datalog evaluation. The ledger and the audit sink are absent because they are off the hot path by construction — including them would measure the thing the design removed.
 
 | Step | median µs | p99 µs |
 |---|---|---|
-| step 1 — extract (route, args, digest) | 19.8 | 31.6 |
-| step 2 — verify (biscuit signature) | 204.9 | 381.0 |
-| step 4 — caveats (4 clauses, Datalog) | 3.6 | 7.7 |
-| step 4b — token authority (biscuit authorizer, depth 1) | 102.1 | 192.4 |
-| step 5 — policy (Cedar) | 131.5 | 230.8 |
-| step 10 — audit record hash | 15.7 | 25.5 |
-| **`decide()` total — NFR-1** | 264.1 | 395.1 |
+| step 1 — extract (route, args, digest) | 19.5 | 30.3 |
+| step 2 — verify (biscuit signature) | 216.2 | 408.3 |
+| step 4 — caveats (4 clauses, Datalog) | 3.6 | 5.8 |
+| step 4b — token authority (biscuit authorizer, depth 1) | 111.3 | 228.8 |
+| step 5 — policy (Cedar) | 132.4 | 238.6 |
+| step 10 — audit record hash | 15.9 | 26.0 |
+| **`decide()` total — NFR-1** | 277.2 | 430.4 |
 
-**NFR-1 holds**: `decide()` p99 is 395.1 µs against a 1000 µs budget, and `PLAN.md` §17&#x27;s R-2 trigger (2 ms, port to Rust) is not approached.
+**NFR-1 holds**: `decide()` p99 is 430.4 µs against a 1000 µs budget, and `PLAN.md` §17&#x27;s R-2 trigger (2 ms, port to Rust) is not approached.
 
 Three things the breakdown says that a single number cannot:
 
-- **Two steps are the decision.** Cedar at 131.5 µs and the token&#x27;s own Datalog at 102.1 µs together account for almost all of a 264.1 µs median. Everything else inside `decide()` is single-digit microseconds.
+- **Two steps are the decision.** Cedar at 132.4 µs and the token&#x27;s own Datalog at 111.3 µs together account for almost all of a 277.2 µs median. Everything else inside `decide()` is single-digit microseconds.
 
-- **Enforcing the token costs about as much as the policy does, and buys more.** Step 4b evaluates every check in every block — the mandate&#x27;s grant and every attenuation caveat — against a token that may have arrived from anywhere. It was absent until the manual test pass found that nothing on the PEP path called `authorize()`, so the 102.1 µs is new cost against a budget that still has room, not a regression.
+- **Enforcing the token costs about as much as the policy does, and buys more.** Step 4b evaluates every check in every block — the mandate&#x27;s grant and every attenuation caveat — against a token that may have arrived from anywhere. It was absent until the manual test pass found that nothing on the PEP path called `authorize()`, so the 111.3 µs is new cost against a budget that still has room, not a regression.
 
-- **`verify()` is the most expensive step and sits *outside* `decide()`** at 204.9 µs median. Per-request in-process cost is verify + decide + extract, so roughly 489 µs — that, not NFR-1 alone, is what bounds throughput.
+- **`verify()` is the most expensive step and sits *outside* `decide()`** at 216.2 µs median. Per-request in-process cost is verify + decide + extract, so roughly 513 µs — that, not NFR-1 alone, is what bounds throughput.
 
 &gt; An earlier figure of **~5 µs** was published for NFR-1 in `STATUS.md` and the T-019 commit. It is a real measurement of `decide()` with `FakePolicy`, a stub that returns one fixed verdict, and it therefore excludes the most expensive thing in the path. It is superseded here. `tests/unit/test_decision.py::TestNfr1` still measures the stubbed path and is still useful — it isolates everything *except* policy — but the number to quote is the one above.
 

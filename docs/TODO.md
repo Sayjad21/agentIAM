@@ -50,23 +50,27 @@ Gap 2's text — a *reporting* limitation — is now accurate again, because ite
 enforcement half by a different route. Worth a line in `STATUS.md` recording that biscuit's
 authorizer is what enforces attenuation, so the next reader does not re-derive it.
 
-### 3b. New, found by item 1's investigation: the mandate's budget check is existential
+### ~~3b. The mandate's budget check was existential~~ — **DONE**
 
-`mint_root` emits `check if requested($dim, $v), budget($dim, $max), $v <= $max;`. `check
-if` passes when *any* binding satisfies the body, and ADR-007 requires every dimension to
-be supplied — so `requested("tool_calls", 0)` against its own ceiling satisfies the check
-and an over-budget `spend_bdt` never decides it. Measured: supplying only the offending
-dimension denies; adding one satisfied dimension flips it to allow.
+Fixed spec-first. `mint_root` now emits **one check per dimension, naming it literally** —
+the form `BudgetCeiling` already compiled to — instead of a single check over a ranging
+`$dim`. Spec 01 gains §2.3, which records the measurement and, in the same place, why the
+obvious alternative was rejected: `reject if requested($dim, $v), budget($dim, $max),
+$v > $max;` gets the quantifier right and the absence semantics wrong, because `reject if`
+is vacuous when the fact is missing, so an omitted dimension would become unconstrained.
 
-Mitigated in practice — `decide()`'s step 4 comment already delegates the mandate ceiling
-to the ledger that issues the lease, and the lease pool does enforce it. But the token does
-not enforce it standalone, which matters for the offline-verification claim.
+Also measured: the ranging form allowed an **omitted** dimension too, so §2.2's fail-closed
+guarantee never held for this check either. Six regression tests cover both properties, and
+they authorize a real biscuit rather than reading facts back — the bug was invisible to
+fact extraction, since `scaled_budget` reported the right ceilings the whole time.
 
-- **The fix is a quantifier, not a value:** `reject if requested($dim, $v), budget($dim,
-  $max), $v > $max;` fails if *any* binding matches, which is the universal reading.
-- **Touches the token format**, so it is spec-first: spec 01 §5 documents the six checks.
-- **Note:** the per-caveat `BudgetCeiling` is *not* affected — it names a literal dimension,
-  so its `$v` ranges over one fact and it is universal by construction. Verified.
+Cost: +220 base64 characters on the authority block, measured by minting the same mandate
+both ways. Deepest permitted chain is 4,892 characters, still 60% of the hard limit, so
+§9's conclusions and ADR-006's deferral of T-010 are unchanged.
+
+Two tests were relying on the bug and now test what they claim: `test_a_policy_denial_is_403`
+and the e2e slice's `test_the_denial_never_reached_the_tool` both used an amount over the
+mandate's own budget, so they were refused at step 4 and never reached Cedar.
 
 ---
 
@@ -236,11 +240,10 @@ rendered. Budgets, overview, policy, audit and escalations were confirmed visual
 
 ## Suggested order
 
-**Item 1 is done**, which took items 2 and 3 with it — 2 shrank to a display concern and 3
-became unnecessary. What is left in P0 is **3b**, the quantifier bug that fixing item 1
-uncovered: small, well understood, and spec-first because it changes what `mint_root`
-writes into a token.
+**P0 is clear.** Items 1 and 3b are done, 2 shrank to a display concern, 3 became
+unnecessary.
 
-After that, **4 needs 2**, and **5, 6, 7 are independent and can start any time** — 7 first
-if the goal is to make the system demonstrable again, since it is what turns every other
-item on this list into something you can see rather than read about.
+What is left: **4 needs 2**, and **5, 6, 7 are independent and can start any time** — 7
+first if the goal is to make the system demonstrable again, since it is what turns every
+other item on this list into something you can see rather than read about. 8 is small and
+closes a real hole: the lease-priming fix currently has no test.

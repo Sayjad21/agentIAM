@@ -108,7 +108,7 @@ them explicitly is part of the submission's honesty story, not an omission to hi
 
 | Ticket | Why | Resumption trigger |
 |---|---|---|
-| T-010 | Token reference for oversized chains. **Measured unreachable**: at `max_depth = 8` a token is 4,940 base64 chars — 60% of the 8 KB limit (ADR-006) | `max_depth` above ~16 |
+| T-010 | Token reference for oversized chains. **Measured unreachable**: at `max_depth = 8` a token is 4,892 base64 chars — 60% of the 8 KB limit (ADR-006). Re-measured after spec 01 §2.3 widened the authority block; the conclusion is unchanged | `max_depth` above ~16 |
 | T-031 | Template fallback for NL compiler. The compiler path demonstrates without it — but **F-2 has no implementation while it is deferred**, so beat 5 hangs if Ollama is down. Cost stated in `PLAN.md` §T-031 | Preparing the F-2 drill for real (T-058) |
 | T-015 | Adaptive lease sizing. Fixed leases behave identically for the demo; the algorithm is specified in spec 04 §12 | Production traffic with variable rate |
 | T-034 | Drift dataset — 2,000+ labelled pairs, weeks of irreducible human labelling | Research phase |
