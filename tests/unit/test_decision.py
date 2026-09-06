@@ -750,3 +750,152 @@ class TestTokenAuthorityIsActuallyEnforced:
             caveats=(ScopeSubset(scopes=frozenset()),),
         )
         assert decision.reason_code is ReasonCode.INTENT_MISMATCH
+
+
+class TestStep4TokenNativeAuthority:
+    """The token's own checks bind even when the caller supplies no caveat list.
+
+    Every test here passes `caveats=()` — **the shape a deployed PEP actually runs**.
+    `Pipeline` defaults its `caveats_for` hook to a function returning nothing, and
+    `scripts/pep_service.py` never overrides it, so this is not a degenerate edge case;
+    it is production.
+
+    Before `authorize_request` existed these all passed the request through. Measured
+    against a live PEP, not inferred: a child restricted to `{invoice:read, vendor:read}`
+    with a spend ceiling of zero initiated a payment and the tool accepted it
+    (`docs/manual-test-report.md`, case C2).
+    """
+
+    @staticmethod
+    def _attenuated(*caveats: Caveat, agent: str = "agent:child") -> VerifiedToken:
+        """A depth-1 child carrying `caveats`, verified — the deployed shape."""
+        child = attenuate(a_token(), list(caveats), agent_id=agent, role="worker")
+        return verify(child, _KEY_SET, now=NOW)
+
+    @staticmethod
+    def _decide(token: VerifiedToken, context: RequestContext) -> Decision:
+        return decide(
+            token,
+            context,
+            caveats=(),  # the deployed default — the whole point of these tests
+            revocation=FakeRevocation(),
+            policy=FakePolicy(),
+            budget=FakeBudget(),
+        )
+
+    def test_a_scope_the_child_gave_up_is_refused(self) -> None:
+        token = self._attenuated(ScopeSubset(scopes=frozenset({"invoice:read"})))
+        decision = self._decide(token, ctx(operation="payment:initiate", tool=None))
+
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.SCOPE_ATTENUATED_AWAY
+        # The explanation names the block and quotes the check, so an operator can see
+        # which delegation step refused without decoding the token.
+        assert "block 1" in decision.reason_detail
+        assert "operation(" in decision.reason_detail
+
+    def test_a_scope_the_child_kept_is_allowed(self) -> None:
+        token = self._attenuated(ScopeSubset(scopes=frozenset({"invoice:read"})))
+        assert self._decide(token, ctx(operation="invoice:read")).outcome is Outcome.ALLOW
+
+    def test_the_doc_reader_that_paid_is_refused(self) -> None:
+        """The exact token and request from the manual pass's case C2."""
+        token = self._attenuated(
+            ScopeSubset(scopes=frozenset({"invoice:read"})),
+            BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=Decimal(0)),
+            agent="agt-doc-reader",
+        )
+        decision = self._decide(
+            token,
+            ctx(
+                operation="payment:initiate",
+                tool=None,
+                requested={
+                    **dict.fromkeys(BudgetDimension, Decimal(0)),
+                    BudgetDimension.SPEND_BDT: Decimal(100),
+                },
+            ),
+        )
+        assert decision.outcome is Outcome.DENY
+
+    def test_a_spend_over_the_childs_ceiling_is_refused(self) -> None:
+        token = self._attenuated(
+            BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=Decimal(50))
+        )
+        decision = self._decide(
+            token,
+            ctx(
+                requested={
+                    **dict.fromkeys(BudgetDimension, Decimal(0)),
+                    BudgetDimension.SPEND_BDT: Decimal(100),
+                }
+            ),
+        )
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.BUDGET_EXHAUSTED_CAVEAT
+        assert "requested(" in decision.reason_detail
+
+    def test_a_spend_inside_the_childs_ceiling_is_allowed(self) -> None:
+        token = self._attenuated(
+            BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=Decimal(50))
+        )
+        decision = self._decide(
+            token,
+            ctx(
+                requested={
+                    **dict.fromkeys(BudgetDimension, Decimal(0)),
+                    BudgetDimension.SPEND_BDT: Decimal(10),
+                }
+            ),
+        )
+        assert decision.outcome is Outcome.ALLOW
+
+    def test_a_denied_tool_is_refused(self) -> None:
+        token = self._attenuated(ToolDeny(tools=frozenset({"erp.invoice.get"})))
+        decision = self._decide(token, ctx(tool="erp.invoice.get"))
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.TOOL_DENIED
+
+    def test_a_tool_outside_the_allow_list_is_refused(self) -> None:
+        token = self._attenuated(ToolAllow(tools=frozenset({"erp.vendor.get"})))
+        decision = self._decide(token, ctx(tool="erp.invoice.get"))
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.TOOL_DENIED
+
+    def test_an_argument_predicate_is_refused(self) -> None:
+        token = self._attenuated(
+            ArgPredicate(path="payment.amount", op=ArgOperator.LE, value=Decimal(500))
+        )
+        decision = self._decide(token, ctx(args={"payment.amount": Decimal(900)}))
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.ARG_PREDICATE_FAILED
+
+    def test_a_depth_limit_the_child_added_is_refused(self) -> None:
+        token = self._attenuated(DepthLimit(max_depth=1))
+        decision = self._decide(token, ctx(depth=2))
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.DEPTH_EXCEEDED
+
+    def test_the_root_token_still_authorizes_its_own_grant(self) -> None:
+        """A token with no attenuation must not be refused by its own authority block."""
+        assert self._decide(a_token(), ctx()).outcome is Outcome.ALLOW
+
+    def test_a_supplied_caveat_list_still_names_the_caveat(self) -> None:
+        """The Python loop runs first, so a caller that *can* name the caveat still does.
+
+        Biscuit is the backstop, not a replacement: its refusal carries a block number and
+        a check source, which is less useful to a console than a `CaveatRef`.
+        """
+        scope = ScopeSubset(scopes=frozenset({"invoice:read"}))
+        token = self._attenuated(scope)
+        decision = decide(
+            token,
+            ctx(operation="payment:initiate", tool=None),
+            caveats=(scope,),
+            revocation=FakeRevocation(),
+            policy=FakePolicy(),
+            budget=FakeBudget(),
+        )
+        assert decision.outcome is Outcome.DENY
+        assert decision.failing_caveat is not None
+        assert decision.failing_caveat.kind is CaveatKind.SCOPE_SUBSET

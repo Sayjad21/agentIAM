@@ -38,8 +38,10 @@ from agentiam_core.errors import (
     TokenExpiredError,
     TokenNotYetValidError,
     TokenTooLargeError,
+    VerificationLimitError,
 )
 from agentiam_core.models import CaveatRef, Outcome
+from agentiam_core.tokens import authorize_request
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -309,6 +311,27 @@ def decide(
     caveat_decision = _evaluate_caveats(caveats, context)
     if caveat_decision is not None and caveat_decision.outcome is Outcome.DENY:
         return caveat_decision
+
+    # The token's own Datalog, evaluated where it lives. Everything above re-implements a
+    # check in Python and depends on the caller having supplied `caveats`; this depends on
+    # neither, because the checks are inside the blocks and biscuit evaluates them there.
+    #
+    # It runs *after* the caveat loop so a caller that did supply the list still gets the
+    # more precise `failing_caveat`. It runs at all because the comment above about biscuit
+    # enforcing the chain regardless was only ever true of a biscuit somebody authorized,
+    # and nothing on the PEP path did — measured: a child restricted to `{invoice:read,
+    # vendor:read}` with a zero spend ceiling initiated a payment through a deployed PEP.
+    try:
+        failure = authorize_request(token, context)
+    except VerificationLimitError as exc:
+        # Not a refusal. The request was never decided, and saying "denied" would report a
+        # resource limit as an authority judgement.
+        return _deny(ReasonCode.VERIFICATION_LIMIT_EXCEEDED, f"token authorization: {exc}")
+    if failure is not None:
+        return _deny(
+            failure.reason_code,
+            f"refused by a check in block {failure.block} of the token: {failure.source}",
+        )
 
     # --- step 5: policy ----------------------------------------------------
     try:
