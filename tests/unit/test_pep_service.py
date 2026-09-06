@@ -427,3 +427,52 @@ class TestLeasePriming:
         _base_env(monkeypatch, tmp_path)
         service = pep_service.build_service(pep_service.ServiceSettings.from_env())
         assert isinstance(service.pool, LeasePool)
+
+
+class TestLeaseSizing:
+    """`AGENTIAM_PEP_LEASE_SIZE` — TODO item 6.
+
+    Every other setting in `from_env` read an override; this one did not, so the 5,000
+    default was the hard ceiling on any single payment a deployed PEP could authorize. A
+    request larger than the lease is refused with LEASE_UNAVAILABLE, and retrying never
+    helps because a top-up refills *to the lease size* rather than to cover the request
+    — measured against a live PEP: three attempts three seconds apart, all 429, against a
+    mandate granting 500,000.
+    """
+
+    def test_unset_keeps_the_spec_04_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.delenv(f"{pep_service.ENV_PREFIX}LEASE_SIZE", raising=False)
+        assert pep_service.ServiceSettings.from_env().lease_size == pep_service.DEFAULT_LEASE_SIZE
+
+    def test_a_larger_lease_is_honoured(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from decimal import Decimal
+
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv(f"{pep_service.ENV_PREFIX}LEASE_SIZE", "250000.0000")
+        assert pep_service.ServiceSettings.from_env().lease_size == Decimal("250000.0000")
+
+    def test_it_reaches_the_pool_rather_than_stopping_at_the_settings_object(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A setting that parses and is never used is the bug this replaces, not a fix."""
+        from decimal import Decimal
+
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv(f"{pep_service.ENV_PREFIX}LEASE_SIZE", "250000.0000")
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        assert service.pool._settings.lease_size == Decimal("250000.0000")
+
+    @pytest.mark.parametrize("bad", ["nonsense", "0", "-1"])
+    def test_an_unusable_value_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bad: str
+    ) -> None:
+        """Not a silent fall back to the default — that takes effect as a number nobody wrote."""
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv(f"{pep_service.ENV_PREFIX}LEASE_SIZE", bad)
+        with pytest.raises(ValueError, match="LEASE_SIZE"):
+            pep_service.ServiceSettings.from_env()

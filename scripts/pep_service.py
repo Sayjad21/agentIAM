@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from agentiam_core.decision import DriftOracle
     from agentiam_pep.config import PepSettings
     from agentiam_pep.policy import CedarEngine
+    from agentiam_pep.pool import LeasePool
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,26 @@ def _require(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise ValueError(f"{name} is required and is unset or empty")
+    return value
+
+
+def _decimal_env(name: str, default: Decimal) -> Decimal:
+    """Read an optional positive-decimal setting, refusing anything that is not one.
+
+    Unset means the default. Set-but-unparseable is an error rather than a silent fall
+    back to the default: a typo in a lease size would otherwise take effect as "the number
+    you did not write", and the whole point of this module is that a misconfigured PEP
+    refuses to start rather than looking like it enforces.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = Decimal(raw)
+    except ArithmeticError as exc:
+        raise ValueError(f"{name} is not a decimal number: {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than zero, got {raw!r}")
     return value
 
 
@@ -187,6 +208,13 @@ class ServiceSettings:
             policy_public_key_hex=_require(f"{ENV_PREFIX}POLICY_PUBLIC_KEY"),
             routes_path=Path(_require(f"{ENV_PREFIX}ROUTES_PATH")),
             ollama_url=os.environ.get(f"{ENV_PREFIX}OLLAMA_URL", "").strip() or None,
+            # Every other setting here reads an override and this one did not, so the
+            # 5,000 default was the hard ceiling on any single payment a deployed PEP
+            # could authorize — a request larger than the lease is refused with
+            # LEASE_UNAVAILABLE and retrying never helps, because a top-up refills to
+            # the lease size rather than to cover the request. Measured: three
+            # attempts three seconds apart, all 429, against a 500,000 mandate.
+            lease_size=_decimal_env(f"{ENV_PREFIX}LEASE_SIZE", DEFAULT_LEASE_SIZE),
         )
 
 
@@ -282,8 +310,9 @@ class Service:
     drift_oracle: DriftOracle | None
     #: The lease pool, exposed so a test can assert the lifespan primes it. It was not,
     #: and nothing noticed: every budgeted request was refused with LEASE_UNAVAILABLE
-    #: while this suite stayed green, because the pool was unreachable from here.
-    pool: object
+    #: while `tests/unit/test_pep_service.py` stayed green, because the pool was
+    #: unreachable from here.
+    pool: LeasePool
 
 
 def build_service(settings: ServiceSettings) -> Service:
