@@ -53,6 +53,7 @@ rather than left for a reader of spec 09 §7 to discover.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import uuid
@@ -78,6 +79,8 @@ if TYPE_CHECKING:
     from agentiam_core.decision import DriftOracle
     from agentiam_pep.config import PepSettings
     from agentiam_pep.policy import CedarEngine
+
+logger = logging.getLogger(__name__)
 
 ENV_PREFIX: Final = "AGENTIAM_PEP_"
 
@@ -411,6 +414,25 @@ def build_service(settings: ServiceSettings) -> Service:
         await emitter.start()
         await settlement.start()
         await revocation.start()
+
+        # Draw the first lease. Without this the pool holds no `_Held` for the dimension,
+        # and `LeasePool.covers()` refuses *every* budgeted request with
+        # LEASE_UNAVAILABLE — its own docstring names this case ("a PEP that never primed
+        # the dimension, not one that ran dry"), and the refusal path cannot recover from
+        # it because top-ups are scheduled only from an existing lease. The e2e slice
+        # primed by hand (`tests/e2e/test_thin_slice.py`), so nothing caught that the
+        # deployed service never did: measured against a live PEP, `leases` stayed empty
+        # and every payment returned 429 while `budgets.committed` never left 0.
+        #
+        # Not fatal if it fails: an unreachable ledger at boot is the fail-closed case the
+        # PEP already handles per request, and crash-looping here would take out the
+        # read-only paths (`invoice:read` needs no budget) along with it.
+        if not await pool.prime(BudgetDimension.SPEND_BDT):
+            logger.warning(
+                "could not acquire an initial %s lease; budgeted requests will be refused "
+                "until a top-up succeeds",
+                BudgetDimension.SPEND_BDT.value,
+            )
         if drift_oracle is not None:
             # `EmbeddingClient.warm()` is synchronous and can take up to 60 s cold
             # (ADR-037 measured 14,244 ms for the embedding call alone) — run it off the
