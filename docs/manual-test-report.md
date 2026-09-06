@@ -48,7 +48,7 @@ The signed Cedar bundle permits `invoice:read` and `vendor:read` unconditionally
 
 | # | Severity | Finding | Status |
 |---|---|---|---|
-| **1** | **Critical** | The deployed PEP never evaluates token caveats. `ScopeSubset` and `BudgetCeiling` are ignored — a read-only agent successfully moved money. | **Open** |
+| **1** | **Critical** | The deployed PEP never evaluates token caveats. `ScopeSubset` and `BudgetCeiling` are ignored — a read-only agent successfully moved money. | **Fixed** — see §5 |
 | **2** | **Critical** | The deployed PEP never primed its lease pool, so *every* budgeted request was refused and `budgets.committed` never moved. This is the "nothing changes" symptom. | **Fixed** in this pass |
 | **3** | **High** | The identity tree renders **blank** whenever two agents share a depth — `d3.stratify` throws `ambiguous: agt-depth-1` and the error is silently swallowed. | **Open** |
 | 4 | Medium | Max single payment is hard-capped at the 5,000 lease size, with no environment override. A 500,000 mandate cannot authorize a 8,000 payment. | Open |
@@ -219,10 +219,30 @@ This is the visible half of `STATUS.md` gap 2 — "`agent_id` and `role` are **n
 parser to recover them". The gap is documented as a *reporting* limitation. It is
 also an *enforcement* one, and that is not currently stated anywhere.
 
-**Not a small fix.** It needs the caveat parser gap 2 describes, so a verified token's
-attenuation blocks can be recovered into `Caveat` objects. Until then, every claim about
-attenuation holds in `agentiam-core` and its property tests, and does not hold in the
-deployed PEP.
+**Fixed, and it needed no parser.** The original assessment here said this was blocked on
+the Datalog→caveat parser of `STATUS.md` gap 2. That was wrong, and the investigation for
+`TODO.md` item 1 is what showed it: the caveats compile to `check if` / `reject if`
+statements that already live inside the token, and biscuit evaluates them natively once the
+request facts are supplied. `verify()` reads facts back out and deliberately never calls
+`authorize()`, so nothing ever evaluated them.
+
+`agentiam_core.tokens.authorize_request()` now does, and `decide()` calls it on every
+request. Re-verified against a live PEP after the change:
+
+| | before | after |
+|---|---|---|
+| C2 — doc-reader pays 100 | `200 accepted` | `403 SCOPE_ATTENUATED_AWAY` — *"refused by a check in block 1 of the token: check if operation($op), ["invoice:read", "vendor:read"].contains($op)"* |
+| C3 — negotiator reads an invoice | `200` | `403 SCOPE_ATTENUATED_AWAY`, block 1 |
+| C4 — payer reads an invoice | `200` | `403 SCOPE_ATTENUATED_AWAY`, block 1 |
+| D2 — payer pays over its 200,000 ceiling | `429 LEASE_UNAVAILABLE` (wrong reason) | `BUDGET_EXHAUSTED_CAVEAT`, block 1 |
+| D5 — settlement pays over its 25,000 ceiling | `429 LEASE_UNAVAILABLE` (wrong reason) | `BUDGET_EXHAUSTED_CAVEAT`, **block 2** — the depth-2 grandchild's own caveat |
+
+Cost on the hot path: **102.1 µs median / 192.4 µs p99** at depth 1, measured as its own
+step in `docs/benchmarks/performance.md`. `decide()` p99 is now 395.1 µs against NFR-1's
+1,000 µs budget.
+
+One thing this did **not** fix: `BUDGET_EXHAUSTED_CAVEAT` maps to HTTP 429, which tells a
+client to retry a ceiling that is permanent. Folded into finding 6.
 
 ### Finding 2 — The lease pool was never primed (Critical, **fixed**)
 
@@ -364,4 +384,9 @@ currently happen in the deployed PEP. `agentiam-core` implements it correctly an
 under property tests; `scripts/pep_service.py` never wires it in. Finding 1 and finding 3
 are the same root gap seen from two directions, and both are visible in the demo path.
 
-Finding 2 is fixed. Findings 1, 3, 4, 5 and 6 are open.
+Findings 1 and 2 are fixed. Findings 3, 4, 5 and 6 are open, and one new defect came out
+of fixing finding 1: the mandate's own budget check in the authority block is existentially
+quantified, so a satisfied dimension rescues a violated one (`TODO.md` item 3b). It is
+masked in practice by the ledger, which enforces the mandate ceiling when it issues a
+lease — but the token does not enforce it standalone, which is what the offline-verification
+claim rests on.

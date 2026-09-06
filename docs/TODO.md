@@ -11,54 +11,62 @@ answer.
 
 ---
 
-## P0 — the core claim does not currently hold in the deployed system
+## P0 — the core claim (resolved, with one new defect behind it)
 
-### 1. Wire caveat evaluation into the deployed PEP
+### ~~1. Wire caveat evaluation into the deployed PEP~~ — **DONE**
 
-**The single most important item on this list.** `Pipeline.__init__` defaults `caveats_for`
-to `lambda _token: ()`, and neither [`scripts/pep_service.py`](../scripts/pep_service.py)
-nor [`scripts/serve_pep.py`](../scripts/serve_pep.py) passes one. So `decide(...,
-caveats=())` runs on every request and **no token caveat of any kind is enforced**.
+Closed by `authorize_request()`: the PEP now evaluates the token's own Datalog on every
+request, so every `check if` and `reject if` in every block binds. Verified against a live
+PEP — the four cases that failed in the manual pass (C2, C3, C4, and the D2/D5 ceilings)
+now refuse, naming the block and quoting the check.
 
-Measured: `agt-doc-reader`, holding `ScopeSubset{invoice:read, vendor:read}` and
-`BudgetCeiling(spend_bdt, 0)`, successfully initiated a payment (`200`,
-`status: accepted`). Two sibling agents also read resources their scope subset excluded.
+**The investigation in item 2 is what made this cheap, and its answer changes item 2.**
+The caveats compile to Datalog that already lives inside the token; they never needed to be
+parsed back into `Caveat` objects to be *enforced*. `verify()` reads facts out and
+deliberately never calls `authorize()`, so nothing evaluated them. Calling it is the whole
+fix. Cost: ~102 µs median on the hot path, `decide()` p99 now 395 µs against NFR-1's 1 ms.
 
-- **Where:** `packages/agentiam-pep/src/agentiam_pep/pipeline.py:193,268`; the composition
-  roots in `scripts/`.
-- **Blocked on:** item 2 — there is no way to recover caveats from a received token yet.
-- **Interim option worth costing:** for a chain *this* process minted, the SDK already
-  carries the caveats it created (STATUS gap 2). Investigate whether the PEP can be handed
-  those for the demo path while the parser is built, and be explicit that it does not
-  generalise to a received token.
-- **Done when:** the three C-cases in the test report return `403 SCOPE_NOT_GRANTED` /
-  `BUDGET_EXCEEDED`, and a regression test asserts a deployed-shaped PEP refuses an
-  out-of-scope call.
+Left open deliberately: `BUDGET_EXHAUSTED_CAVEAT` maps to HTTP 429, which reads as
+"retry later" for a ceiling that is permanent. Folded into item 11.
 
-### 2. Build the Datalog→caveat parser (STATUS gap 2)
+### 2. Build the Datalog→caveat parser (STATUS gap 2) — **scope reduced**
 
-Already tracked, but its recorded impact is **understated** and should be corrected first —
-see item 3. Everything below depends on it: enforcement (item 1), real agent identity
-(item 4), naming the failing caveat in a decision record (T-019), and the identity tree
-(T-045).
+**The investigation is answered: enforcement does not need this.** Biscuit's own authorizer
+evaluates the token's checks natively once the request facts are supplied, measured against
+the installed `biscuit-python` — so item 1 closed without a parser, and a token received
+from a third party is now enforced exactly as well as one this process minted.
+
+What still needs the parser is **display**, which is what STATUS gap 2 actually describes:
+naming the effective bound in the console, and the identity tree's per-agent detail. That
+is a real gap and a much smaller one than "attenuation does not work".
 
 - **Note carried from STATUS:** whatever parses block source **must not trust it** — TM-24.
-- **Investigate:** whether biscuit's own authorizer can carry the scope/amount facts at
-  request time so the token's `check if` statements evaluate natively, instead of parsing
-  block source back into `Caveat` objects. That would be a smaller and safer change than a
-  parser, if it works. Verify against the installed `biscuit-python`, not the docs.
 - **Done when:** a `VerifiedToken` obtained from an untrusted third party yields its true
-  effective bound, and the console can display it.
+  effective bound for the console to display. Enforcement no longer waits on it.
 
-### 3. Correct STATUS gap 2's impact statement
+### ~~3. Correct STATUS gap 2's impact statement~~ — **no longer needed**
 
-Gap 2 currently reads as a *reporting* limitation — "the console cannot show a true
-effective bound". The measured behaviour is that the deployed PEP **enforces nothing**,
-which is a security property, not a display one. The distinction matters because gap 2 is
-what a reader consults to decide whether attenuation works.
+Gap 2's text — a *reporting* limitation — is now accurate again, because item 1 closed the
+enforcement half by a different route. Worth a line in `STATUS.md` recording that biscuit's
+authorizer is what enforces attenuation, so the next reader does not re-derive it.
 
-- **Done when:** gap 2's "impact if left" names non-enforcement in `pep_service.py`, and
-  `README.md`'s attenuation claim is scoped to `agentiam-core` until item 1 lands.
+### 3b. New, found by item 1's investigation: the mandate's budget check is existential
+
+`mint_root` emits `check if requested($dim, $v), budget($dim, $max), $v <= $max;`. `check
+if` passes when *any* binding satisfies the body, and ADR-007 requires every dimension to
+be supplied — so `requested("tool_calls", 0)` against its own ceiling satisfies the check
+and an over-budget `spend_bdt` never decides it. Measured: supplying only the offending
+dimension denies; adding one satisfied dimension flips it to allow.
+
+Mitigated in practice — `decide()`'s step 4 comment already delegates the mandate ceiling
+to the ledger that issues the lease, and the lease pool does enforce it. But the token does
+not enforce it standalone, which matters for the offline-verification claim.
+
+- **The fix is a quantifier, not a value:** `reject if requested($dim, $v), budget($dim,
+  $max), $v > $max;` fails if *any* binding matches, which is the universal reading.
+- **Touches the token format**, so it is spec-first: spec 01 §5 documents the six checks.
+- **Note:** the per-caveat `BudgetCeiling` is *not* affected — it names a literal dimension,
+  so its `$v` ranges over one fact and it is universal by construction. Verified.
 
 ---
 
