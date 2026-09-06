@@ -160,6 +160,8 @@
 {% endblock %}
 
 {% block content %}
+<div class="alert danger" id="tree-error" hidden></div>
+
 <div class="tree-layout">
     <div id="tree-container">
         <svg width="100%" height="100%"></svg>
@@ -221,6 +223,19 @@
 
     const treeLayout = d3.tree().nodeSize([80, 250]);
 
+    // A tree that cannot be drawn must say so on the page. The failure this exists for
+    // left a blank canvas under a "Connected" indicator, which reads as "no agents yet"
+    // rather than "something is wrong".
+    function showTreeError(message) {
+        const box = document.getElementById('tree-error');
+        box.textContent = message;
+        box.hidden = false;
+    }
+
+    function clearTreeError() {
+        document.getElementById('tree-error').hidden = true;
+    }
+
     function setStatus(text, cls) {
         const el = document.getElementById('connection-status');
         el.innerHTML = '';
@@ -236,17 +251,33 @@
         // block chain extends its parent's, so the parent is the depth-1 node whose
         // block_ids are a prefix of this one's — that is what stratify needs.
         const rootNode = data.find(n => n.depth === 0);
-        if (!rootNode) return; // Wait for root
+        if (!rootNode) {
+            showTreeError(
+                "No depth-0 node in this task's tree, so there is no root to draw from. "
+                + "The API returned " + data.length + " node(s)."
+            );
+            return;
+        }
 
+        // Key on the *terminal block id*, not on `agent_id`.
+        //
+        // `agent_id` is not unique. The deployed PEP derives it as `agt-depth-{N}`
+        // (STATUS gap 2 — there is no Datalog->caveat parser, so the real name in the
+        // attenuation block cannot be read back), so three sibling sub-agents all arrive
+        // as "agt-depth-1". `d3.stratify()` rejects duplicate ids with
+        // `ambiguous: agt-depth-1`, the catch below swallowed it, and the canvas stayed
+        // blank while the status indicator still read "Connected" — the page looked like
+        // it was working and reporting an empty tree. Measured against a real five-node
+        // payload before this changed.
+        //
+        // A token's block chain is what actually identifies an agent: `block_ids` is the
+        // chain root-first, so `block_ids[depth]` is this agent's own block and
+        // `block_ids[depth - 1]` is its parent's. Unique by construction — biscuit block
+        // ids are content-addressed — and exact, where the previous prefix search was a
+        // guess that also happened to collapse siblings.
         data.forEach(n => {
-            n.id = n.agent_id;
-            if (n.depth > 0) {
-                const parent = data.find(p => p.depth === n.depth - 1 &&
-                    p.block_ids.every((val, index) => val === n.block_ids[index]));
-                n.parentId = parent ? parent.id : null;
-            } else {
-                n.parentId = null;
-            }
+            n.id = n.block_ids[n.depth];
+            n.parentId = n.depth > 0 ? n.block_ids[n.depth - 1] : null;
         });
 
         const stratify = d3.stratify()
@@ -257,9 +288,16 @@
         try {
             root = stratify(data);
         } catch(e) {
+            // Visible, not just `console.error`. A silent return is what made the
+            // original bug look like an empty tree instead of a broken one.
             console.error("Stratify error", e);
+            showTreeError(
+                "This task's tree could not be assembled: " + e.message
+                + ". The API returned " + data.length + " node(s); none are drawn."
+            );
             return;
         }
+        clearTreeError();
 
         const treeData = treeLayout(root);
 
