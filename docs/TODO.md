@@ -165,17 +165,53 @@ a caller cannot be looked up by the operator they would quote it to.
 
 ### 11. Fix the status codes
 
-`401` is returned for an unmapped route (a routing decision, not an authentication one) and
-for `TOKEN_REVOKED` / `ANCESTOR_REVOKED` (the token authenticated fine; it is no longer
-authorized). `403` fits both. Low effort; misleads any client that retries on `401`.
+Three cases, all the same shape — the status tells a client to do the wrong thing:
+
+- `401` for an **unmapped route**. That is a routing decision, not an authentication one.
+- `401` for `TOKEN_REVOKED` / `ANCESTOR_REVOKED`. The token authenticated fine; it is no
+  longer authorized. `403` fits.
+- `429` for **`BUDGET_EXHAUSTED_CAVEAT`** (found while fixing item 1). `429` means "retry
+  later", and a caveat ceiling is permanent for the life of that token — retrying can only
+  ever fail. `LEASE_UNAVAILABLE` is the one that genuinely is retryable, and the two now
+  share a status, which is exactly the distinction a client needs.
 
 - **Check:** whether `tests/` or the SDK pin the current codes before changing them.
+
+### 12. Make the SBOM reproducible across platforms
+
+`generate_sbom.py` builds the component list from the resolved environment, so it differs
+by host OS: the committed file carries `uvloop` (Linux-only) and a Windows run produces
+`colorama` + `pywin32` instead. 136 components versus 137.
+
+CI is unaffected — it runs on ubuntu and matches the committed file — so this is not a red
+build. What it does mean is that **`make security` cannot pass on a Windows dev machine**,
+and the `--check` gate silently only holds for one platform, which is not what a byte-exact
+determinism gate is supposed to mean.
+
+Two commits already fixed OS-dependent SBOM problems (`feae378`, `0601b04`), so this is the
+third of the same family and worth fixing at the root rather than again.
+
+- **Investigate:** whether to resolve from `uv.lock` (which carries markers for every
+  platform) rather than from the installed venv. That makes the SBOM a function of a
+  committed file, which is what the rest of the `--check` family already is.
+- **Done when:** `uv run python scripts/generate_sbom.py` agrees with the committed file on
+  Linux and Windows alike.
+
+### 13. Give `performance.md` a CI drift check (STATUS gap 24)
+
+Already tracked, and this pass made it sharper: `decide()`'s median moved 151.3 → 264.1 µs
+and nothing in CI would have noticed. `generate_benchmark_results.py --check` exists and is
+called by no job, `Makefile` target, or `make.ps1` target.
+
+Gap 24 explains why a byte-exact check is wrong here — PB-2's timings vary run to run by
+design — so this needs a tolerance band or a structural check, which is the design decision
+gap 24 left to T-053.
 
 ---
 
 ## P3 — verification gaps in this pass
 
-### 12. Verify the narrowing-only approval invariant against a live request
+### 14. Verify the narrowing-only approval invariant against a live request
 
 The manual pass could **not** confirm "approve narrows, never widens" (EC-A09) end to end:
 the auth gate returns `401` before the widening check runs, so the check was never reached.
@@ -187,7 +223,7 @@ leans on hardest has never been demonstrated against a running system.
 - **Done when:** a live `POST /v1/escalations/{id}/approve` asking for more than was
   requested is refused, with the refusal shown in the console.
 
-### 13. Exercise the console pages that this pass could only check over HTTP
+### 15. Exercise the console pages that this pass could only check over HTTP
 
 The decisions and identity-tree pages hold open `EventSource` connections, so headless
 screenshot capture never terminates and they were verified via their APIs rather than
@@ -200,6 +236,11 @@ rendered. Budgets, overview, policy, audit and escalations were confirmed visual
 
 ## Suggested order
 
-1, 2 and 3 travel together and unblock 4. 5, 6 and 7 are independently useful and can start
-immediately — **7 first** if the goal is to make the system demonstrable again, since it is
-what turns every other item on this list into something you can see rather than read about.
+**Item 1 is done**, which took items 2 and 3 with it — 2 shrank to a display concern and 3
+became unnecessary. What is left in P0 is **3b**, the quantifier bug that fixing item 1
+uncovered: small, well understood, and spec-first because it changes what `mint_root`
+writes into a token.
+
+After that, **4 needs 2**, and **5, 6, 7 are independent and can start any time** — 7 first
+if the goal is to make the system demonstrable again, since it is what turns every other
+item on this list into something you can see rather than read about.
