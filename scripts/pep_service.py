@@ -280,6 +280,10 @@ class Service:
     #: (spec 06 §2.1), not a degraded one. Exposed rather than left implicit so a caller
     #: (or a test) does not have to infer it from an absent constructor argument.
     drift_oracle: DriftOracle | None
+    #: The lease pool, exposed so a test can assert the lifespan primes it. It was not,
+    #: and nothing noticed: every budgeted request was refused with LEASE_UNAVAILABLE
+    #: while this suite stayed green, because the pool was unreachable from here.
+    pool: object
 
 
 def build_service(settings: ServiceSettings) -> Service:
@@ -454,7 +458,13 @@ def build_service(settings: ServiceSettings) -> Service:
             await engine.dispose()
 
     app = create_app(settings=settings.pep, pipeline=pipeline, lifespan=lifespan)
-    return Service(app=app, revocation=revocation, policy=policy, drift_oracle=drift_oracle)
+    return Service(
+        app=app,
+        revocation=revocation,
+        policy=policy,
+        drift_oracle=drift_oracle,
+        pool=pool,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

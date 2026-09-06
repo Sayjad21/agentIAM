@@ -25,6 +25,7 @@ drift are real, so these tests assert that rather than assume it.
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
@@ -313,3 +314,116 @@ class TestAssembly:
         assert service.app.router.lifespan_context is not None
         assert service.app.router.on_startup == []
         assert service.app.router.on_shutdown == []
+
+
+class TestLeasePriming:
+    """The deployed service must draw a lease at boot, or it refuses every budgeted call.
+
+    `LeasePool` acquires its first lease in `prime()`. The e2e slice calls it by hand;
+    this composition root did not, and `LeasePool.covers()` has no way back from that —
+    it returns `ok=False` when no `_Held` exists for the dimension, and top-ups are
+    scheduled only from an existing lease. Its own docstring names the case: "a PEP that
+    never primed the dimension, not one that ran dry".
+
+    Measured against a live PEP before the fix: `leases` stayed empty, `budgets.committed`
+    never left 0.0000 across 15 recorded decisions, and a 100 BDT payment against a
+    500,000 pool returned 429. **This suite passed identically before and after** — 22
+    tests either way — because nothing here could see the pool. That is what these cover.
+    """
+
+    @staticmethod
+    async def _run_lifespan(service: pep_service.Service, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Enter and exit the app's lifespan with the I/O-bound workers stubbed out.
+
+        Only the workers are stubbed. `prime` is left alone — it is the thing under test —
+        and it is safe to let it run against an unreachable ledger precisely because the
+        fix made a failed prime non-fatal.
+        """
+        from agentiam_pep.emitter import DecisionEmitter
+        from agentiam_pep.pool import LeasePool
+        from agentiam_pep.revocation import RedisRevocationSet
+        from agentiam_pep.settlement import SettlementQueue
+
+        async def noop(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        for cls, names in (
+            (DecisionEmitter, ("start", "aclose")),
+            (SettlementQueue, ("start", "aclose")),
+            (RedisRevocationSet, ("start", "aclose")),
+            (LeasePool, ("aclose",)),
+        ):
+            for name in names:
+                monkeypatch.setattr(cls, name, noop)
+
+        async with service.app.router.lifespan_context(service.app):
+            pass
+
+    async def test_the_lifespan_primes_the_spend_lease(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The regression. Remove the `prime()` call and this fails."""
+        from agentiam_core.models import BudgetDimension
+        from agentiam_pep.pool import LeasePool
+
+        primed: list[BudgetDimension] = []
+
+        async def record(_self: object, dimension: BudgetDimension) -> bool:
+            primed.append(dimension)
+            return True
+
+        monkeypatch.setattr(LeasePool, "prime", record)
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        await self._run_lifespan(service, monkeypatch)
+
+        assert primed == [BudgetDimension.SPEND_BDT]
+
+    async def test_a_pool_that_cannot_prime_still_lets_the_service_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """An unreachable ledger at boot must not take the read-only paths down with it.
+
+        `invoice:read` consumes no budget, so a PEP that cannot lease can still serve it
+        correctly. Crash-looping here would refuse those too, and fail-closed per request
+        is already the behaviour when a budgeted call arrives.
+        """
+        from agentiam_pep.pool import LeasePool
+
+        async def cannot_prime(_self: object, _dimension: object) -> bool:
+            return False
+
+        monkeypatch.setattr(LeasePool, "prime", cannot_prime)
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        await self._run_lifespan(service, monkeypatch)  # must not raise
+
+    async def test_a_failed_prime_is_logged_so_it_is_diagnosable(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Non-fatal must not mean silent: every budgeted call will refuse until a top-up."""
+        from agentiam_pep.pool import LeasePool
+
+        async def cannot_prime(_self: object, _dimension: object) -> bool:
+            return False
+
+        monkeypatch.setattr(LeasePool, "prime", cannot_prime)
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        with caplog.at_level(logging.WARNING, logger="scripts.pep_service"):
+            await self._run_lifespan(service, monkeypatch)
+
+        assert any("lease" in r.message.lower() for r in caplog.records), caplog.text
+
+    def test_the_pool_is_reachable_from_the_assembled_service(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Exposed deliberately — the tests above cannot exist without it."""
+        from agentiam_pep.pool import LeasePool
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        assert isinstance(service.pool, LeasePool)
