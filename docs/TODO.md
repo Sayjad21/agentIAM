@@ -78,44 +78,63 @@ mandate's own budget, so they were refused at step 4 and never reached Cedar.
 
 ### 4. Give agents real identities instead of `agt-depth-{N}`
 
+**Downgraded by item 5.** The tree renders correctly now — it keys on the token's terminal
+block id, which is unique — so this is a labelling problem, not a blank-canvas one. `DEMO.md`
+beat 2's *shape* is demonstrable today; the three sub-agents are just all called
+`agt-depth-1`.
+
 `pep_service.py:382` derives `agent_id=f"agt-depth-{token.depth}"` and `role` from a single
-configured default. Every sibling therefore shares one id and every `role` reads
-`"unknown"`. `DEMO.md` beat 2 ("root spawns 3 sub-agents, each node's scopes visibly
-smaller") cannot be demonstrated.
+configured default, so every sibling shares one name and every `role` reads `"unknown"`.
 
 - **Blocked on:** item 2.
 - **Done when:** `/v1/tree/{task}` returns one distinct node per real agent, with the role
   the parent assigned at `attenuate()` time.
 
-### 5. Make the identity tree fail loudly, and render regardless
+### ~~5. Make the identity tree fail loudly, and render regardless~~ — **DONE**
 
-Independent of item 4 and cheap. With duplicate ids, `d3.stratify()` throws
-`ambiguous: agt-depth-1`; the template catches it, `return`s, and leaves a blank canvas
-while the status indicator still reads "Connected". The page looks like it is working.
+Two changes, and the first turned out to be exact rather than a workaround.
 
-- **Where:** `console/templates/identity_tree.html`, the `try/catch` around `stratify`.
-- **Do:** key the hierarchy on something already unique in the payload — the terminal
-  `block_id` is per-agent and present — and surface a failure in the UI instead of only
-  `console.error`.
-- **Done when:** the current five-node payload draws five nodes, and an unstratifiable
-  payload shows a visible error rather than an empty page.
+**Key on the terminal block id, not `agent_id`.** A token's block chain already identifies
+an agent uniquely — `block_ids` is the chain root-first, so `block_ids[depth]` is this
+agent's own block and `block_ids[depth - 1]` is its parent's. Biscuit block ids are
+content-addressed, so uniqueness is structural rather than hoped for. That also replaced
+the previous parent *inference* (a prefix search over `block_ids`) with a direct lookup —
+the search was both slower and the thing collapsing siblings onto one node.
 
-### 6. Make lease size configurable, and decide what an over-lease request should do
+**Surface a failure instead of returning.** `catch(e) { console.error(...); return; }` is
+what made a broken tree look like an empty one, under a status indicator still reading
+"Connected". There is now a visible banner, and a missing depth-0 node says so too.
 
-`DEFAULT_LEASE_SIZE` is `5000.0000` and `ServiceSettings.from_env()` reads **no override**
-for it, unlike every other setting. A request larger than the lease is refused with
-`LEASE_UNAVAILABLE` and retrying never helps (verified: 3 attempts, 3 s apart, all `429`),
-because a top-up refills to the lease size rather than to cover the request. A deployed PEP
-therefore cannot authorize a single payment over 5,000 BDT no matter the mandate —
-`DEMO.md` beat 4's 50,000 ceiling is unreachable.
+Verified by replaying `updateTree()` against the exact five-node payload that used to
+throw `ambiguous: agt-depth-1`: **5 descendants drawn**, shaped root → three siblings →
+one grandchild, which is `DEMO.md` beat 2.
 
-- **Do now:** read `AGENTIAM_PEP_LEASE_SIZE` in `from_env()`.
-- **Investigate:** whether a single request exceeding the lease should trigger a top-up
-  sized to the request. That interacts with spec 04 §4.1's blast-radius reasoning and
-  STATUS gap 8, so it is a design decision, not a patch. T-015 (adaptive lease sizing) is
-  where it most likely belongs.
-- **Done when:** the lease size is configurable, and the over-lease case is either handled
-  or documented as a deliberate bound with a reason.
+**This downgrades item 4.** Real agent names are now a *labelling* problem — the tree
+renders correctly without them, where before the duplicate ids stopped it drawing at all.
+
+### ~~6. Make lease size configurable~~ — **DONE**, and the second half deliberately not
+
+`AGENTIAM_PEP_LEASE_SIZE` now overrides the 5,000 default. Set-but-unparseable is an error
+rather than a silent fall back: a typo would otherwise take effect as the number nobody
+wrote, and this module's whole posture is that a misconfigured PEP refuses to start. Five
+tests, including one asserting the value reaches `PoolSettings` — a setting that parses and
+is never used would be the same bug wearing a different hat.
+
+**The investigation the item asked for, answered: do not make an over-lease request
+top up to fit.** It looks like the obvious completion and it is not mine to make:
+
+- Spec 04 §4.1 sizes a lease to bound what one PEP crash can strand. A request-sized
+  top-up removes that bound exactly when the request is largest — the case the bound
+  exists for.
+- STATUS gap 8 already records that `ACQUIRE` does not clamp by `max_fraction`, so there
+  is *no* blast-radius bound beyond TTL today. Adding request-sized top-ups on top of a
+  missing clamp compounds two problems rather than fixing one.
+- Both belong to **T-015** (adaptive lease sizing), which is where the formula actually
+  applies and where spec 04 §12 says the algorithm lives.
+
+Raising the lease is the operator's lever until then, which is what makes `DEMO.md` beat 4
+reachable again. It is a real trade — more stranded budget on a crash — and the variable's
+documentation says so rather than presenting it as free.
 
 ### 7. Build T-057's demo seed script
 
@@ -167,39 +186,59 @@ a caller cannot be looked up by the operator they would quote it to.
 - **Done when:** a refusal either appears in the chain or does not claim an id that implies
   it does.
 
-### 11. Fix the status codes
+### ~~11. Fix the status codes~~ — **investigated, no change. I was wrong.**
 
-Three cases, all the same shape — the status tells a client to do the wrong thing:
+All three cases I filed are deliberate, and spec 09 §11 says so in text I had not read
+when I wrote the item. Recording that rather than changing code to match a complaint that
+does not survive contact with the reasoning.
 
-- `401` for an **unmapped route**. That is a routing decision, not an authentication one.
-- `401` for `TOKEN_REVOKED` / `ANCESTOR_REVOKED`. The token authenticated fine; it is no
-  longer authorized. `403` fits.
-- `429` for **`BUDGET_EXHAUSTED_CAVEAT`** (found while fixing item 1). `429` means "retry
-  later", and a caveat ceiling is permanent for the life of that token — retrying can only
-  ever fail. `LEASE_UNAVAILABLE` is the one that genuinely is retryable, and the two now
-  share a status, which is exactly the distinction a client needs.
+- **`TOKEN_REVOKED` / `ANCESTOR_REVOKED` → 401.** §11.1: *"A revoked token returning
+  something distinctive tells a holder of a stolen token that the theft was noticed."* It
+  is a deliberate mitigation of TM-01's accepted bearer-replay risk. The `reason_code` in
+  the body does distinguish them, for the agent the token was issued to; the status line is
+  what a passive observer sees. Changing it would leak exactly what §11.1 is hiding.
+- **`BUDGET_EXHAUSTED_CAVEAT` → 429.** §11.2 chose 429 over the semantically apter 402
+  because proxies and load balancers do not treat 402 consistently, and states that *"the
+  distinction that matters — no budget versus no authority — is carried by the reason code,
+  which every response has."* My objection (a caveat ceiling is permanent, so "retry later"
+  misleads) is real but narrower than it looked: `Retry-After` is deliberately unset, so
+  nothing tells a client the wait is finite, and a token with a different ceiling is a new
+  token — which is equally true of the 403 cases. Not worth splitting the row for.
+- **Unmapped route → 401 `MALFORMED_REQUEST`.** This one I had to reason about rather than
+  read. Route extraction runs at step 1, *before* verification at step 2, so no identity has
+  been established when the refusal happens. 403 would assert an identity the PEP has not
+  checked; 404 would let an unauthenticated caller enumerate which routes exist. 401 is the
+  weakest claim of the three and the message is explicit ("an unmapped route is an
+  unreviewed route").
 
-- **Check:** whether `tests/` or the SDK pin the current codes before changing them.
+**The lesson worth keeping:** two of these were filed from a live response body without
+reading the spec section that governs it. Check the spec before filing a status-code
+complaint — the reasoning is usually already written down.
 
-### 12. Make the SBOM reproducible across platforms
+### ~~12. The SBOM's platform dependence~~ — **DONE**, but not the way I filed it
 
-`generate_sbom.py` builds the component list from the resolved environment, so it differs
-by host OS: the committed file carries `uvloop` (Linux-only) and a Windows run produces
-`colorama` + `pywin32` instead. 136 components versus 137.
+I filed this as "make the SBOM reproducible across platforms, probably by resolving from
+`uv.lock`". Reading `generate_sbom.py`'s docstring first would have saved that: resolving
+from the installed environment is a **measured, deliberate** choice, root-caused twice —
+two independent fresh Ubuntu containers produce byte-identical output, a long-lived local
+venv does not, and the difference tracks the host OS rather than venv staleness. Changing
+it would have fought a decision made with evidence.
 
-CI is unaffected — it runs on ubuntu and matches the committed file — so this is not a red
-build. What it does mean is that **`make security` cannot pass on a Windows dev machine**,
-and the `--check` gate silently only holds for one platform, which is not what a byte-exact
-determinism gate is supposed to mean.
+**The real defect was the failure message, and it was worse than the drift.** On Windows
+the script said:
 
-Two commits already fixed OS-dependent SBOM problems (`feae378`, `0601b04`), so this is the
-third of the same family and worth fixing at the root rather than again.
+    docs/evidence/sbom.json: OUT OF DATE.
+    Re-run with --write and commit the update.
 
-- **Investigate:** whether to resolve from `uv.lock` (which carries markers for every
-  platform) rather than from the installed venv. That makes the SBOM a function of a
-  committed file, which is what the rest of the `--check` family already is.
-- **Done when:** `uv run python scripts/generate_sbom.py` agrees with the committed file on
-  Linux and Windows alike.
+Both sentences false, and the second actively harmful: doing what it said commits a
+137-component Windows SBOM over the 136-component Linux one and breaks CI's security-scan
+job — for a developer who followed the tool's own instruction. `.gitattributes` records
+that development happens on Windows, so this was aimed squarely at the usual case.
+
+Now: `NOT CHECKED` and exit 0 off the reference platform, so `make security` passes where
+it cannot verify anything; `--write` refuses unless `--force`. Eleven tests, covering both
+branches of the platform check so neither can regress on a host that cannot reach the
+other.
 
 ### 13. Give `performance.md` a CI drift check (STATUS gap 24)
 
