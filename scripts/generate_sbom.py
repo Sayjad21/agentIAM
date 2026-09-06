@@ -32,12 +32,22 @@ whatever CI actually runs, not whatever happens to be closest at hand locally. R
 with a throwaway container rather than guessing from a local run:
 ``docker run --rm -v $(pwd):/repo:ro,z ubuntu:latest`` — install ``uv``, ``uv sync``,
 run this script with ``--write``, copy the result out.
+
+**Off that platform, this script does not pretend to have checked anything.** It used to:
+a Windows run reported ``OUT OF DATE. Re-run with --write and commit the update``, and both
+halves were false — the file was current, and following the instruction committed a
+137-component Windows SBOM (``colorama``, ``pywin32``) over the 136-component Linux one
+(``uvloop``), which CI's security-scan job then rejects. So the check now reports
+``NOT CHECKED`` and exits 0 (CI is the authority, the same way ``make security`` already
+says the security-scan job is for trivy and gitleaks), and ``--write`` refuses outright
+unless ``--force`` says the overwrite is deliberate.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import platform
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -46,6 +56,25 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SBOM_PATH = REPO_ROOT / "docs" / "evidence" / "sbom.json"
+
+#: The one environment the committed SBOM is a function of — CI's `ubuntu-latest`. The
+#: component set is resolved from the *installed* environment (see the module docstring),
+#: so it legitimately differs by host: measured, 136 components with `uvloop` on Linux
+#: against 137 with `colorama` and `pywin32` on Windows.
+_REFERENCE_OS = "Linux"
+_REFERENCE_MACHINES = frozenset({"x86_64", "AMD64", "amd64"})
+
+
+def _on_reference_platform() -> bool:
+    """Whether this host is the one the committed SBOM was generated on."""
+    return platform.system() == _REFERENCE_OS and platform.machine() in _REFERENCE_MACHINES
+
+
+def _platform_note() -> str:
+    return (
+        f"this host is {platform.system()}/{platform.machine()}; the committed SBOM is "
+        f"generated on {_REFERENCE_OS}/x86_64 (CI's ubuntu-latest)"
+    )
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -155,6 +184,11 @@ def main() -> int:
         action="store_true",
         help="Overwrite the committed SBOM. Without this, exits non-zero if it would change.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow --write off the reference platform. Almost certainly not what you want.",
+    )
     args = parser.parse_args()
 
     rendered = _generate_sbom()
@@ -165,6 +199,19 @@ def main() -> int:
     )
 
     SBOM_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.write and not args.force and not _on_reference_platform() and SBOM_PATH.exists():
+        # The dangerous path, and the one the old failure message actively invited: a
+        # developer on Windows saw "Re-run with --write and commit the update", did
+        # exactly that, and committed an SBOM that CI's security-scan job rejects.
+        print(
+            f"refusing to overwrite {SBOM_PATH.relative_to(REPO_ROOT)}: {_platform_note()}.\n"
+            "Regenerate in a throwaway container (see this module's docstring), or pass "
+            "--force if you genuinely mean to commit this host's environment.",
+            file=sys.stderr,
+        )
+        return 1
+
     if args.write or not SBOM_PATH.exists():
         SBOM_PATH.write_text(rendered, encoding="utf-8")
         print(f"wrote {SBOM_PATH.relative_to(REPO_ROOT)}")
@@ -173,6 +220,17 @@ def main() -> int:
     committed = SBOM_PATH.read_text(encoding="utf-8")
     if committed == rendered:
         print(f"{SBOM_PATH.relative_to(REPO_ROOT)}: up to date")
+        return 0
+
+    if not _on_reference_platform():
+        # Neither a pass nor a failure: off the reference platform this comparison is not
+        # evidence either way, so reporting "OUT OF DATE" stated a finding it had not
+        # made. `make security` already positions itself as the local subset with CI
+        # authoritative — this is the same posture, said out loud.
+        print(
+            f"{SBOM_PATH.relative_to(REPO_ROOT)}: NOT CHECKED — {_platform_note()}, so a "
+            "difference here is expected and proves nothing. CI verifies this."
+        )
         return 0
 
     print(
