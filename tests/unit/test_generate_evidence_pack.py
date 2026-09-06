@@ -288,7 +288,13 @@ class TestCheckMode:
         assert output.exists()
         assert generate_evidence_pack.main(["--check"]) == 0
 
-        output.write_text(output.read_text(encoding="utf-8") + "\n<!-- tampered -->\n")
+        # Both ends explicit. The pack embeds non-cp1252 characters (the circled digits
+        # in the spec table), so a default-encoding write here succeeds on Linux and
+        # raises UnicodeEncodeError on Windows — the read was already pinned, the write
+        # was not.
+        output.write_text(
+            output.read_text(encoding="utf-8") + "\n<!-- tampered -->\n", encoding="utf-8"
+        )
         assert generate_evidence_pack.main(["--check"]) == 1
 
     def test_write_mode_produces_the_same_bytes_as_render(
