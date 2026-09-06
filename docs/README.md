@@ -12,6 +12,7 @@ Every document in this repository, what it is for, and when to read it.
 | See what is built and what is left | [`STATUS.md`](STATUS.md) |
 | Follow how the project developed, and why | [`JOURNAL.md`](JOURNAL.md) |
 | Build the next ticket | [`ROADMAP.md`](ROADMAP.md) → [`PLAN.md`](PLAN.md) → the relevant spec |
+| Pick up the next fix | [`TODO.md`](TODO.md) → [`manual-test-report.md`](manual-test-report.md) for the evidence behind it |
 
 ---
 
@@ -53,6 +54,8 @@ Specs `05`–`09` (policy, drift, revocation, audit, decision record) are writte
 | [`JOURNAL.md`](JOURNAL.md) | The development narrative: what each ticket did, what was found while doing it, and what changed as a result. |
 | [`STATUS.md`](STATUS.md) | What is done, what remains, and the improvements worth making with their impact. |
 | [`threat-model.md`](threat-model.md) | 24 STRIDE threats, each with a mitigation, a status, and the test id covering it. Six came out of implementation rather than brainstorming. |
+| [`manual-test-report.md`](manual-test-report.md) | A hand-driven pass over the running system — 42 cases against a live PEP, each with the input sent, the behaviour the specs promise, and what actually came back. Where the automated suites and the deployed system disagree, this is what found it. |
+| [`TODO.md`](TODO.md) | The work queued out of that pass, ordered by cost of leaving it undone. Investigation items are marked as such, because the fix depends on the answer. |
 
 ---
 
