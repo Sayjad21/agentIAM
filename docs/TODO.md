@@ -660,3 +660,32 @@ working-tree change can reach. Re-scanned: **no leaks found**, 107 commits.
   nights with every push showing green. `PLAN.md` §13 schedules chaos nightly on purpose and
   that is right; what was missing is that nobody was reading the result. A red nightly is only
   useful if someone looks.
+
+### 23. One unexplained integration-job failure, watch for a second
+
+`ec616d1`'s CI run failed `Ledger against real Postgres` at the `Integration tests` step.
+Recorded rather than dismissed, because a first-time failure with no obvious cause is the
+kind of thing that reads as noise until it is a pattern.
+
+**What rules out the commit.** `ec616d1` changed `ci.yml`, `.gitleaks.toml`, two docs files
+and three files under `tests/unit/` — nothing the integration job runs. The immediately
+preceding push (`8965b89`) and the immediately following one (`2348909`, an actions bump)
+both passed the same job on the same integration code. The job had been green for ten
+consecutive runs before it.
+
+**What was tried locally.** Four full `pytest -m integration` runs, 253 passing each; three
+repeats of the race-prone modules (`test_ledger`, `test_ledger_commit`, `test_escalations`,
+`test_lease_pool_crash`), 35 passing each. `pytest-randomly` is not installed, so CI and
+local run in the same order — the ordering hypothesis is out. Not reproduced.
+
+**Why it was not diagnosed further.** The Actions log endpoint needs authentication and the
+unauthenticated check-run annotation carries only `Process completed with exit code 1`, so the
+failing test is not identifiable from outside. `gh` is not installed on the development host.
+
+- **If it recurs:** read the log from the Actions UI first — the test name is the whole
+  question, and everything above is an attempt to answer it without one. The plausible
+  candidates are the testcontainers fixtures (a slow Postgres start on a loaded runner) and
+  the concurrency tests, which is where a real race would surface.
+- **Worth considering either way:** `pytest -p no:randomly` appears throughout this session's
+  local commands and does nothing, since the plugin is absent. Either install it — order
+  dependence is a real class of bug and item 19 was one — or stop passing the flag.
