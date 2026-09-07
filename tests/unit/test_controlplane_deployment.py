@@ -34,11 +34,21 @@ from agentiam_controlplane.app import create_app, create_app_from_env
 if TYPE_CHECKING:
     pass
 
-_VALID_KEY_HEX = "8aba07e36c371b19ebd16f9d7f63ed4a87ac254ae752fa908e64bb2e807e8241"
+
+#: Generated per run, never a literal. A 64-hex constant assigned to a variable named
+#: `..._PRIVATE_KEY` is exactly the shape a secret scanner should flag, and this one was
+#: flagged — a waiver by value would have taught the repo to wave that shape through. The
+#: key has to be a real Ed25519 scalar, not an arbitrary 64 hex characters, because
+#: `from_env` parses it; `generate_keypair()` is the supported way to get one.
+def _a_root_private_key_hex() -> str:
+    """A throwaway Ed25519 private key, in the hex form `from_env` expects."""
+    from agentiam_core.tokens import generate_keypair
+
+    return generate_keypair().private_key.to_bytes().hex()
 
 
 def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY", _VALID_KEY_HEX)
+    monkeypatch.setenv("AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY", _a_root_private_key_hex())
     monkeypatch.setenv("AGENTIAM_CONTROLPLANE_APPROVERS", "kc:manager,kc:cfo")
     monkeypatch.setenv("AGENTIAM_CONTROLPLANE_SESSION_SECRET_KEY", "test-session-secret")
 

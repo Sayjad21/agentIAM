@@ -147,11 +147,19 @@ jobs:
       - name: Chaos scenarios
         run: uv run pytest -m chaos -v
 
-      # The committed table must match the runs that produced it. `generate_chaos_results.py`
-      # rewrites it from the JSON each scenario emits; `--check` fails if what is committed
-      # differs, which catches both a hand-edited table and a stale one.
-      - name: Results table matches the runs
-        run: uv run python scripts/generate_chaos_results.py --check
+      # `generate_chaos_results.py --check` used to run here, and could never pass. The
+      # scenarios *rewrite* `docs/benchmarks/chaos/*.json` as they run — a fresh `run_id`,
+      # a new `started_at`, a different `duration_s` and different event timings every
+      # time — so the step compared the committed Markdown against JSON that had just
+      # changed underneath it. Every nightly run failed on it.
+      #
+      # This is gap 24's lesson exactly, and `performance.md` already had it applied: a
+      # byte-exact drift check has to live in a job that does not regenerate its own
+      # inputs. It now sits in `evidence-pack` beside the benchmark one, where the JSON is
+      # static, and so it runs on every push instead of only nightly.
+      #
+      # What belongs *here* is the assertion the scenarios themselves make — the
+      # invariants held — and that is what `pytest -m chaos` is.
 
       - name: Upload chaos results
         if: always()
@@ -222,6 +230,12 @@ jobs:
       # asserts `decide_total` p99 < 1000 us against NFR-1's budget, and CI runs it.
       - name: Benchmark results up to date
         run: uv run python scripts/generate_benchmark_results.py --check
+
+      # Same reasoning, same reason it moved here: the `chaos` job re-runs the scenarios
+      # and rewrites the JSON this renders from, so the check could never pass there. It
+      # is a pure function of committed files, so it belongs in a job that only reads them.
+      - name: Chaos results table up to date
+        run: uv run python scripts/generate_chaos_results.py --check
 
       - name: Evidence pack up to date
         run: uv run python scripts/generate_evidence_pack.py --check

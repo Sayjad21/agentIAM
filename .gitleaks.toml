@@ -50,4 +50,30 @@ stopwords = [
     # is what guarantees a real value never lands here.
     "dev-change-me-session-secret",
     "dev-console-secret-change-me",
+    # --- test fixtures already in history -------------------------------------------
+    #
+    # These three are why the `security-scan` job was red. Every one is a false positive,
+    # and every one is in committed history, so fixing the working tree cannot clear them —
+    # only a waiver or a history rewrite can, and a rewrite is not worth it for a fixture.
+    #
+    # An Ed25519 **public** key, used in `tests/unit/test_pep_service.py` as
+    # `AGENTIAM_PEP_POLICY_PUBLIC_KEY`. A public key is published by design. It has to be a
+    # real curve point rather than arbitrary hex, because `PublicKey.from_bytes` rejects
+    # anything else — which is exactly what makes it look like a secret to a scanner.
+    #
+    # It was *also* a hardcoded `..._ROOT_PRIVATE_KEY` in two control-plane tests, and that
+    # shape is one a scanner should flag. Those now generate a throwaway key per run
+    # (`_a_root_private_key_hex`), so the private-key spelling is gone from the tree; this
+    # entry covers the copies history still holds.
+    "8aba07e36c371b19ebd16f9d7f63ed4a87ac254ae752fa908e64bb2e807e8241",
+    # The canonical jwt.io example token, planted deliberately in
+    # `tests/security/test_secret_scanning.py` so the runtime scanner's *positive* path is
+    # proven to fire. Its own docstring: "a scanner whose positive path has never fired is
+    # indistinguishable from one that has been silently disarmed." Waiving it is what lets
+    # that test exist at all.
+    "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+    # Not a key — the *type name* `Ed25519PrivateKey`, matched in fixture signatures like
+    # `def test_x(self, key: Ed25519PrivateKey)`. A `cryptography` class name can never be
+    # a secret.
+    "Ed25519PrivateKey",
 ]

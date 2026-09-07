@@ -614,3 +614,49 @@ harness was deliberately left alone — which stopped being true.
 - **Done when:** both JSONs are re-measured in one sitting and `performance.md`'s three
   "predate a change" block quotes come out of `generate_benchmark_results.py`, because they
   no longer describe anything.
+
+---
+
+### ~~22. Both nightly CI failures~~ — **DONE**
+
+`1c07c93` — the commit this session started from — had a **green** push run and a **red**
+nightly one. Two jobs only the nightly reaches were failing, and had been.
+
+**`Chaos scenarios` — a drift check that could never pass.** The job ran `pytest -m chaos`
+and then `generate_chaos_results.py --check`. The scenarios *rewrite*
+`docs/benchmarks/chaos/*.json` as they run — fresh `run_id`, new `started_at`, different
+`duration_s`, different event timings — so the step compared the committed Markdown against
+JSON that had just changed underneath it. Reproduced locally: 10 scenarios pass in 2m20s and
+leave all ten JSON files modified, after which `--check` reports the table stale.
+
+This is gap 24's lesson, and `performance.md` already had it applied — `ci.yml` even spells
+out why that check lives in `evidence-pack`, "a job that never runs a benchmark and so never
+rewrites the JSON underneath itself". The reasoning was written once and not generalised. The
+chaos check now sits beside it, which also means it runs on every push rather than only
+nightly; a table that only drifts nightly is reported a day late.
+
+The rule is a test now, not a comment: `tests/unit/test_ci_workflow.py` asserts that no job
+both regenerates an artifact's inputs and byte-checks that artifact, that every check still
+runs *somewhere* (the tempting fix for an impossible check is to delete it), and that none of
+them sit in a conditional job. Verified by putting the old placement back — two of the five
+fail.
+
+**`Security scanning + SBOM` — gitleaks, nine findings, all false positives.** Reproduced with
+the pinned scanner over all 107 commits:
+
+| Finding | What it actually is |
+|---|---|
+| `8aba07e3…` ×2 | An Ed25519 **public** key. Published by design, and it has to be a real curve point rather than arbitrary hex because `PublicKey.from_bytes` rejects anything else — which is what makes it look secret |
+| `eyJhbGciOiJIUzI1NiJ9…` | The canonical jwt.io example token, planted **deliberately** in `test_secret_scanning.py` so the scanner's positive path is proven to fire |
+| `Ed25519PrivateKey` ×6 | Not a key. The `cryptography` **type name**, matched in fixture signatures like `def test_x(self, key: Ed25519PrivateKey)` |
+
+The same public key was *also* hardcoded as `AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY` in two
+tests, and that shape is one a scanner *should* flag — waiving it by value would have taught
+the repo to wave it through. Those now generate a throwaway key per run, so the private-key
+spelling is gone from the tree; the waivers cover the copies history still holds, which no
+working-tree change can reach. Re-scanned: **no leaks found**, 107 commits.
+
+- **Worth keeping:** neither job runs on a push, so both had been red for an unknown number of
+  nights with every push showing green. `PLAN.md` §13 schedules chaos nightly on purpose and
+  that is right; what was missing is that nobody was reading the result. A red nightly is only
+  useful if someone looks.

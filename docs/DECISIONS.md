@@ -3840,3 +3840,64 @@ Also fixed while in the generator: the unstable-profile paragraph said the worst
 "nearly ten times" the budget. True of the run it described, and a sentence that would have
 gone quietly false the moment anyone re-measured. It computes the ratio now (9.3× for the
 committed data).
+
+---
+
+## ADR-063 — A drift check may not run in a job that regenerates what it checks
+
+**Status:** accepted · **Closes:** TODO item 22
+
+Two `--check` steps in `ci.yml` compare a committed Markdown table against committed JSON.
+Both are pure functions of files already in the tree — which is exactly why they work, and
+exactly what a job re-running the producer destroys.
+
+`performance.md` got this right (gap 24, item 13): its check lives in `evidence-pack`, and
+`ci.yml` explains at length that this is "a job that never runs a benchmark and so never
+rewrites the JSON underneath itself". `chaos-results.md` did not. Its check sat in the `chaos`
+job immediately after `pytest -m chaos`, and the scenarios rewrite
+`docs/benchmarks/chaos/*.json` as they run — a fresh `run_id`, a new `started_at`, a different
+`duration_s` and different event timings every time. It could never pass, and every nightly
+failed on it.
+
+**The interesting part is not the bug, it is that the reasoning already existed.** Someone
+wrote the correct argument in a comment, applied it to one generator, and the second generator
+did not inherit it — because a comment applies to the thing it is attached to and nothing
+else. `tests/unit/test_ci_workflow.py` states the rule over the parsed workflow instead: no
+job may both regenerate an artifact's inputs and byte-check that artifact. It also asserts
+each check still runs *somewhere* — the tempting fix for a check that cannot pass is to delete
+it, which is the silent-drift state gap 24 described — and that none sits in a conditional
+job, since a table checked only nightly reports drift a day after it lands.
+
+**Second-order finding, and the more useful one.** Neither failing job runs on a push: `chaos`
+is `if: schedule || workflow_dispatch`, and `security-scan`'s gitleaks step scans history that
+a push does not change. So both had been red for an unknown number of nights while every push
+showed green. `PLAN.md` §13 schedules chaos nightly deliberately and that is right; what was
+missing is that a red nightly is only worth having if someone reads it. Moving the chaos drift
+check onto the push path is a partial fix — the scenarios themselves still only run nightly.
+
+---
+
+## ADR-064 — Waive a scanner finding by value only when the value cannot be spelled better
+
+**Status:** accepted · **Closes:** the gitleaks half of TODO item 22
+
+Nine gitleaks findings, all false positives: an Ed25519 **public** key, the canonical jwt.io
+example token planted in `test_secret_scanning.py` to prove the scanner's positive path fires,
+and six matches on the *type name* `Ed25519PrivateKey` in fixture signatures.
+
+A waiver for each would have cleared the job. One of them deserved a code change instead: the
+public key was **also** hardcoded as `AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY` in two tests,
+and a 64-hex literal assigned to a name ending `_PRIVATE_KEY` is precisely the shape a scanner
+exists to catch. Waiving it by value teaches the repository to wave that shape through, and
+the next one might be real. Those tests generate a throwaway key per run now
+(`_a_root_private_key_hex`), so the private-key spelling is gone from the working tree.
+
+**The waivers are still needed, and that is the constraint worth recording.** gitleaks scans
+history — 107 commits here — so no working-tree change can clear a value already committed.
+Short of a history rewrite, which is not worth it for a test fixture, the allowlist is the
+only instrument. Each entry in `.gitleaks.toml` says what the value is and why it is safe,
+following the file's own stated rule: *"it must be a deliberate constant whose lexical form
+looks secret to a scanner."*
+
+So the order is: fix the spelling where a better one exists, waive only what history has
+already fixed in place. Re-scanned after both: no leaks found.
