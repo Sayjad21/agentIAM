@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 from biscuit_auth import AuthorizationError, AuthorizerBuilder, Biscuit, KeyPair
 
+from agentiam_core.attenuation import attenuate
 from agentiam_core.errors import (
     DepthExceededError,
     InvalidSignatureError,
@@ -31,14 +32,16 @@ from agentiam_core.errors import (
     TokenTooLargeError,
     VerificationLimitError,
 )
-from agentiam_core.models import Budget, BudgetDimension, Mandate
+from agentiam_core.models import Budget, BudgetCeiling, BudgetDimension, Mandate, RequestContext
 from agentiam_core.tokens import (
+    AUTHORITY_BLOCK,
     HARD_SIZE_LIMIT_B64,
     MAX_DATALOG_FACTS,
     MAX_DATALOG_ITERATIONS,
     MAX_DATALOG_TIME,
     WARN_SIZE_LIMIT_B64,
     RootKeySet,
+    authorize_request,
     generate_keypair,
     mint_root,
     verify,
@@ -545,3 +548,139 @@ class TestDatalogExecutionLimits:
             verify(token, key_set, now=MID_WINDOW)
         assert not isinstance(caught.value, AuthorizationError)
         assert caught.value.reason_code is ReasonCode.VERIFICATION_LIMIT_EXCEEDED
+
+
+class TestWhoSetTheBoundDecidesTheCode:
+    """Spec 02 §7 separates the mandate's own ceiling from an attenuation's — TODO item 17.
+
+    `authorize_request` recovers a reason code from the fact a failed check quantifies over,
+    and `requested(` alone cannot tell the two apart: it is the same fact in both. The block
+    is what distinguishes them, and reading only the fact reported the *mandate's* per-request
+    ceiling as `BUDGET_EXHAUSTED_CAVEAT` — an attenuation the agent had applied to itself.
+
+    Observed in a live decision record before the fix: the demo's *"root attempts more than
+    the mandate grants"* call came back `BUDGET_EXHAUSTED_CAVEAT` with `failing_caveat: null`.
+    The null was correct — no caveat was involved — so the record contradicted itself, a code
+    naming a caveat beside a field correctly saying there wasn't one.
+
+    Both codes are 429 (spec 09 §11.2), so no client sees a different status. What changes is
+    what an operator reads, and the two have different fixes: re-mint without the narrowing,
+    versus raise the mandate.
+    """
+
+    @staticmethod
+    def _context(**over: object) -> RequestContext:
+        base: dict[str, object] = {
+            "operation": "invoice:read",
+            "requested": dict.fromkeys(BudgetDimension, Decimal(0)),
+            "current_depth": 0,
+            "request_intent": INTENT,
+            "now": MID_WINDOW,
+            "tool": None,
+            "args": {},
+        }
+        return RequestContext(**(base | over))  # type: ignore[arg-type]
+
+    @staticmethod
+    def _spending(amount: str) -> dict[BudgetDimension, Decimal]:
+        return {
+            **dict.fromkeys(BudgetDimension, Decimal(0)),
+            BudgetDimension.SPEND_BDT: Decimal(amount),
+        }
+
+    def test_the_mandates_own_ceiling_reports_exhausted_mandate(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """A root token asking for more than it was ever granted. Nobody attenuated anything."""
+        token = verify(mint_root(a_mandate(), root_key.private_key), key_set, now=MID_WINDOW)
+
+        failure = authorize_request(token, self._context(requested=self._spending("500001")))
+
+        assert failure is not None
+        assert failure.block == AUTHORITY_BLOCK
+        assert failure.reason_code is ReasonCode.BUDGET_EXHAUSTED_MANDATE
+        assert 'requested("spend_bdt"' in failure.source
+
+    def test_an_attenuation_ceiling_still_reports_exhausted_caveat(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """The other side of the same fact. Changing one must not quietly change the other."""
+        root = verify(mint_root(a_mandate(), root_key.private_key), key_set, now=MID_WINDOW)
+        child = verify(
+            attenuate(
+                root,
+                [BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=Decimal(100))],
+                agent_id="agt-child",
+                role="worker",
+            ),
+            key_set,
+            now=MID_WINDOW,
+        )
+
+        failure = authorize_request(
+            child, self._context(current_depth=1, requested=self._spending("500"))
+        )
+
+        assert failure is not None
+        assert failure.block > AUTHORITY_BLOCK
+        assert failure.reason_code is ReasonCode.BUDGET_EXHAUSTED_CAVEAT
+
+    def test_the_grant_membership_check_reports_not_granted_not_attenuated_away(
+        self, root_key: KeyPair, key_set: RootKeySet
+    ) -> None:
+        """The second code that turns on the block, for the same reason.
+
+        `check if operation($op), scope($op)` in block 0 names the *grant*: a miss means the
+        mandate never carried the scope. An attenuation block's `contains` form means it was
+        granted and then narrowed away. Spec 09 §4's own framing — the operator's fix differs.
+        """
+        token = verify(mint_root(a_mandate(), root_key.private_key), key_set, now=MID_WINDOW)
+
+        failure = authorize_request(token, self._context(operation="admin:write"))
+
+        assert failure is not None
+        assert failure.block == AUTHORITY_BLOCK
+        assert failure.reason_code is ReasonCode.SCOPE_NOT_GRANTED
+
+    @pytest.mark.parametrize(
+        ("over", "expected"),
+        [
+            ({"current_depth": 99}, ReasonCode.DEPTH_EXCEEDED),
+            ({"request_intent": "b" * 64}, ReasonCode.INTENT_MISMATCH),
+            ({"now": EXPIRES_AT + timedelta(hours=1)}, ReasonCode.TOKEN_EXPIRED),
+        ],
+    )
+    def test_the_other_authority_checks_keep_their_codes(
+        self,
+        root_key: KeyPair,
+        key_set: RootKeySet,
+        over: dict[str, object],
+        expected: ReasonCode,
+    ) -> None:
+        """Four of the six mean the same thing whoever wrote them, and must not have moved.
+
+        A depth limit, an intent binding and a validity window are the same claim in an
+        authority block and an attenuation block. Only the budget and scope pairs invert.
+        """
+        token = verify(mint_root(a_mandate(), root_key.private_key), key_set, now=MID_WINDOW)
+
+        failure = authorize_request(token, self._context(**over))
+
+        assert failure is not None
+        assert failure.block == AUTHORITY_BLOCK
+        assert failure.reason_code is expected
+
+    def test_every_authority_code_maps_to_the_same_status_as_before(self) -> None:
+        """No client sees a different status — spec 09 §11.2 puts both budget codes at 429.
+
+        Worth pinning: this changed a reason code, and a reason code that quietly changed an
+        HTTP status would be a contract change rather than a relabelling.
+        """
+        from agentiam_pep.pipeline import status_for
+
+        assert status_for(ReasonCode.BUDGET_EXHAUSTED_MANDATE) == status_for(
+            ReasonCode.BUDGET_EXHAUSTED_CAVEAT
+        )
+        assert status_for(ReasonCode.SCOPE_NOT_GRANTED) == status_for(
+            ReasonCode.SCOPE_ATTENUATED_AWAY
+        )

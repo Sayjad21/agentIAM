@@ -299,6 +299,14 @@ def test_no_forbidden_content_in_directed_runtime_captures(
         _drive_audit_sink_permanent_rejection()
         _drive_drift_warning_paths()
 
+    # The assertion below is negative — *no* record matched a forbidden pattern — and a
+    # negative assertion over an empty list passes while proving nothing. That is not
+    # hypothetical: a migration run earlier in the same session used to leave every
+    # pre-existing logger `disabled`, so this scanner would have driven four log sites,
+    # captured none of them, and reported clean (TODO item 19; fixed at the root in the
+    # alembic env). The runtime half of rule 10's automation has to fail when it cannot see.
+    assert caplog.records, "no records captured — the scan below would pass vacuously"
+
     hits = _scan_records(caplog.records)
     if hits:
         joined = "\n  ".join(hits)
@@ -502,5 +510,8 @@ def test_the_runtime_scanner_does_not_false_alarm_on_uuids_or_decimals(
             Decimal("12345.6789"),
             17,
         )
+    # One record went in, so one must come out — otherwise `hits == []` is a statement about
+    # nothing. Same reasoning as the directed-capture test above.
+    assert len(caplog.records) == 1, "the safe log line was not captured"
     hits = _scan_records(caplog.records)
     assert hits == []

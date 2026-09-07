@@ -246,6 +246,50 @@
         el.append(dot, label);
     }
 
+    // --- how a node is named -------------------------------------------------------
+    //
+    // `is_principal` marks the depth-0 node: the mandate holder acting directly. A root
+    // token has no attenuation block, so it carries no `agent()` and no `role()` fact
+    // (spec 01 §6.1) and the PEP falls back to `agt-depth-0` rather than inventing one.
+    // That fallback is right where it is and wrong on screen — beside `agt-doc-reader` it
+    // reads as a label that failed to load rather than as an absence. Naming it here keeps
+    // the invention on the display side, where it is a rendering choice rather than an
+    // identity assertion. TODO item 18.
+
+    // Labels are centred on the node, so a long one grows in both directions and runs off
+    // the canvas. Measured: a Keycloak subject (`kc:` plus a UUID, 39 chars) rendered 252px
+    // wide against ~91px for `agt-doc-reader`, and its left edge landed at x = -4 — clipped.
+    // Both `agent_id` and `principal_id` are free text up to 128 characters (spec 01 §6.1),
+    // so this was reachable for an agent name too and not only for the principal.
+    //
+    // The full value is never lost: it stays in the `<title>` tooltip and in the detail
+    // panel, which is where someone reads an identifier they mean to copy.
+    const MAX_LABEL_CHARS = 20;
+
+    function shorten(text) {
+        return text.length > MAX_LABEL_CHARS
+            ? text.slice(0, MAX_LABEL_CHARS - 1) + "…"
+            : text;
+    }
+
+    function nodeLabel(node) {
+        return shorten(node.is_principal ? node.principal_id : node.agent_id);
+    }
+
+    function nodeSubtitle(node) {
+        if (node.revoked) return "REVOKED";
+        if (node.has_pending_escalation) return "ESCALATING";
+        if (node.is_principal) return "principal";
+        return node.role || "active";
+    }
+
+    function nodeTitle(node) {
+        return node.is_principal
+            ? node.principal_id + " — the principal, acting directly. Audited as "
+              + node.agent_id + "."
+            : node.agent_id + (node.role ? " — " + node.role : "");
+    }
+
     function updateTree(data) {
         // The API returns flat nodes with a `depth` and the token's `block_ids`. A child's
         // block chain extends its parent's, so the parent is the depth-1 node whose
@@ -349,22 +393,25 @@
         nodeEnter.append("circle")
             .attr("r", 15);
 
+        // The depth-0 node is the *principal* acting directly, not a delegated agent: a
+        // root token carries no attenuation block, so it declares no `agent()` and no
+        // `role()` (spec 01 §6.1). The PEP falls back to `agt-depth-0` rather than
+        // inventing a name, which is correct there and reads as a missing label here,
+        // beside `agt-doc-reader` and `agt-payer`. So the console names it for what it is.
         nodeEnter.append("text")
             .attr("dy", -25)
             .attr("x", 0)
             .style("text-anchor", "middle")
-            .text(d => d.data.agent_id);
+            .text(d => nodeLabel(d.data))
+            .append("title")
+            .text(d => nodeTitle(d.data));
 
         nodeEnter.append("text")
             .attr("class", "subtitle")
             .attr("dy", 35)
             .attr("x", 0)
             .style("text-anchor", "middle")
-            .text(d => {
-                if (d.data.revoked) return "REVOKED";
-                if (d.data.has_pending_escalation) return "ESCALATING";
-                return d.data.role || "active";
-            });
+            .text(d => nodeSubtitle(d.data));
 
         // Budget bars
         const budgetGroup = nodeEnter.append("g")
@@ -410,11 +457,7 @@
             });
 
         nodeUpdate.select("text.subtitle")
-            .text(d => {
-                if (d.data.revoked) return "REVOKED";
-                if (d.data.has_pending_escalation) return "ESCALATING";
-                return d.data.role || "active";
-            });
+            .text(d => nodeSubtitle(d.data));
 
         node.exit().transition().duration(500).attr("opacity", 0).remove();
     }

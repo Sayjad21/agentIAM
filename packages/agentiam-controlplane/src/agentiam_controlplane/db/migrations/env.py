@@ -30,7 +30,24 @@ from agentiam_controlplane.db.models import (  # noqa: F401  (registers on Base.
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` is not a preference — the default is `True`, and it
+    # sets `disabled = True` on **every logger that already exists** and is not named in
+    # `alembic.ini`. Alembic's generated template ships the default, so this is a bug the
+    # scaffold hands you rather than one anybody wrote.
+    #
+    # It matters wherever a migration runs in the same process as anything else, which here
+    # is two places. `scripts/run_load_test.py` migrates and then measures, so the harness
+    # behind `performance.md` was silencing the PEP's own log output before taking a
+    # reading — a warning during a load run could not have reached anyone. And in the test
+    # suite it made a *security* assertion vacuous: `test_compile_nl_to_policy_does_not_log_
+    # the_statement_verbatim` asserts a natural-language policy never reaches a log line
+    # (rule 10, NFR-5), and `assert statement not in combined` passes trivially when nothing
+    # was captured. It only failed at all because a third assertion checks for a line that
+    # should be there. Found via TODO item 19.
+    #
+    # Migrations want to *add* their logging configuration, never to switch off everybody
+    # else's.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

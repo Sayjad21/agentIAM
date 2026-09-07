@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,6 +56,25 @@ class TreeNode(BaseModel):
     last_outcome: str
     last_reason_code: str
     last_seen: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_principal(self) -> bool:
+        """True for the depth-0 node — the mandate holder acting directly, not an agent.
+
+        Computed rather than stored, because it *is* `depth == 0` and a second copy could
+        disagree with the first. Structural rather than a string match on `agt-depth-0`:
+        depth 0 means no attenuation block, and an `agent()` fact only ever lives in one
+        (spec 01 §6.1), so a root token declares no agent name and no role — there is
+        nothing to read, not something that failed to be read.
+
+        The console needs it because the honest label for that node is the **principal**
+        (`principal_id`, already here). The PEP's `agt-depth-0` fallback is right where it
+        is and reads as a missing label on screen, beside `agt-doc-reader` and `agt-payer`.
+        Having the PEP invent a name instead is what spec 01 §6.1's fallback rule exists to
+        prevent, so the naming belongs on the display side. TODO item 18.
+        """
+        return self.depth == 0
 
 
 class TreeDiff(BaseModel):
