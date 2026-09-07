@@ -18,7 +18,7 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-down', 'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
-                 'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'evidence',
+                 'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'benchmarks', 'evidence',
                  'clean', 'nuke')]
     [string]$Target = 'help'
 )
@@ -63,6 +63,7 @@ switch ($Target) {
             'cov'              = 'Run tests with a coverage report'
             'security'         = 'Run bandit, pip-audit, the SBOM check, and the secret-scan test'
             'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
+            'benchmarks'       = 'Regenerate docs/benchmarks/performance.md from committed JSON'
             'evidence'         = 'Regenerate docs/evidence/evidence-pack.html (T-055)'
             'clean'            = 'Remove caches and build artifacts'
             'nuke'             = 'Stop infrastructure and delete its volumes (destroys local data)'
@@ -145,6 +146,7 @@ switch ($Target) {
         Invoke-Step @('uv', 'run', 'pytest', 'tests/security/test_secret_scanning.py')
     }
     'sbom' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_sbom.py', '--write') }
+    'benchmarks' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_benchmark_results.py') }
     'evidence' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_evidence_pack.py') }
     'clean' {
         @('.pytest_cache', '.mypy_cache', '.ruff_cache', '.hypothesis',

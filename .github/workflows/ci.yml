@@ -204,6 +204,25 @@ jobs:
       # `--check` pattern as chaos-results.md / performance.md / sbom.json. Its own test
       # suite runs in the `quality` job with everything else under `tests/unit/`; this
       # job is only the drift check against the committed HTML file.
+      # STATUS gap 24. `performance.md` had no drift check anywhere: not a CI job, not a
+      # Makefile target, not make.ps1. It bit exactly as predicted — wiring the token's
+      # own Datalog into `decide()` moved the median from 151.3 to 264.1 us and nothing
+      # would have noticed the document still claiming the old figure.
+      #
+      # Gap 24 held this back on the grounds that a byte-exact check is the wrong
+      # instrument because PB-2's timings vary run to run. True of *re-running the
+      # benchmark*, and not true of this: `--check` re-renders from the committed
+      # `pb2-breakdown.json` / `nfr2-load.json` and compares to the committed Markdown, so
+      # it is a pure function of files already in the tree. The noise is in producing the
+      # JSON, which happens in the `quality` job's benchmark step — which is exactly why
+      # this check belongs *here*, in a job that never runs a benchmark and so never
+      # rewrites the JSON underneath itself.
+      #
+      # The regression half of gap 24 is separately covered: `test_the_whole_decision`
+      # asserts `decide_total` p99 < 1000 us against NFR-1's budget, and CI runs it.
+      - name: Benchmark results up to date
+        run: uv run python scripts/generate_benchmark_results.py --check
+
       - name: Evidence pack up to date
         run: uv run python scripts/generate_evidence_pack.py --check
 

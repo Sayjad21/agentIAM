@@ -268,15 +268,31 @@ it cannot verify anything; `--write` refuses unless `--force`. Eleven tests, cov
 branches of the platform check so neither can regress on a host that cannot reach the
 other.
 
-### 13. Give `performance.md` a CI drift check (STATUS gap 24)
+### ~~13. Give `performance.md` a CI drift check~~ — **DONE** (STATUS gap 24)
 
-Already tracked, and this pass made it sharper: `decide()`'s median moved 151.3 → 264.1 µs
-and nothing in CI would have noticed. `generate_benchmark_results.py --check` exists and is
-called by no job, `Makefile` target, or `make.ps1` target.
+Gap 24 held this back on a premise that turns out not to apply. It says a byte-exact
+check is the wrong instrument because "PB-2's raw timings vary run to run by design, so a
+naive check would fail on ordinary noise". That is true of *re-running the benchmark* and
+not true of `--check`, which re-renders from the **committed** `pb2-breakdown.json` and
+`nfr2-load.json` and compares to the committed Markdown. It is a pure function of files
+already in the tree.
 
-Gap 24 explains why a byte-exact check is wrong here — PB-2's timings vary run to run by
-design — so this needs a tolerance band or a structural check, which is the design decision
-gap 24 left to T-053.
+The noise lives in *producing* the JSON, which the `quality` job's benchmark step does —
+so the check goes in the `evidence-pack` job, which never runs a benchmark and therefore
+never rewrites the JSON underneath itself. Same job already does the same thing for the
+evidence pack, which folds `performance.md` anyway.
+
+Gap 24's other half — catching a genuine *regression* — was already covered and I had not
+noticed: `test_the_whole_decision` asserts `decide_total` p99 < 1000 µs against NFR-1's
+budget, and CI runs it. So the two concerns were always separable; only one of them was
+unguarded.
+
+Also adds the `benchmarks` target to `Makefile` and `make.ps1`, the other two places gap
+24 named as having no caller.
+
+This is the check that would have caught wiring the token's Datalog into `decide()`:
+the median moved 151.3 → 264.1 µs and nothing would have noticed the document still
+claiming the old figure.
 
 ---
 

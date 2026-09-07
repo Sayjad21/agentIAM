@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install up down demo-up demo-down logs ps test test-unit test-integration \
-        test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom evidence
+        test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
+        benchmarks evidence
 
 UV ?= uv
 
@@ -86,6 +87,9 @@ security: ## Run bandit, pip-audit, the SBOM check, and the log secret-scanning 
 
 sbom: ## Regenerate `docs/evidence/sbom.json` from the current venv (T-054)
 	$(UV) run python scripts/generate_sbom.py --write
+
+benchmarks: ## Regenerate `docs/benchmarks/performance.md` from the committed JSON (T-053)
+	$(UV) run python scripts/generate_benchmark_results.py
 
 evidence: ## Regenerate `docs/evidence/evidence-pack.html` from committed sources (T-055)
 	$(UV) run python scripts/generate_evidence_pack.py
