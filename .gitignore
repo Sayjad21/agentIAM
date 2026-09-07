@@ -78,3 +78,9 @@ desktop.ini
 .idea/
 .vscode/
 *.swp
+
+# The load harness writes its server-side profile here and unlinks it in a `finally`.
+# Ignored anyway because the directory is tracked docs: on Windows a terminated uvicorn can
+# still hold the handle, the unlink fails, and `git add -A` would sweep a scratch file into
+# the evidence folder. Observed once after a run whose py-spy step failed.
+docs/benchmarks/.perf-profile-*

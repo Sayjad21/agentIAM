@@ -12,8 +12,9 @@ know about both, so it sits at the repository layer, next to `serve_pep.py`.
 **Why not extend `serve_pep.py`.** That is T-053's load-test harness: it generates an
 ephemeral root keypair per run, mints a mandate, seeds a budget row, hardcodes a two-line
 policy and a pool sized so a 500 RPS run cannot exhaust it. Its own docstring calls itself
-"the shape T-056's deployment artifacts will want" — the shape, not the thing. Its
-published numbers depend on it staying as it is.
+"the shape T-056's deployment artifacts will want" — the shape, not the thing. What the two
+must agree on is the work per request, since `performance.md` measures this file through
+that one; `TestTheHarnessMatchesTheDeployedComposition` below is what keeps them in step.
 
 **What this root wires that nothing had wired before.** `RedisRevocationSet` (T-038/T-039)
 and `RuleBasedDriftOracle` (T-032/T-036) have only ever been constructed inside tests —
@@ -42,6 +43,7 @@ from agentiam_core.tokens import (
     mint_root,
     verify,
 )
+from agentiam_pep.pipeline import Pipeline
 from scripts import pep_service
 
 if TYPE_CHECKING:
@@ -710,3 +712,141 @@ class TestAgentIdentity:
         assert [sorted(c.scopes) for c in recovered if isinstance(c, ScopeSubset)] == [
             ["invoice:read"]
         ]
+
+
+class TestTheHarnessMatchesTheDeployedComposition:
+    """`serve_pep.py` must do the same work per request as this file — TODO item 21.
+
+    `performance.md`'s NFR-2 figure is a claim about the *deployed* PEP's overhead, measured
+    through the load harness. The two are separate composition roots for good reasons (the
+    harness seeds its own mandate, key and budget), but a difference in what happens on the
+    request path makes the published number describe something nobody deploys.
+
+    It drifted exactly that way: the harness hardcoded its policy principal and passed no
+    caveat reader, while this file read both out of the token's block source (ADR-057). The
+    gap was ~0.45 ms per depth-3 request, and nothing failed — the harness measured less and
+    reported it as the product's overhead.
+
+    These tests compare the two by behaviour rather than by reading the source, so a future
+    hook added to one and not the other fails here.
+    """
+
+    @staticmethod
+    def _harness_pipeline() -> Pipeline:
+        """The load harness's own pipeline, assembled but not served.
+
+        Compared by *behaviour* rather than by reading either file's source, because source
+        text cannot tell a wired hook from a mentioned one — which is exactly how the drift
+        survived review. `build_app` performs no I/O against the database it is handed, so
+        an unreachable URL is fine here.
+        """
+        from scripts import serve_pep
+
+        keys = generate_keypair()
+        app, _token = serve_pep.build_app(
+            database_url="postgresql+asyncpg://a:b@localhost:5432/c",
+            mandate_id=uuid.uuid4(),
+            private_key=keys.private_key,
+            key_set=RootKeySet((keys.public_key,)),
+            upstream=None,
+            drop_audit=True,
+        )
+        pipeline: Pipeline | None = app.state.pipeline
+        assert pipeline is not None, "the harness must build an enforcing PEP"
+        return pipeline
+
+    def test_both_read_the_agent_identity_off_the_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Neither may hardcode a name.
+
+        Reading it costs a block-source parse, and NFR-2 has to include that cost because
+        every deployed request pays it.
+        """
+        from agentiam_core.datalog import token_identity
+
+        _base_env(monkeypatch, tmp_path)
+        deployed = pep_service.build_service(pep_service.ServiceSettings.from_env())
+
+        keys = generate_keypair()
+        key_set = RootKeySet((keys.public_key,))
+        now = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
+        mandate = Mandate(
+            mandate_id=uuid.uuid4(),
+            task_id=uuid.uuid4(),
+            principal_id="kc:alice",
+            intent_hash="a" * 64,
+            scopes=frozenset({"invoice:read"}),
+            budget=Budget(spend_bdt=Decimal("500000")),
+            max_depth=4,
+            not_before=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        root = verify(mint_root(mandate, keys.private_key), key_set, now=now)
+        child = verify(
+            attenuate(
+                root,
+                [ScopeSubset(scopes=frozenset({"invoice:read"}))],
+                agent_id="agt-from-the-token",
+                role="payer",
+            ),
+            key_set,
+            now=now,
+        )
+
+        # The deployed root reads it. The harness must too, or it does less work.
+        assert deployed.principal_for(child).agent_id == "agt-from-the-token"
+        assert token_identity(child).agent_id == "agt-from-the-token"
+
+        harness_principal_for = self._harness_pipeline()._principal_for
+        assert harness_principal_for(child).agent_id == "agt-from-the-token"
+
+    def test_both_supply_a_caveat_reader(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Both must pass one.
+
+        `Pipeline` defaults `caveats_for` to a function returning nothing, so an unwired
+        harness silently skips the whole caveat read and reports the saving as speed.
+        """
+        _base_env(monkeypatch, tmp_path)
+        deployed = pep_service.build_service(pep_service.ServiceSettings.from_env())
+
+        harness = self._harness_pipeline()
+        assert deployed.pipeline._caveats_for is not None
+        assert harness._caveats_for is deployed.pipeline._caveats_for
+
+    def test_neither_lets_the_token_choose_the_cedar_role(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """ADR-057 holds in both.
+
+        A harness that read `role` from the block would also be measuring a policy
+        evaluation the deployment never performs.
+        """
+        keys = generate_keypair()
+        key_set = RootKeySet((keys.public_key,))
+        now = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
+        mandate = Mandate(
+            mandate_id=uuid.uuid4(),
+            task_id=uuid.uuid4(),
+            principal_id="kc:alice",
+            intent_hash="a" * 64,
+            scopes=frozenset({"invoice:read"}),
+            budget=Budget(spend_bdt=Decimal("500000")),
+            max_depth=4,
+            not_before=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        root = verify(mint_root(mandate, keys.private_key), key_set, now=now)
+        promoted = verify(
+            attenuate(root, [], agent_id="agt-sneaky", role="senior"), key_set, now=now
+        )
+
+        _base_env(monkeypatch, tmp_path)
+        deployed = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        harness_principal_for = self._harness_pipeline()._principal_for
+
+        for principal in (deployed.principal_for(promoted), harness_principal_for(promoted)):
+            assert principal.role != "senior"
+            assert principal.declared_role == "senior"

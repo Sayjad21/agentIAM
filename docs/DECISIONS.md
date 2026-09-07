@@ -3799,3 +3799,44 @@ panel.
 Verified under a real Chrome over the DevTools Protocol: 6 nodes, no error banner, the root at
 x = 58 reading `kc:11111111-1111-11…` / `PRINCIPAL`, clear of the depth-1 column at x = 327.
 Same lesson as item 15 — the API said the data was right, and the page was still wrong.
+
+---
+
+## ADR-062 — The load harness composes the PEP the way the deployment does, and a test says so
+
+**Status:** accepted · **Closes:** the composition half of TODO item 21
+
+`docs/benchmarks/performance.md`'s NFR-2 figure is a claim about the **deployed** PEP's
+overhead — `PLAN.md` §1.5 calls it "end-to-end PEP proxy overhead" — and it is measured
+through `scripts/serve_pep.py`. Two composition roots, one published number. They had drifted:
+the harness hardcoded `agent_id="agt-perf"` and passed no `caveats_for`, while
+`scripts/pep_service.py` read both out of the token's own block source (ADR-057).
+
+**So the harness was measuring less work than production does and reporting the saving as the
+product's speed.** ~0.45 ms per depth-3 request, measured — small against an 8 ms budget and
+well inside the run-to-run spread this host produces, which is exactly why nothing noticed.
+
+Both roots now do the same work per request. `role` still comes from configuration in each,
+for ADR-057's reason: the block's role is parent-asserted and a Cedar bundle keying on
+`principal.role` is asking what the organization says.
+
+**The guard is a behavioural test, not a comment.** `TestTheHarnessMatchesTheDeployedComposition`
+builds both pipelines and compares what they do with the same token — a source-text check
+cannot tell a wired hook from a mentioned one, which is how the drift survived review in the
+first place. Verified by reverting each half: the identity test and the caveat-reader test each
+fail on their own.
+
+**`create_app` now puts the pipeline on `app.state`.** It was a closure variable, visible to
+nothing outside whichever root built it, and that has cost this project three times now — an
+unprimed lease pool (item 8), an unwired caveat reader (item 4), and this. A test that cannot
+reach the object cannot ask it anything.
+
+**What this ADR does not do is re-measure.** The committed figures predate the change and
+`performance.md` now says so, with the size of the gap. The re-run rewrites both benchmark
+JSONs and has to happen on one host in one sitting or the comparison measures the hardware;
+that stays open as item 21.
+
+Also fixed while in the generator: the unstable-profile paragraph said the worst run was
+"nearly ten times" the budget. True of the run it described, and a sentence that would have
+gone quietly false the moment anyone re-measured. It computes the ratio now (9.3× for the
+committed data).
