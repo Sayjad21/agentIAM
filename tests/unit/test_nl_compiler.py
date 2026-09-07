@@ -128,10 +128,17 @@ async def test_compile_nl_to_policy_does_not_log_the_statement_verbatim(
     with caplog.at_level("INFO", logger="agentiam_controlplane.nl_compiler.compiler"):
         await compile_nl_to_policy(statement, client=mock_client)
 
+    # Assert the capture worked *before* asserting anything about its contents. Both of the
+    # checks below are negative, and a negative assertion against empty output passes while
+    # proving nothing — which is exactly what happened when a migration run elsewhere in the
+    # session left this logger `disabled` (TODO item 19). A test guarding rule 10 must fail
+    # when it cannot see, not pass quietly.
+    assert caplog.records, "nothing was captured, so the assertions below prove nothing"
+
     combined = " ".join(record.getMessage() for record in caplog.records)
+    assert "sha256[:16]=" in combined
     assert statement not in combined
     assert "alice@example.com" not in combined
-    assert "sha256[:16]=" in combined
 
 
 @pytest.mark.asyncio

@@ -155,6 +155,28 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         "",
         "**(3) - (2) is what authorization costs.** (2) - (1) is TCP and Python's HTTP stack.",
         "",
+        "> **What tier 3 does not include.** The harness behind these numbers "
+        "(`scripts/serve_pep.py`) hardcodes its policy principal and supplies no caveat "
+        "reader. The *deployed* PEP (`scripts/pep_service.py`) does neither since ADR-057: "
+        "it reads each agent's identity and its caveats out of the token's own block source, "
+        "because block facts are unreachable any other way. So the enforcing tier below "
+        "measures slightly less work than a production request does.",
+        "",
+        "> **By how much, measured** (CPython 3.12, `agentiam_core.datalog`): one "
+        "`token_identity()` or `token_caveats()` costs ~125 µs at chain depth 0, ~160 µs at "
+        "depth 1, ~195 µs at depth 2 and ~227 µs at depth 3. The pipeline resolves the "
+        "principal once per request and reads the caveats once, so a depth-3 request pays "
+        "roughly **0.45 ms** on top of what tier 3 reports — against an 8 ms budget. "
+        "**NFR-1 is unaffected**: the parse happens in the pipeline, not inside `decide()`, "
+        "which is why the PB-2 breakdown above needs no such caveat.",
+        "",
+        "> The harness is deliberately not changed to match, and this note is the "
+        "alternative. Its own docstring records that these committed numbers depend on it "
+        "staying as it is; re-pointing it invalidates `pb2-breakdown.json` and "
+        "`nfr2-load.json` together, and the replacement figures would have to come from the "
+        "same host as the ones above or the comparison measures the hardware rather than "
+        "the change. That is a re-measurement sitting of its own, tracked in the backlog.",
+        "",
     ]
 
     rows = []

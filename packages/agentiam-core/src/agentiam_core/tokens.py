@@ -399,6 +399,9 @@ def verify(token: str, key_set: RootKeySet, *, now: datetime) -> VerifiedToken:
 #: and `reject if` this library emits — the authority block's six (spec 01 §5) and the nine
 #: caveat types (spec 02 §3) — references exactly one of these, so the reason code is
 #: recoverable from the check source biscuit hands back without parsing the block.
+#:
+#: **For an attenuation block.** Two of these mean something different in the authority
+#: block, which is what `_AUTHORITY_FACT_REASONS` is for.
 _FACT_REASONS: Final[tuple[tuple[str, ReasonCode], ...]] = (
     ("operation(", ReasonCode.SCOPE_ATTENUATED_AWAY),
     ("requested(", ReasonCode.BUDGET_EXHAUSTED_CAVEAT),
@@ -408,6 +411,43 @@ _FACT_REASONS: Final[tuple[tuple[str, ReasonCode], ...]] = (
     ("request_intent(", ReasonCode.INTENT_MISMATCH),
     ("time(", ReasonCode.TOKEN_EXPIRED),
 )
+
+#: The same map for **block 0**, where the two budget/scope codes invert. Spec 02 §7 fixes
+#: the distinction and this is the only place it can be applied: the fact a check quantifies
+#: over says *which dimension* was refused, and the block it sits in says *who set the
+#: bound*. Both are needed, and only the second separates these two pairs.
+#:
+#: * `requested(` in block 0 is the **mandate's own per-request ceiling** (spec 01 §5.2),
+#:   not an attenuation — `BUDGET_EXHAUSTED_MANDATE`. Both codes are 429, so no client sees
+#:   a different status; what changes is what an operator reads, and the two have different
+#:   fixes. "The agent narrowed itself, re-mint without the caveat" versus "the mandate
+#:   never granted this, raise the mandate" is not a distinction to leave to guesswork.
+#: * `operation(` in block 0 is the grant-membership check, so a miss is
+#:   `SCOPE_NOT_GRANTED` — never in the mandate at all — rather than granted-and-then-removed.
+#:
+#: The other four are the same claim wherever they sit: a depth limit, an intent binding and
+#: a validity window mean one thing whoever wrote them.
+#:
+#: **Reachability, measured rather than assumed.** Five of block 0's six checks are shadowed
+#: on the `decide()` path by Python re-implementations that run first (spec 09 §2's steps 2
+#: and 4), so they refuse before biscuit is asked. The budget ceiling is the exception —
+#: nothing re-implements it, because the ledger bounds the *pool* across requests and this
+#: bounds a *single* request (spec 02 §4.2) — which is why it was the one that showed up
+#: mislabelled in a live decision record. The mapping is applied by block rather than by
+#: caller anyway: `authorize_request` is public, and the codes must be right for anything
+#: that calls it, not only for the path that currently happens to shadow five of them.
+_AUTHORITY_FACT_REASONS: Final[tuple[tuple[str, ReasonCode], ...]] = (
+    ("operation(", ReasonCode.SCOPE_NOT_GRANTED),
+    ("requested(", ReasonCode.BUDGET_EXHAUSTED_MANDATE),
+    ("tool(", ReasonCode.TOOL_DENIED),
+    ("arg(", ReasonCode.ARG_PREDICATE_FAILED),
+    ("current_depth(", ReasonCode.DEPTH_EXCEEDED),
+    ("request_intent(", ReasonCode.INTENT_MISMATCH),
+    ("time(", ReasonCode.TOKEN_EXPIRED),
+)
+
+#: Block 0 is the authority block; 1..n are attenuation blocks (spec 01 §4).
+AUTHORITY_BLOCK: Final = 0
 
 #: `Check n°0 in block n°1: <source>`. The degree sign is matched as `.` rather than
 #: literally, because it reaches us through a Rust error string and this module should not
@@ -511,7 +551,11 @@ def _first_failure(detail: str) -> AuthorityFailure:
     check_source = detail[first.end() : end].rstrip(", ")
     block = int(first.group(2))
 
-    for fact, code in _FACT_REASONS:
+    # Which fact says *what* was refused; which block says *who set the bound*. Two of the
+    # seven codes turn on the second, and reading only the first reported the mandate's own
+    # ceiling as an attenuation the agent had applied to itself.
+    reasons = _AUTHORITY_FACT_REASONS if block == AUTHORITY_BLOCK else _FACT_REASONS
+    for fact, code in reasons:
         if fact in check_source:
             return AuthorityFailure(block=block, source=check_source, reason_code=code)
 

@@ -310,6 +310,19 @@ on. So the PEP MUST determine attribution by re-evaluating the reconstructed cav
 `agentiam-core` via `evaluate()`. This is the second reason `evaluate()` exists, and the reason
 its agreement with `to_datalog()` is a security property rather than a nicety.
 
+**Where biscuit is the only witness, the code is recovered from the failed check's own
+source** — `tokens._first_failure`. Two rows of this table then need the *block* as well as
+the fact, and reading only the fact gets them backwards:
+
+| Failed check quantifies over | In block 0 (authority) | In blocks 1..n (attenuation) |
+|---|---|---|
+| `requested(` | `BUDGET_EXHAUSTED_MANDATE` — the mandate's own ceiling | `BUDGET_EXHAUSTED_CAVEAT` — an attenuation narrowed it |
+| `operation(` | `SCOPE_NOT_GRANTED` — never in the grant | `SCOPE_ATTENUATED_AWAY` — granted, then removed |
+
+The other four — `tool(`, `arg(`, `current_depth(`, `request_intent(`, `time(` — are the same
+claim whoever wrote them, and do not vary by block. See spec 09 §7.1 for what this changed and
+what it did not (both budget codes are 429; no client sees a different status).
+
 ---
 
 ## 8. Canonical form

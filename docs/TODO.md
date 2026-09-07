@@ -477,121 +477,126 @@ their conflict to 409. This was the only one.
 
 ---
 
-### 17. The authority block's own budget ceiling reports `BUDGET_EXHAUSTED_CAVEAT`
+### ~~17. The authority block's own budget ceiling reports `BUDGET_EXHAUSTED_CAVEAT`~~ — **DONE**
 
-Spec 02 §7's table separates the two: a `BudgetCeiling` **caveat** is
-`BUDGET_EXHAUSTED_CAVEAT`, and the **authority budget** is `BUDGET_EXHAUSTED_MANDATE`. A root
-token that asks for more than its mandate grants is refused by the authority block's own
-`check if requested("spend_bdt", $v), $v <= …`, and comes back as `BUDGET_EXHAUSTED_CAVEAT`.
+Spec first, per item 11's lesson, and the spec was already unambiguous: spec 02 §7 maps a
+`BudgetCeiling` *caveat* to `BUDGET_EXHAUSTED_CAVEAT` and the *authority budget* to
+`BUDGET_EXHAUSTED_MANDATE`. `_first_failure` was reading only the fact a failed check
+quantifies over, and `requested(` is the same fact in both — **the block is what tells them
+apart**.
 
-The cause is that `tokens._FACT_REASONS` maps a failed check to a reason code by the fact it
-quantifies over — `requested(` → `BUDGET_EXHAUSTED_CAVEAT` — and cannot tell block 0 from
-block *n*. `AuthorityFailure` already carries the block number, so distinguishing them is
-mechanical.
+Two of the seven codes turn on the block, not one: `operation(` in block 0 is the
+grant-membership check, so a miss is `SCOPE_NOT_GRANTED` rather than `SCOPE_ATTENUATED_AWAY`.
+The other four mean the same thing wherever they sit.
 
-Observed live in the demo scenario, seq 12: *"root attempts more than the mandate grants"*,
-`BUDGET_EXHAUSTED_CAVEAT`, `failing_caveat: null`. The null is correct — it is not a caveat,
-which is exactly the point — so the record contradicts itself in a small way: a code naming a
-caveat, next to a field correctly saying there wasn't one.
+**The investigation the item asked for, answered.** Spec 09 §7's reachability table *did*
+assume the old mapping — it listed `BUDGET_EXHAUSTED_MANDATE` as step 7 only. It now names
+both routes, with a new §7.1 on why they are the same answer to an operator (the mandate does
+not allow this) reached by different mechanisms: the ledger bounds the *pool* across requests,
+the token's ceiling bounds a *single* request (spec 02 §4.2). Both codes are 429, so no client
+sees a different status; a test pins that so a relabelling can never become a contract change.
 
-Both codes map to 429, so no client sees a different status. What changes is what an operator
-reads: "the token narrowed itself" versus "the mandate never granted this", which have
-different fixes.
+**Why this was the one that surfaced.** Five of block 0's six checks are shadowed on the
+`decide()` path by Python re-implementations that refuse first. Nothing re-implements the
+per-request ceiling, so it is the only authority check biscuit actually gets to refuse — which
+is why it reached a live decision record wearing the wrong label. There is now a test asserting
+exactly that shadowing, because the docstring claims it. The mapping is applied **by block
+rather than by caller** regardless: `authorize_request` is public and its codes must be right
+for anything that calls it, not only for the path that currently shadows five of them.
 
-- **Investigate first:** whether spec 09 §11's reachability table (`§7`) assumes the current
-  mapping anywhere, and whether `BUDGET_EXHAUSTED_MANDATE` becoming reachable by a second
-  route needs a note there. Item 11's lesson applies — read the spec section that governs a
-  reason code before changing it.
-- **Done when:** a refusal by the authority block's own budget check reports
-  `BUDGET_EXHAUSTED_MANDATE`, a caveat ceiling still reports `BUDGET_EXHAUSTED_CAVEAT`, and a
-  test covers both against a real chain.
+Verified live: the demo scenario now reports five distinct outcomes where it reported four —
+`BUDGET_EXHAUSTED_MANDATE=1` split out from `BUDGET_EXHAUSTED_CAVEAT=1`. The seed's own
+refusal-layer test asserts the fifth, so the scenario cannot lose it silently.
 
-### 18. The root node in the identity tree has no name of its own
+### ~~18. The root node in the identity tree has no name of its own~~ — **DONE**
 
-`GET /v1/tree/{task}` reports the depth-0 node as `agt-depth-0`, role `unknown`, beside five
-real names. That is *correct* — a root token has no attenuation block, so it declares no
-`agent()` and no `role()`, and item 4's fallback deliberately says "not stated" rather than
-inventing one. But on screen, next to `agt-doc-reader` and `agt-payer`, it reads like the bug
-item 4 just fixed rather than like the absence it is.
+`TreeNode.is_principal` — a **computed** field, not a stored one, because it *is* `depth == 0`
+and a second copy could disagree with the first. Structural rather than a string match on
+`agt-depth-0`: depth 0 means no attenuation block, and an `agent()` fact only ever lives in one.
 
-The honest name for the root is the *principal* — the human the mandate was issued to
-(`kc:…`), which `DecisionRecord.principal_id` already carries. Whether the tree should render
-that, or render "the mandate holder" as a distinct node kind, is a console decision.
+The console names the depth-0 node by its `principal_id` with the subtitle `principal`, and
+the PEP is unchanged — inventing a name there is what spec 01 §6.1's fallback rule exists to
+prevent, so the naming belongs on the display side where it is a rendering choice rather than
+an identity assertion. `agent_id` stays `agt-depth-0` in the data: it is the audit key, and
+`/v1/tree/{task}/blocks/{agent_id}` looks up by it.
 
-- **Note:** the PEP must keep doing what it does. Inventing an `agent_id` in `principal_for`
-  is what spec 01 §6.1's fallback rule exists to prevent; this is about how the console
-  renders a node that honestly has no agent name.
-- **Done when:** the depth-0 node is legible as "the principal, acting directly" rather than
-  as a missing label, without the PEP asserting an identity the token does not carry.
+**Driving the real page found a second defect, which is why it was worth driving.** A Keycloak
+subject is `kc:` plus a UUID — 39 characters. Labels are centred on the node, so it rendered
+252 px wide against ~91 px for `agt-doc-reader`, and its left edge landed at **x = -4**:
+clipped off the canvas. Both `agent_id` and `principal_id` are free text up to 128 characters
+(spec 01 §6.1), so this was reachable for a long agent name too and is not specific to the
+principal. Labels now truncate at 20 characters, with the full value in the `<title>` tooltip
+and in the detail panel.
 
-### 19. Two log-assertion tests go vacuous when every suite runs in one process
+Verified under a real Chrome over the DevTools Protocol, not replayed: 6 nodes, no error
+banner, root reading `kc:11111111-1111-11…` / `PRINCIPAL` at x = 58 and clear of the depth-1
+column at x = 327, with the five agents on their own names and roles.
 
-`test_compile_nl_to_policy_does_not_log_the_statement_verbatim` and
-`TestLimitDetailLogging::test_the_body_reaches_the_log_on_a_retry` fail under
-`pytest tests` (everything in one process, integration included) and pass under
-`pytest tests/unit`. Reproduced on a clean tree at `1c07c93` as well as on the current one,
-so this predates the current work and is not a regression.
+### ~~19. Two log-assertion tests go vacuous when every suite runs in one process~~ — **DONE**, and it was our bug
 
-**Not a CI risk**, checked rather than assumed: `ci.yml`'s `quality` job runs
-`-m "not integration and not e2e and not chaos and not perf"`, and the integration/e2e/chaos
-jobs each select a single marker, so the suites never share a process there. This only
-appears locally.
+Root cause found, and it is first-party: the alembic env called
+`fileConfig(config.config_file_name)`, whose `disable_existing_loggers` **defaults to `True`**.
+Running any migration therefore set `disabled = True` on every logger that already existed and
+was not named in `alembic.ini`. Alembic's generated template ships that default, so it is a bug
+the scaffold hands you rather than one anybody wrote.
 
-**The reason it is worth an item anyway.** The failure is `caplog.records` coming back
-**empty** — running one integration module first is enough (`test_oidc_login.py` reproduces
-it). The NL-compiler test's first two assertions are
+Diagnosed by instrumenting rather than guessing: `isEnabledFor(INFO)` came back **False** while
+`logger.level == 20` and `getEffectiveLevel() == 20` — which is `Logger.disabled`, not a level
+problem. One keyword fixes it.
 
-```python
-assert statement not in combined
-assert "alice@example.com" not in combined
-```
+**It was never only a test problem.** `scripts/run_load_test.py` migrates and then measures, in
+one process — so the harness behind `performance.md` was switching off the PEP's own logging
+before taking a reading. A warning during a load run could not have reached anyone.
 
-and both pass trivially against `""`. Those are the assertions that enforce rule 10 and
-NFR-5. The test only fails because a *third* assertion checks that the expected digest line
-is present — so the guard survives by luck of having been written with a positive assertion
-next to the negative ones. A test whose security claim can silently become vacuous should
-say so itself.
+**And the vacuity was hardened separately, because the root cause is not the only way to get
+there.** Three negative assertions could pass against empty captured output, including the
+runtime half of the secret scanner — the automation of rule 10 and NFR-5, which would have
+driven four log sites, captured none, and reported clean. Each now asserts something *was*
+captured first. `test_the_body_reaches_the_log_on_a_retry` needed no change: its assertion is
+positive, so it already failed loudly.
 
-- **Investigate:** what empties `caplog` — a handler or `propagate` flag left changed by an
-  earlier module is the obvious candidate, and `logging.disable`/`basicConfig` appear nowhere
-  in first-party code (grepped), so it is coming from a dependency's import or fixture.
-- **Done when:** the two tests pass in a single-process full-suite run, **and** the negative
-  assertions cannot pass against empty captured output — assert the record exists first, so a
-  future capture failure is a failure rather than a silent pass. Worth grepping for the same
-  `assert X not in caplog` shape elsewhere while there.
+Verified: 2,627 tests pass in a single-process full-suite run, which is the configuration that
+used to produce the two failures.
 
-### 20. `performance.md`'s numbers do not include the block-source parse
+### ~~20. `performance.md`'s numbers do not include the block-source parse~~ — **DONE**, as the documented alternative
 
-`serve_pep.py` is the harness every number in [`benchmarks/performance.md`](benchmarks/performance.md)
-comes from, and it hardcodes `agent_id="agt-perf"` and passes no `caveats_for`. The *deployed*
-PEP (`pep_service.py`) now does neither: `principal_for` reads the token's identity out of
-`Biscuit.block_source()` and `caveats_for` reads its caveats (ADR-057). So the benchmarked PEP
-and the deployed PEP no longer do the same work per request, and the published NFR-2 figure
-does not include the difference.
+The item offered two completions; this is the second, and the first is not honestly available
+here. Re-pointing `serve_pep.py` at the deployed composition invalidates `pb2-breakdown.json`
+and `nfr2-load.json` together, and the replacement run would come from this Windows laptop
+rather than whatever host produced the committed figures of 2026-08-18 — swapping a stable
+measurement for a non-comparable one is worse evidence, not better.
 
-**Measured, so the size of the gap is known rather than guessed** (CPython 3.12, this host):
+So `performance.md` now states the gap, with the numbers, in three block quotes under the NFR-2
+tier explanation. It is written into `generate_benchmark_results.py` rather than the Markdown,
+so the drift check (item 13) keeps it attached to the JSON it qualifies and a future
+re-measurement drops it by editing the generator.
 
-| chain depth | one `token_identity()` / `token_caveats()` |
-|---|---|
-| 0 (root) | ~125 µs median |
-| 1 | ~160 µs |
-| 2 | ~195 µs |
-| 3 | ~227 µs |
+What it says: the harness hardcodes its principal and supplies no caveat reader; one
+`token_identity()`/`token_caveats()` costs ~125 µs at depth 0 rising to ~227 µs at depth 3; the
+pipeline resolves each once per request, so a depth-3 request pays ~0.45 ms beyond what tier 3
+reports, against an 8 ms budget. **NFR-1 is untouched** — the parse is in the pipeline, not
+inside `decide()`, which is why the PB-2 breakdown needs no such note.
 
-The pipeline resolves the principal **once** per request and reads the caveats once, so a
-depth-3 request pays roughly 450 µs, not the ~900 µs three calls would have cost (there is a
-test pinning the once-per-request property). Against NFR-2's 8 ms p99 budget that is
-comfortable, and the demo stack measures 1.4 ms median / 1.8 ms worst end to end. **NFR-1 is
-unaffected** — the parse happens in the pipeline, not inside `decide()`, which is why
-`test_the_whole_decision`'s `p99 < 1000 µs` assertion did not move and would not have caught
-this either way.
+- **Still open, deliberately:** the re-measurement itself. It wants the same host as the
+  committed figures, and it is a benchmarking pass rather than a side effect of another
+  ticket. Filed as item 21 so it is not lost in a closed item's prose.
 
-- **Why this was not just fixed here:** `serve_pep.py`'s own docstring says the committed
-  numbers depend on it staying exactly as it is, and changing it invalidates
-  `performance.md`, `pb2-breakdown.json` and `nfr2-load.json` — which then need a real
-  re-measurement run, not a re-render. That is a benchmarking pass, not a side effect.
-- **Investigate:** whether the harness should mirror the deployed composition root, or
-  whether `performance.md` should report both configurations and say which one a reader
-  should believe for a production deployment.
-- **Done when:** the published NFR-2 number reflects the work a deployed PEP actually does,
-  or the document states plainly that it does not and by how much.
+---
+
+### 21. Re-measure NFR-2 against the deployed PEP's composition
+
+`scripts/serve_pep.py` hardcodes its policy principal and supplies no caveat reader, so tier 3
+of the NFR-2 measurement does less work than a production request (ADR-057). Item 20 documented
+the gap and measured its size (~0.45 ms at depth 3, against an 8 ms budget); closing it means
+making the harness match and re-running.
+
+- **Why it is its own ticket:** the re-run must happen on the same host as the committed
+  2026-08-18 figures, or the before/after comparison measures the hardware rather than the
+  change. It rewrites `pb2-breakdown.json` and `nfr2-load.json` together, and
+  `performance.md` is regenerated from both.
+- **Watch out for:** `pytest -m perf` rewrites `pb2-breakdown.json` as a side effect, which is
+  the noise gap 24 described and item 13 routed around. Any run that is not a deliberate
+  re-measurement should `git checkout` that file afterwards.
+- **Done when:** the harness composes the PEP the way `pep_service.py` does, the JSON is
+  re-measured on one host in one sitting, and item 20's three block quotes come out of
+  `generate_benchmark_results.py` because they no longer describe anything.

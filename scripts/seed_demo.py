@@ -240,8 +240,14 @@ def seed(out: Path, database_url: str) -> int:
 
 
 #: The traffic. Each line is (label, token, method, path, body, why it is in the demo).
-#: Chosen so every console page has something to show and every outcome is represented:
-#: allows, a scope refusal, a caveat-ceiling refusal, and a policy refusal.
+#: Chosen so every console page has something to show and every distinct refusal is
+#: represented: allows, a scope refusal, a caveat-ceiling refusal, the **mandate's own**
+#: ceiling, and a policy refusal.
+#:
+#: The last two were one line in the console until TODO item 17 — the mandate's own
+#: per-request ceiling reported `BUDGET_EXHAUSTED_CAVEAT`, so "root attempts more than the
+#: mandate grants" and "settlement agent exceeds its ceiling" read as the same refusal. They
+#: are not: one is an agent narrowing itself, the other is the grant it never had.
 _TRAFFIC: Final[tuple[tuple[str, str, str, str, dict[str, Any] | None], ...]] = (
     ("root reads an invoice", "root", "GET", "/proxy/invoices/inv_001", None),
     ("root reads another", "root", "GET", "/proxy/invoices/inv_002", None),

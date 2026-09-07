@@ -899,3 +899,106 @@ class TestStep4TokenNativeAuthority:
         assert decision.outcome is Outcome.DENY
         assert decision.failing_caveat is not None
         assert decision.failing_caveat.kind is CaveatKind.SCOPE_SUBSET
+
+
+class TestTheMandatesOwnCeilingIsNotACaveat:
+    """TODO item 17, through `decide()` rather than through `authorize_request` alone.
+
+    Spec 02 §7 separates `BUDGET_EXHAUSTED_CAVEAT` (an attenuation narrowed the request)
+    from `BUDGET_EXHAUSTED_MANDATE` (the mandate never granted it). `authorize_request`
+    recovers the code from the fact a failed check quantifies over, and `requested(` is the
+    same fact in both — the *block* is what tells them apart.
+    """
+
+    @staticmethod
+    def _decide(token: VerifiedToken, context: RequestContext) -> Decision:
+        return decide(
+            token,
+            context,
+            caveats=(),  # the deployed shape before item 4 wired a caveat reader in
+            revocation=FakeRevocation(),
+            policy=FakePolicy(),
+            budget=FakeBudget(),
+        )
+
+    @staticmethod
+    def _spending(amount: str) -> dict[BudgetDimension, Decimal]:
+        return {
+            **dict.fromkeys(BudgetDimension, Decimal(0)),
+            BudgetDimension.SPEND_BDT: Decimal(amount),
+        }
+
+    def test_a_root_token_over_its_mandate_reports_exhausted_mandate(self) -> None:
+        """The live case: the demo's "root attempts more than the mandate grants".
+
+        It reported `BUDGET_EXHAUSTED_CAVEAT` with `failing_caveat: null` — a code naming a
+        caveat beside a field correctly saying there wasn't one.
+        """
+        decision = self._decide(a_token(), ctx(requested=self._spending("9999999")))
+
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.BUDGET_EXHAUSTED_MANDATE
+        assert "block 0" in decision.reason_detail
+        assert decision.failing_caveat is None
+
+    def test_a_child_over_its_own_ceiling_still_reports_exhausted_caveat(self) -> None:
+        """The distinction has to cut both ways or it is just a rename."""
+        child = verify(
+            attenuate(
+                a_token(),
+                [BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=Decimal(10))],
+                agent_id="agent:child",
+                role="worker",
+            ),
+            _KEY_SET,
+            now=NOW,
+        )
+
+        decision = self._decide(child, ctx(depth=1, requested=self._spending("50")))
+
+        assert decision.outcome is Outcome.DENY
+        assert decision.reason_code is ReasonCode.BUDGET_EXHAUSTED_CAVEAT
+        assert "block 1" in decision.reason_detail
+
+    def test_the_ledger_pool_reports_the_same_mandate_code(self) -> None:
+        """Two routes to one code, and spec 09 §7 now lists both.
+
+        The pool being empty and a single request exceeding the mandate's ceiling are
+        different mechanisms — spec 02 §4.2 is explicit that the caveat bounds one request
+        and the ledger bounds the sum — but they are the same answer to the operator: the
+        mandate does not allow this.
+        """
+        decision = decide(
+            a_token(),
+            ctx(requested=self._spending("1")),
+            caveats=(),
+            revocation=FakeRevocation(),
+            policy=FakePolicy(),
+            budget=FakeBudget(ok=False, mandate_exhausted=True),
+        )
+
+        assert decision.reason_code is ReasonCode.BUDGET_EXHAUSTED_MANDATE
+
+    def test_the_budget_check_is_the_only_authority_check_biscuit_gets_to_refuse(self) -> None:
+        """The reachability claim `tokens._AUTHORITY_FACT_REASONS` makes, asserted.
+
+        Five of block 0's six checks are shadowed on this path by Python re-implementations
+        that run first — scope, intent and depth in `decide()`, the validity window in
+        `verify()`. Their refusals never quote a check, and the detail is what shows it.
+
+        The budget ceiling is the exception, because nothing re-implements it: the ledger
+        bounds the *pool* across requests and this bounds a *single* request (spec 02 §4.2).
+        That is why it was the one that reached a live decision record mislabelled, and why
+        the mapping is applied by block rather than left to the caller's ordering.
+        """
+        shadowed = {
+            "scope": ctx(operation="admin:write"),
+            "intent": ctx(intent="b" * 64),
+            "depth": ctx(depth=99),
+        }
+        for name, context in shadowed.items():
+            detail = self._decide(a_token(), context).reason_detail
+            assert "refused by a check in block" not in detail, f"{name} reached biscuit"
+
+        budget = self._decide(a_token(), ctx(requested=self._spending("9999999")))
+        assert "refused by a check in block" in budget.reason_detail

@@ -548,3 +548,122 @@ async def test_a_node_whose_state_moved_is_reported_as_changed() -> None:
     assert [n.agent_id for n in diff.changed] == ["agt-worker"]
     assert diff.added == []
     assert diff.removed == []
+
+
+async def test_the_depth_zero_node_is_marked_as_the_principal(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """TODO item 18. The root is the mandate holder acting directly, not a nameless agent.
+
+    A root token carries no attenuation block, so it declares no `agent()` and no `role()`
+    (spec 01 §6.1) and the PEP falls back to `agt-depth-0` rather than inventing a name.
+    Correct there; on screen, beside `agt-doc-reader`, it reads as a label that failed to
+    load. `is_principal` is what lets the console say what the node actually is.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id, mandate_id = uuid.uuid4(), uuid.uuid4()
+        now = datetime.now(UTC)
+        session.add(
+            AuditRecordRow(
+                seq=1,
+                decision_id=uuid.uuid4(),
+                record=_a_decision_record(
+                    task_id=task_id,
+                    mandate_id=mandate_id,
+                    agent_id="agt-depth-0",
+                    role="",
+                    depth=0,
+                ),
+                record_hash="a" * 64,
+                created_at=now,
+            )
+        )
+        await session.commit()
+
+        (node,) = await build_tree(session, task_id=task_id, now=now)
+
+    assert node.is_principal
+    # The audit key is untouched — records reference it, and it is what
+    # `/v1/tree/{task}/blocks/{agent_id}` is looked up by.
+    assert node.agent_id == "agt-depth-0"
+    assert node.principal_id == "kc:alice"
+
+
+async def test_a_delegated_agent_is_not_the_principal(migrated_engine: AsyncEngine) -> None:
+    """Anything with an attenuation block has a name of its own, so it is named by it."""
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id, mandate_id = uuid.uuid4(), uuid.uuid4()
+        now = datetime.now(UTC)
+        session.add(
+            AuditRecordRow(
+                seq=1,
+                decision_id=uuid.uuid4(),
+                record=_a_decision_record(
+                    task_id=task_id,
+                    mandate_id=mandate_id,
+                    agent_id="agt-payer",
+                    role="payer",
+                    depth=1,
+                ),
+                record_hash="a" * 64,
+                created_at=now,
+            )
+        )
+        await session.commit()
+
+        (node,) = await build_tree(session, task_id=task_id, now=now)
+
+    assert not node.is_principal
+
+
+async def test_is_principal_cannot_disagree_with_depth() -> None:
+    """It is computed, not stored, so there is no second copy to drift.
+
+    Stored, it would be a field every hand-built `TreeNode` had to set correctly, and a
+    depth-1 node marked `is_principal=True` would render a sub-agent as the mandate holder.
+    """
+    node = TreeNode(
+        agent_id="agt-x",
+        role="worker",
+        depth=0,
+        task_id="t",
+        principal_id="kc:alice",
+        block_ids=["b0"],
+        scopes=[],
+        budget=[],
+        revoked=False,
+        revocation_reason=None,
+        has_pending_escalation=False,
+        last_outcome="allow",
+        last_reason_code="OK",
+        last_seen=datetime(2026, 9, 7, tzinfo=UTC),
+    )
+    assert node.is_principal
+    assert not node.model_copy(update={"depth": 1}).is_principal
+
+
+async def test_is_principal_reaches_the_console_over_the_wire() -> None:
+    """A computed field the JSON does not carry would leave the console unable to use it.
+
+    `computed_field` is what puts it in the dump; a plain `@property` would not, and the
+    page would silently fall back to labelling the root `agt-depth-0` again.
+    """
+    node = TreeNode(
+        agent_id="agt-depth-0",
+        role="unknown",
+        depth=0,
+        task_id="t",
+        principal_id="kc:alice",
+        block_ids=["b0"],
+        scopes=[],
+        budget=[],
+        revoked=False,
+        revocation_reason=None,
+        has_pending_escalation=False,
+        last_outcome="allow",
+        last_reason_code="OK",
+        last_seen=datetime(2026, 9, 7, tzinfo=UTC),
+    )
+    assert node.model_dump(mode="json")["is_principal"] is True

@@ -163,11 +163,39 @@ that every code is reachable and every deny in the source cites one.*
 | `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `INTENT_MISMATCH`, `BUDGET_EXHAUSTED_CAVEAT`, `APPROVAL_REQUIRED` | step 4 |
 | `POLICY_DENIED`, `POLICY_BUNDLE_STALE` | step 5 |
 | `DRIFT_ESCALATION` | step 6 |
-| `BUDGET_EXHAUSTED_MANDATE`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE` | step 7, and the ledger (T-013, T-014) |
+| `BUDGET_EXHAUSTED_MANDATE`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE` | step 7, and the ledger (T-013, T-014). `BUDGET_EXHAUSTED_MANDATE` **also from step 4** — see §7.1 |
 | `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED` | §5 |
 | `VERIFICATION_LIMIT_EXCEEDED` | step 2 — the Datalog engine exhausted its budget reading the token (TM-14 or TM-25). Fails closed; added by T-020 |
 | `UPSTREAM_ERROR` | step 8, post-decision (§6) |
 | `RATE_LIMITED` | **unreachable** — `RateLimit` was dropped (`ROADMAP.md` Part 1) |
+
+### 7.1 Two routes to `BUDGET_EXHAUSTED_MANDATE`, and why the block decides
+
+Step 7 reaches it when the ledger's **pool** is empty. Step 4 reaches it when a single
+request exceeds the **mandate's own per-request ceiling** — the authority block's
+`check if requested("spend_bdt", $v), $v <= …` (spec 01 §5.2). Different mechanisms; spec 02
+§4.2 is explicit that a ceiling bounds one request and the ledger bounds the sum across
+siblings. Same answer to an operator: the mandate does not allow this.
+
+`authorize_request` recovers a reason code from the fact a failed check quantifies over, and
+`requested(` is the same fact whether the check sits in the authority block or in an
+attenuation block. **The block is what tells them apart**, so the mapping is applied per
+block: `requested(` in block 0 is `BUDGET_EXHAUSTED_MANDATE`, and `operation(` in block 0 is
+`SCOPE_NOT_GRANTED` rather than `SCOPE_ATTENUATED_AWAY` for the same reason. The other four
+authority checks mean the same thing wherever they sit.
+
+Reading only the fact reported the mandate's own ceiling as an attenuation the agent had
+applied to itself — observed in a live decision record as `BUDGET_EXHAUSTED_CAVEAT` beside
+`failing_caveat: null`, a code naming a caveat next to a field correctly saying there was
+none. Both codes are 429 (§11.2), so no client sees a different status; what changes is what
+an operator reads, and the fixes differ — re-mint without the narrowing, versus raise the
+mandate.
+
+**Only the budget check is reachable this way on the `decide()` path**, and that is why it
+was the one that surfaced: the other five authority checks are shadowed by the Python
+re-implementations in §2's steps 2 and 4, which refuse first. Nothing re-implements the
+per-request ceiling. The mapping is nonetheless applied by block rather than by caller —
+`authorize_request` is public, and its codes must be right for anything that calls it.
 
 ---
 

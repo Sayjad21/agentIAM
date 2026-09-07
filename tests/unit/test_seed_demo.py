@@ -83,15 +83,20 @@ class TestTheTraffic:
         assert minted == called, f"never call: {minted - called}"
 
     def test_the_traffic_covers_every_refusal_layer(self) -> None:
-        """Allows, a scope refusal, a caveat ceiling, and a policy refusal.
+        """Allows, a scope refusal, a caveat ceiling, the mandate's ceiling, and a policy refusal.
 
         A scenario that only produced allows would show a console full of green and prove
         nothing; one that never reached the policy layer would leave Cedar untested by the
         demonstration that exists to show it working.
+
+        The mandate's own ceiling is listed separately from the caveat ceiling since TODO
+        item 17: they used to report the same reason code, so the console showed one refusal
+        where the system makes two distinct ones.
         """
         labels = " | ".join(label for label, *_ in seed_demo._TRAFFIC).lower()
         assert "attempts a payment" in labels, "no scope refusal"
         assert "exceeds its ceiling" in labels, "no caveat-ceiling refusal"
+        assert "more than the mandate grants" in labels, "no mandate-ceiling refusal"
         assert "too deep for the policy" in labels, "no policy refusal"
         assert any(body is None for *_head, body in seed_demo._TRAFFIC), "no reads"
 
