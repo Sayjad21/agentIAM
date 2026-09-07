@@ -14,7 +14,13 @@ from decimal import Decimal
 import pytest
 
 from agentiam_core.errors import CanonicalizationError
-from agentiam_core.hashing import canonical_json, chain_hash, hash_object, sha256_hex
+from agentiam_core.hashing import (
+    canonical_json,
+    chain_hash,
+    hash_object,
+    intent_hash,
+    sha256_hex,
+)
 
 
 class TestCanonicalJson:
@@ -195,3 +201,64 @@ class TestHashing:
         tampered = [dict(r) for r in records]
         tampered[2]["v"] = 999
         assert build(tampered)[-1] != original[-1]
+
+
+class TestTheMinterAndTheVerifierAgreeOnIntent:
+    """TODO item 25 — the SDK could not assert an intent the mandate would accept.
+
+    Two sides compute this hash. A mandate is *minted* with one, and the PEP *recomputes* one
+    from the `AgentIAM-Task-Intent` header the SDK sends (`client.py:118`). They disagreed:
+    the verifier canonicalized, `scripts/seed_demo.py` did not. Same text, two hashes.
+
+    Measured against the running demo stack, same token, same intent text:
+
+        no intent header                              -> 200 OK
+        AgentIAM-Task-Intent: <the exact minted text> -> 403 INTENT_MISMATCH
+        x-agentiam-intent: sha256(text)               -> 200 OK
+
+    So every call from an agent using the official SDK, asserting the *correct* intent, was
+    refused. The demo only worked because its driver sends neither header.
+    """
+
+    STATEMENT = "Procure 500 units of packaging stock, budget BDT 500,000."
+
+    def test_the_named_helper_is_what_the_spec_describes(self) -> None:
+        """Spec 06 §1 and `PLAN.md` §493: canonical JSON, then SHA-256."""
+        assert intent_hash(self.STATEMENT) == sha256_hex(canonical_json(self.STATEMENT))
+
+    def test_a_bare_sha256_of_the_text_is_a_different_hash(self) -> None:
+        """The distinction the bug turned on — asserted, so nobody re-derives it as equal.
+
+        Canonicalization JSON-encodes the string, so the bytes hashed are not the bytes of
+        the statement. These two are *supposed* to differ; what was wrong was using both.
+        """
+        import hashlib
+
+        assert intent_hash(self.STATEMENT) != hashlib.sha256(self.STATEMENT.encode()).hexdigest()
+
+    def test_the_demo_seed_mints_what_the_verifier_recomputes(self) -> None:
+        """The regression itself, over the two real call sites.
+
+        `seed_demo._mandate()` is what `make demo-up` binds the demo chain to, and
+        `Pipeline._context_for` is what turns the SDK's header back into a hash to compare.
+        Asserting the first equals the second is the whole contract.
+        """
+        from datetime import UTC, datetime
+
+        from scripts import seed_demo
+
+        mandate = seed_demo._mandate(datetime(2026, 9, 7, 12, 0, tzinfo=UTC))
+        assert mandate.intent_hash == intent_hash(seed_demo.DEMO_INTENT)
+
+    def test_canonicalization_survives_a_unicode_round_trip(self) -> None:
+        """Why canonical rather than bare: P-13/P-14, the reason the spec asks for it.
+
+        The same statement in NFC and NFD is the same statement to a human and to a form
+        field, and must bind to the same mandate.
+        """
+        import unicodedata
+
+        composed = "Procure 500 units for Padma Suppliés"
+        decomposed = unicodedata.normalize("NFD", composed)
+        assert composed != decomposed
+        assert intent_hash(composed) == intent_hash(decomposed)

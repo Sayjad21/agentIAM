@@ -751,7 +751,7 @@ Five tests, and the first refusal is asserted as *correct* rather than papered o
 refusing once is right, refusing forever is the defect. Verified by reverting the guard: four
 of the five fail.
 
-### 25. The SDK's own intent header can never match a demo-minted mandate
+### ~~25. The SDK's own intent header can never match a demo-minted mandate~~ — **FIXED**
 
 `scripts/seed_demo.py:109` mints `intent_hash=hashlib.sha256(DEMO_INTENT.encode()).hexdigest()`
 — a plain SHA-256 of the text. Spec 06 §1 says the intent is bound "using canonical JSON
@@ -777,7 +777,7 @@ else uses `hash_object`. So the seed is the deviation, not the spec.
 - **Done when:** the seed mints with `hash_object`, an SDK client asserting the mandate's own
   intent text is authorized, and something asserts the two agree so they cannot drift again.
 
-### 26. `email:send` is unroutable, so a whole policy branch is unreachable
+### ~~26. `email:send` is unroutable~~ — **FIXED**, and it uncovered item 29
 
 The stub tools serve `POST /email/send`; the corpus policy has
 `permit(… "email:send" …) when { !resource.is_external }` plus a `forbid` on critical
@@ -794,7 +794,7 @@ What it costs is that `!resource.is_external` — the one policy condition that 
   catalogue stop describing a scope the deployment cannot route. Whichever is chosen, the
   three places that mention email should agree.
 
-### 27. Chain-of-custody on an unknown task returns 200 with an empty list
+### ~~27. Chain-of-custody on an unknown task returns 200 with an empty list~~ — **FIXED**
 
 `PLAN.md` §11.7 EC-A05: *"Custody query on an unknown action | 404 with a clear message."*
 
@@ -813,7 +813,7 @@ nothing. An operator cannot tell "this task did nothing" from "this task does no
 - **Done when:** an unknown task is a 404 naming what was not found, a real task is unchanged,
   and a test covers both.
 
-### 28. `DEMO.md`'s F-2 drill scripts a failsafe that does not exist
+### ~~28. `DEMO.md`'s F-2 drill scripts a failsafe that does not exist~~ — **FIXED**
 
 F-2 says: *"Ollama slow or down → Template fallback engages automatically (T-031). The flow is
 identical. Narrate: 'the template fallback just activated — this is a production-grade
@@ -838,3 +838,58 @@ documents just describe something else.
 - **Done when:** F-2 describes what the system does — surface the error and move on — or
   T-031 is built and F-2 becomes true. Either way `DEMO.md` and `STATUS.md` should not
   disagree about a drill the presenter is meant to rehearse.
+
+### 29. The deployed PEP has an empty tool catalogue, so every resource rule is inert
+
+**Found while fixing item 26**, and more consequential than the item that turned it up.
+
+`scripts/pep_service.py` builds `CedarEngine(bundle)` — with no `tools=` argument.
+`CedarEngine.__init__` does `self.tools = dict(tools or {})`, and `_facts_for` falls back to
+`_UNKNOWN_TOOL`, whose attributes are deliberately the *safe* end of every axis:
+`sensitivity="low"`, `is_external=False`.
+
+So in the deployed PEP **every tool looks low-sensitivity and internal**, whatever the
+catalogue says. Two rules in the shipped corpus policy turn on exactly those attributes:
+
+```cedar
+forbid(principal, action, resource)
+when { resource.sensitivity == "critical" && principal.role != "senior" };
+
+permit(principal, action == Action::"email:send", resource)
+when { !resource.is_external };
+```
+
+The first **never fires**. `payment_api` is `sensitivity: "critical"` in `CORPUS_TOOLS`, and
+ADR-057 keeps `principal.role` at the configured `"agent"` — so with a real catalogue every
+payment through `payment_api` would be forbidden. Measured directly:
+
+```
+empty catalogue (as deployed)   payment:initiate via payment_api -> allowed=True
+CORPUS_TOOLS wired              payment:initiate via payment_api -> allowed=False
+```
+
+**This is why it must not simply be wired.** Handing `pep_service.py` the corpus catalogue
+would refuse every payment in the demo — the beat the whole scenario is built around. The
+three facts are in tension and only two can hold at once:
+
+1. `payment_api` is `critical` (`CORPUS_TOOLS`, and 5 corpus cases assert the forbid).
+2. `principal.role` is organization-asserted and defaults to `"agent"` (ADR-057, and
+   deliberately *not* the token's parent-asserted role).
+3. Payments succeed in the demo.
+
+The corpus tests pass because they construct their own `CedarEngine(bundle, tools=TOOLS)`
+with a `"senior"` principal where the case needs one. Nothing asserts that the *deployed*
+engine sees the same catalogue, which is how the gap survived.
+
+- **Investigate first, and this is the whole ticket:** which of the three gives. Plausible
+  answers — the demo mandate's agents genuinely should carry a role that satisfies the
+  forbid, and `AGENTIAM_PEP_DEFAULT_ROLE` should be set accordingly in
+  `docker-compose.demo.yml`; or `payment_api` is not `critical` and the corpus is wrong; or
+  the forbid wants a different predicate. Do not pick by what makes the demo pass.
+- **Done when:** the deployed PEP evaluates policy against the same tool catalogue its
+  bundle was written for, a test asserts the deployed engine's catalogue is non-empty and
+  matches the bundle's, and the demo's payment beat still works *for a stated reason* rather
+  than by the attribute being absent.
+- **Related:** item 26 mapped `email:send` to `email_internal` and `email_external` so
+  `!resource.is_external` has two sides to distinguish. Until this item is closed, both sides
+  report `is_external=False`, so that condition is still always true in the deployed PEP.

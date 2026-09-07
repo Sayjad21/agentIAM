@@ -161,6 +161,26 @@ def hash_object(value: Any) -> str:  # noqa: ANN401 - deliberately accepts arbit
     return sha256_hex(canonical_json(value))
 
 
+def intent_hash(description: str) -> str:
+    """The hash a mandate is bound to, from the task description it was approved for.
+
+    `PLAN.md` §493 — *"sha256 of canonicalized description"* — and spec 06 §1, which names
+    `canonical_json` explicitly. Canonicalization is what makes the binding survive a
+    round trip through a form, a database and a header without the Unicode normalization
+    form or the encoding changing the answer (P-13, P-14).
+
+    **This exists as a named function because two sides have to agree and did not.** The
+    verifier already computed `hash_object(text)` for the `AgentIAM-Task-Intent` header the
+    SDK sends; `scripts/seed_demo.py` minted with a bare `sha256(text.encode())`. Same text,
+    two hashes, so an agent using the official SDK to assert the *correct* intent was refused
+    `INTENT_MISMATCH` on every call — measured against the running demo stack, TODO item 25.
+
+    Spelling it once is the fix. Anything that mints an `intent_hash`, and anything that
+    recomputes one to compare, calls this.
+    """
+    return hash_object(description)
+
+
 def chain_hash(prev_hash: str | None, record: Any) -> str:  # noqa: ANN401
     """Compute an audit chain link.
 
