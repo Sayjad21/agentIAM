@@ -7,6 +7,8 @@ meaningful (P-18).
 
 from __future__ import annotations
 
+import uuid
+
 from agentiam_core.errors import AgentIAMError, ReasonCode
 
 
@@ -58,9 +60,37 @@ class EscalationNotFoundError(ControlPlaneError):
     """
 
 
+class DuplicateEscalationError(ControlPlaneError):
+    """An escalation already exists for this decision — T-037. Maps to HTTP 409.
+
+    `escalations.decision_id` is unique: one decision raises at most one escalation, so a
+    second `POST /v1/escalations` for the same decision is a *state* conflict rather than a
+    malformed request. Same reading as `app._refuse_activation`'s 409 (ADR-030, spec 05
+    §5.5) and as EC-A10's losing approver — well-formed, permitted, and refused because the
+    row is already in a state that excludes it.
+
+    Deliberately **not** absorbed the way a repeat revoke is (spec 07 §9, EC-R05). A repeat
+    revoke asks for a state the table already holds, so returning the existing row answers
+    the caller's question truthfully. A second escalation may name different scopes, a
+    different amount and a different reason; returning the first one as though it were this
+    request would report a grant nobody asked for. So it errors, and names the escalation
+    that is in the way.
+
+    Not part of the closed reason-code enum (rule 5), for the same reason as
+    `EscalationNotFoundError`: this is an admin-API conflict, not a decision.
+    """
+
+    def __init__(self, message: str, *, existing_id: uuid.UUID, decision_id: uuid.UUID) -> None:
+        """Carry the conflicting escalation's id, so the caller can act on it."""
+        super().__init__(message)
+        self.existing_id = existing_id
+        self.decision_id = decision_id
+
+
 __all__ = [
     "AllocationError",
     "ControlPlaneError",
+    "DuplicateEscalationError",
     "EscalationNotFoundError",
     "LeaseNotActiveError",
     "LeaseUnavailableError",

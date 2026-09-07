@@ -202,11 +202,14 @@ async def build_tree(
         scope_val = rec.get("scope")
         scopes = [str(scope_val)] if scope_val else []
 
-        # role extraction from context: not directly there, we can look at agent_id or
-        # default to "unknown" as per PLAN.md
-        role = "unknown"
-        if "role" in rec:
-            role = str(rec["role"])
+        # The role the delegating parent asserted, read off the token's attenuation block by
+        # the PEP and carried here on the decision record (spec 01 §6.1). Until the record
+        # carried it this branch was unreachable and every node read "unknown".
+        #
+        # `"unknown"` still stands for a record that names no role: a root token has no
+        # attenuation block, and a block whose `role` fact was rendered ambiguously has none
+        # that can be believed (TM-24). Rendering *that* as a role would be inventing one.
+        role = str(rec.get("role") or "") or "unknown"
 
         nodes.append(
             TreeNode(
@@ -235,11 +238,23 @@ async def build_tree(
 def build_tree_diff(old: list[TreeNode], new: list[TreeNode]) -> TreeDiff:
     """Compute minimal diff between two snapshots for SSE animation.
 
-    Identity key is (agent_id, first_block_id). If block_ids is empty, just agent_id.
+    Identity is `(agent_id, terminal_block_id)` — the **last** block of the chain, which is
+    this agent's own. `block_ids` is root-first, so the first entry is the *root* block and
+    is identical for every node in a task: keying on it contributed nothing, leaving
+    `agent_id` alone to distinguish siblings. Measured against the deployed PEP's old
+    `agt-depth-{N}` naming, three depth-1 siblings produced one diff entry instead of three,
+    and the SSE stream animated one of them in. The initial `snapshot` event carries the
+    full list, so the first paint was right and only later updates were wrong — which is why
+    it survived a live check of the page.
+
+    The terminal block is the same key the console's d3 tree already uses, and for the same
+    reason: biscuit block ids are content-addressed, so uniqueness is structural rather than
+    hoped for. Real agent names (TODO item 4) fix the symptom; this fixes the key, so two
+    agents a parent happened to give one name still count as two.
     """
 
     def key(n: TreeNode) -> tuple[str, str]:
-        return (n.agent_id, n.block_ids[0] if n.block_ids else "")
+        return (n.agent_id, n.block_ids[-1] if n.block_ids else "")
 
     old_map = {key(n): n for n in old}
     new_map = {key(n): n for n in new}

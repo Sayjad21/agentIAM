@@ -232,12 +232,17 @@ def _arg_narrows(child: ArgPredicate, parent: ArgPredicate) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _grant_caveats(parent: VerifiedToken) -> list[Caveat]:
+def grant_caveats(parent: VerifiedToken) -> list[Caveat]:
     """Express the authority block's grant as caveats, so one rule checks everything.
 
     The grant is not stored as caveats in the token, but it bounds a child exactly as a
     caveat would. Rendering it this way means EC-T17, EC-T18, and EC-T19 fall out of the
     same comparison rather than needing three special cases.
+
+    Public because `datalog.effective_authority()` needs the same rendering: a chain's true
+    bound is this grant folded together with the caveats read back off its attenuation
+    blocks, and two spellings of "the grant, as caveats" would be two things to keep in
+    step.
     """
     caveats: list[Caveat] = [
         ScopeSubset(scopes=parent.scopes),
@@ -323,7 +328,7 @@ def attenuate(
     """
     validate_label(agent_id, "agent_id")
     validate_label(role, "role")
-    check_narrowing(caveats, [*_grant_caveats(parent), *ancestor_caveats])
+    check_narrowing(caveats, [*grant_caveats(parent), *ancestor_caveats])
 
     lines = [
         f"agent({quote_string(agent_id)});",

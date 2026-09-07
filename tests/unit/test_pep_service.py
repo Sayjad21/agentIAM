@@ -26,10 +26,22 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 
+from agentiam_core.attenuation import attenuate
+from agentiam_core.models import Budget, Mandate, ScopeSubset
+from agentiam_core.tokens import (
+    RootKeySet,
+    VerifiedToken,
+    generate_keypair,
+    mint_root,
+    verify,
+)
 from scripts import pep_service
 
 if TYPE_CHECKING:
@@ -526,3 +538,175 @@ class TestLeaseSizing:
         monkeypatch.setenv(f"{pep_service.ENV_PREFIX}LEASE_SIZE", bad)
         with pytest.raises(ValueError, match="LEASE_SIZE"):
             pep_service.ServiceSettings.from_env()
+
+
+class TestAgentIdentity:
+    """The deployed PEP reads the delegated agent's name off its own token — TODO item 4.
+
+    Before this, `principal_for` returned `agt-depth-{N}`. Three siblings at depth 1 all
+    called `agt-depth-1` is not a labelling wart: the identity tree is built from decision
+    records keyed on `agent_id`, so three agents collapsed into one node and `DEMO.md` beat 2
+    showed a chain where the product's claim is a *tree*.
+
+    The names were in the tokens the whole time — `attenuate()` writes `agent()` and `role()`
+    into every block (spec 01 §6.1) — and nothing could read them back, because block facts
+    are invisible to the authorizer (spec 02 §9 finding 13). `agentiam_core.datalog` is the
+    route to them.
+    """
+
+    NOW: ClassVar = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
+
+    @classmethod
+    def _root(
+        cls, scopes: frozenset[str] = frozenset({"invoice:read"})
+    ) -> tuple[VerifiedToken, RootKeySet]:
+        """A verified root token, and the key set its descendants verify against."""
+        keys = generate_keypair()
+        key_set = RootKeySet((keys.public_key,))
+        mandate = Mandate(
+            mandate_id=uuid.uuid4(),
+            task_id=uuid.uuid4(),
+            principal_id="kc:alice",
+            intent_hash="a" * 64,
+            scopes=scopes,
+            budget=Budget(spend_bdt=Decimal("500000")),
+            max_depth=4,
+            not_before=cls.NOW,
+            expires_at=cls.NOW + timedelta(hours=1),
+        )
+        return verify(mint_root(mandate, keys.private_key), key_set, now=cls.NOW), key_set
+
+    @classmethod
+    def _delegate(
+        cls, parent: VerifiedToken, key_set: RootKeySet, *, agent_id: str, role: str
+    ) -> VerifiedToken:
+        """One level of real delegation, with the names a parent would actually assign."""
+        child = attenuate(
+            parent,
+            [ScopeSubset(scopes=frozenset({"invoice:read"}))],
+            agent_id=agent_id,
+            role=role,
+        )
+        return verify(child, key_set, now=cls.NOW)
+
+    @staticmethod
+    def _service(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pep_service.Service:
+        _base_env(monkeypatch, tmp_path)
+        return pep_service.build_service(pep_service.ServiceSettings.from_env())
+
+    def test_the_principal_carries_the_agent_id_the_parent_assigned(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root()
+        token = self._delegate(root, key_set, agent_id="agt-payer", role="payer")
+
+        assert service.principal_for(token).agent_id == "agt-payer"
+
+    def test_siblings_at_one_depth_get_distinct_ids(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The defect itself: `agt-depth-1` made three agents one node in the tree."""
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root(frozenset({"invoice:read", "vendor:read"}))
+        siblings = [
+            self._delegate(root, key_set, agent_id=name, role="worker")
+            for name in ("agt-doc-reader", "agt-negotiator", "agt-payer")
+        ]
+
+        ids = [service.principal_for(t).agent_id for t in siblings]
+        assert ids == ["agt-doc-reader", "agt-negotiator", "agt-payer"]
+
+    def test_a_deeper_agent_is_named_by_its_own_block_not_its_parent_s(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Depth 2 is `agt-settlement`, not the `agt-payer` it inherited authority from."""
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root()
+        payer = self._delegate(root, key_set, agent_id="agt-payer", role="payer")
+        settlement = self._delegate(payer, key_set, agent_id="agt-settlement", role="payer")
+
+        assert service.principal_for(settlement).agent_id == "agt-settlement"
+
+    def test_a_root_token_falls_back_to_the_depth_derived_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No attenuation block means no `agent()` fact, and no name to invent."""
+        service = self._service(monkeypatch, tmp_path)
+        root, _ = self._root()
+
+        principal = service.principal_for(root)
+        assert principal.agent_id == "agt-depth-0"
+        assert principal.declared_role == ""
+
+    def test_an_ambiguous_agent_fact_falls_back_rather_than_letting_it_choose(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """TM-24 reaches the Cedar entity uid, so the fallback is a control, not cosmetics.
+
+        `attenuate()` cannot build this block — `validate_label` refuses the value — so it is
+        appended the way a third party would append one. Two `agent` facts is what a value
+        that broke out of its own string literal renders as, and there is no sound way to
+        pick between them; picking either would let the crafted block choose the entity a
+        Cedar policy matches on.
+        """
+        from biscuit_auth import BlockBuilder
+
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root()
+        forged = root.biscuit.append(
+            BlockBuilder('agent("real");\nagent("forged");\nrole("worker");\n')
+        ).to_base64()
+
+        principal = service.principal_for(verify(forged, key_set, now=self.NOW))
+        assert principal.agent_id == "agt-depth-1"
+        assert principal.agent_id not in ("real", "forged")
+
+    def test_the_parent_asserted_role_travels_as_declared_role(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Spec 01 §6.1's use for `role`: the console and the audit trail."""
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root()
+        token = self._delegate(root, key_set, agent_id="agt-payer", role="payer")
+
+        assert service.principal_for(token).declared_role == "payer"
+
+    def test_the_cedar_role_is_configuration_not_the_token_s_claim(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """ADR-057, and the whole reason `declared_role` is a separate field.
+
+        The corpus bundle grants `invoice:write` on `principal.role == "senior"` and forbids
+        critical resources without it. If `principal.role` came from the attenuation block,
+        any agent that can attenuate could name its own child `"senior"` and pass both — the
+        `declared_depth` mistake (ADR-005) one field over.
+        """
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root()
+        self_promoted = self._delegate(root, key_set, agent_id="agt-sneaky", role="senior")
+
+        principal = service.principal_for(self_promoted)
+        assert principal.declared_role == "senior"
+        assert principal.role == "agent"
+        assert principal.role != principal.declared_role
+
+    def test_the_pipeline_is_given_a_caveat_reader(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Spec 09 §4's stated limitation, closed.
+
+        `decide()` takes the caveat list as an input because a `VerifiedToken` exposes the
+        grant and not what later blocks added. A deployed PEP had nothing to pass, so
+        `failing_caveat` could never name the caveat that refused a request.
+        """
+        from agentiam_core.models import ScopeSubset
+
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root()
+        token = self._delegate(root, key_set, agent_id="agt-payer", role="payer")
+
+        recovered = service.pipeline._caveats_for(token)
+        assert [sorted(c.scopes) for c in recovered if isinstance(c, ScopeSubset)] == [
+            ["invoice:read"]
+        ]

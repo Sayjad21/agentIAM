@@ -103,14 +103,23 @@ count rather than a `DepthLimit` caveat.
 Where a caveat is not the cause, `failing_caveat` is `None` and `reason_detail` still names
 something specific: which policy statement, which budget dimension, which revoked block id.
 
-**A known limitation, stated rather than hidden.** Naming the failing caveat requires *having*
-the caveats. A `VerifiedToken` exposes the authority block's grant, not the caveats that later
-blocks added (ADR-005, and `STATUS.md` §3 gap 2 — there is no Datalog-to-caveat parser). So
-`decide()` takes the caveat list as an **input**: the SDK knows the caveats it minted, and the
-PEP will pass what it can recover. Where the caveat set is incomplete the pipeline still denies
-correctly — biscuit's own authorizer enforces the chain regardless — but `failing_caveat` may be
-`None` where a complete set would have named one. Closing that is T-045's parser, not this
-ticket's.
+**The limitation this section used to state is closed.** Naming the failing caveat requires
+*having* the caveats, and a `VerifiedToken` exposes the authority block's grant, not what later
+blocks added (ADR-005). So `decide()` takes the caveat list as an **input** — that part is
+unchanged, and is still what lets the SDK pass the caveats it minted. What has changed is that
+a deployed PEP can now recover them too: `agentiam_core.datalog.token_caveats` reads them back
+off the token's own block source ([`02-caveat-language.md`](02-caveat-language.md) §11), and
+`scripts/pep_service.py` passes it.
+
+Where the caveat set is incomplete the pipeline still denies correctly — biscuit's own
+authorizer enforces the chain regardless — and `failing_caveat` is `None` where a complete set
+would have named one. That is now the honest exception rather than the normal case.
+
+**Two things had to be true for the field to be empty, and only one of them was recorded
+here.** The second was that nothing carried the `CaveatRef` `decide()` returns onto the
+`DecisionRecord` at all — the pipeline built the record without it. Supplying the caveat list
+is what made that visible: the field stayed `None` on a chain whose caveats had just been
+read back successfully. A limitation that hides a bug behind it is worth the note.
 
 ---
 
@@ -172,6 +181,23 @@ evidence pack.
 `reason_detail` is prose written by this pipeline and must name caveats, dimensions and policy
 statements — never argument values. A deny reason reading *"amount 4,500,000 exceeds…"* has
 copied the payload into the audit trail by another route.
+
+### 8.1 `role` is recorded, and is a claim rather than a fact
+
+`DecisionRecord.role` carries the role the **delegating parent** asserted for this agent, read
+off the token's terminal attenuation block ([`01-token-format.md`](01-token-format.md) §6.1).
+It is here for the identity tree and the audit trail, which is exactly the use that spec gives
+it.
+
+It is **not** the role the policy engine evaluated. Those are different claims and ADR-057
+keeps them apart; a reader of the ledger who conflates them will conclude that a policy granted
+something on the strength of a name the grantee chose. Empty means the token declared no role —
+a root token has no attenuation block, and a block that named one ambiguously (TM-24) has none
+that can be believed. Empty is never a default standing in for a real value.
+
+Records written before the field existed have no `role` key at all. Chain verification is
+unaffected: it recomputes hashes over the *stored* body (spec 08 §3), never over a
+re-serialized model.
 
 ---
 

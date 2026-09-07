@@ -276,6 +276,26 @@ Appended by a holder, offline, signed with a freshly generated ephemeral key.
 > a block fact and `depth ≤ max_depth` as a check; done literally, that check is trivially
 > satisfiable by the `depth(0)` fact in the authority block. See ADR-005.
 
+> **`role` MUST NOT be used for authorization either, and for the identical reason.** The
+> table above says "for the console and audit"; ADR-057 records what happens if that is read
+> loosely. A block's `role` is written by the *delegating parent*, so a policy that grants on
+> it — the demo corpus grants `invoice:write` on `principal.role == "senior"` and forbids
+> critical resources without it — lets any agent that can attenuate name its own child
+> `"senior"` and pass both guards. A Cedar bundle keying on `principal.role` is asking what
+> the **organization** says an agent is, and a delegating agent is not the organization.
+>
+> The deployed PEP keeps the two apart: `AgentPrincipal.role` is configuration and is what
+> Cedar sees; `AgentPrincipal.declared_role` is this fact, and reaches only
+> `DecisionRecord.role`, the console and the identity tree.
+>
+> `agent(id)` is parent-asserted in exactly the same way, and is used anyway, because it is
+> the *only* place a sub-agent's identity exists — there is nothing else to read. What makes
+> that safe to record is that the name is a label on a node the chain already identifies
+> cryptographically: `token_chain_ids` is content-addressed, so a lying `agent_id` is still
+> pinned to one specific block. A reader that cannot establish it unambiguously (finding 14
+> in [`02-caveat-language.md`](02-caveat-language.md) §11.2) MUST fall back to a value it
+> derived itself rather than let a crafted block choose.
+
 ### 6.2 Checks
 
 All checks constrain **verifier-supplied request facts**:

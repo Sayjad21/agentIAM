@@ -347,7 +347,11 @@ Executed against `biscuit-python` 1.x, CPython 3.12. Re-run these when the libra
 
 Finding 13 is the load-bearing one for §4.9: a block fact can never influence a Datalog
 decision, so `RequiresApproval` must be evaluated in Python — and equally, no block fact can
-ever widen a Datalog decision.
+ever widen a Datalog decision. It is load-bearing again in §11: it is why reading an agent's
+own identity off its block needs `block_source()` rather than a query.
+
+Findings **14 through 17** are in §11.2 — they govern reading rendered block text back, and
+they are listed there rather than here because each one exists to justify a rule beside it.
 
 ---
 
@@ -356,5 +360,87 @@ ever widen a Datalog decision.
 | # | Question | Owner |
 |---|---|---|
 | ~~1~~ | ~~The `arg` path vocabulary and its extraction rules~~ — **resolved in T-020**: the path in a caveat is an opaque label bound to a source expression by the extractor's route mapping, so a token survives an upstream refactor. See [`10-scope-extraction.md`](10-scope-extraction.md) §4 | done |
-| 2 | Whether `evaluate()` should return the failing clause index for finer attribution | T-019 |
+| ~~2~~ | ~~Whether `evaluate()` should return the failing clause index for finer attribution~~ — **overtaken**: `_evaluate_caveats` reports the failing *caveat's* index in the chain, which is what `CaveatRef.block_index` carries and what an operator acts on. A clause index within a caveat would distinguish a `TimeWindow`'s two bounds and nothing else, and §11.4 splits those into separate caveats anyway | done |
 | ~~3~~ | ~~Whether `role` should be a closed enum for console rendering~~ — **resolved in T-011**: no, see `01-token-format.md` §6.1 and ADR-013 | done |
+
+---
+
+## 11. Reading Datalog back
+
+§2 gives every caveat three operations. This section adds the inverse of `to_datalog()`:
+recovering a `Caveat` from the text a token renders. It is implemented by
+`agentiam_core.datalog` and closes `STATUS.md` §3 gap 2.
+
+**Enforcement never depended on it, and still does not.** Biscuit's own authorizer evaluates
+the token's checks natively — that is what refuses a request, and a token received from a
+third party is enforced exactly as well as one this process minted. Reading the caveats back
+serves the three jobs that need them as *objects*:
+
+- naming the effective bound in the console and the identity tree (T-045),
+- naming the failing caveat on a decision record (§7, spec 09 §4),
+- reading the delegated agent's identity off its own block (spec 01 §6.1).
+
+The third is not optional: finding 13 in §9 says `authorizer.query` returns nothing for block
+facts, so `agent()`, `role()` and `requires_approval()` are unreachable except through
+`Biscuit.block_source(i)`.
+
+### 11.1 The input grammar is the renderer's, not the compiler's
+
+Measured against `biscuit-python` 1.x, and the distinction matters: `block_source()` does not
+return the text a block was built from. It **normalizes** — whitespace collapses to a fixed
+form and facts are grouped ahead of checks regardless of the order they were written in. So
+the grammar to recognize is biscuit's *output* grammar, which is small and canonical, and a
+recognizer proved against `to_datalog()`'s output alone would be proved against the wrong
+thing. Round-trip tests MUST go through a real biscuit.
+
+### 11.2 Normative rules
+
+A reader of block source MUST NOT trust it (TM-24). Three measured behaviours force the
+design:
+
+| # | Behaviour | Result |
+|---|---|---|
+| 14 | `block_source()` renders string values **unescaped** | confirmed — a `role` of ``x"); admin(true); role("y`` renders as four facts, two named `role` |
+| 15 | A `;` inside a string literal survives rendering | confirmed — so statements MUST NOT be split on `;` without tracking quote state |
+| 16 | A `\n` in a string literal renders as a real newline | confirmed — so statements MUST NOT be recovered line by line either |
+| 17 | Whitespace and statement order are normalized on render | confirmed — see §11.1 |
+
+- A reader MUST recognize only the closed set of shapes §4 defines, and MUST evaluate
+  nothing.
+- An unrecognized statement MUST be reported, never discarded. A caveat the reader cannot
+  read is a restriction the token has and the fold does not, so a bound computed without it
+  is an **upper** bound. Dropping it silently would overstate authority, which is the one
+  direction that matters; `TokenAuthority.complete` is how that is reported, and a consumer
+  displaying the bound MUST display it too.
+- An identity fact appearing more than once MUST refuse the field rather than pick one. Two
+  `role()` facts is finding 14's signature, and there is no sound way to choose. The caller
+  falls back to a value it derived itself.
+- A label that would fail `validate_label` MUST be refused on the way out as well as on the
+  way in. That is what extends TM-24's mitigation to a token this system did not mint.
+- Work MUST be bounded by a constant rather than by the input's size.
+
+**Injection cannot widen a bound**, and the reason is worth stating rather than assuming: the
+fold intersects and takes minima (spec 03 §3.3), so a statement smuggled inside a string can
+only add an apparent restriction or land in the unrecognized list. Neither raises a ceiling.
+The damage a crafted token can do is to its own holder.
+
+### 11.3 The authority block
+
+Block 0's grant facts (`mandate`, `task`, `scope`, `budget`, …) and the two checks that
+reference them — `check if operation($op), scope($op);` and `check if request_intent($h),
+intent($h);` — are recognized and are **not** caveats. They name the grant, which `verify()`
+already reads structurally through the authorizer.
+
+Its remaining checks (budget, depth, window, intent) *do* read back as caveats, which is what
+a per-block console view wants. A whole-chain fold MUST therefore take the grant from the
+verified token and caveats from blocks 1..n only, or it counts the mandate's own ceiling
+twice — harmless to a fold that takes minima, misleading in a list of what narrowed a chain.
+
+### 11.4 Two rendering asymmetries, both intentional
+
+- A two-sided `TimeWindow` compiles to two clauses and reads back as two one-sided windows.
+  That is the same split `attenuation.atoms()` already makes, and it is the same restriction.
+  Equality is therefore asserted **clause-wise**, not object-wise.
+- Numeric terms read back as `Decimal` regardless of whether the caveat was written with an
+  `int`. Both scale identically (§4.2), so the compiled text is unchanged — which is the
+  property that matters, and the one the round-trip tests assert.

@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
     from opentelemetry.trace import Span
 
-    from agentiam_core.models import Caveat, DecisionRecord
+    from agentiam_core.models import Caveat, CaveatRef, DecisionRecord
     from agentiam_core.tokens import RootKeySet, VerifiedToken
     from agentiam_pep.drift import FeatureExtractor
     from agentiam_pep.emitter import DecisionEmitter
@@ -269,12 +269,19 @@ class Pipeline:
 
         # --- steps 3-7: decide -----------------------------------------------------
         context = self._context_for(extraction, token, header_map)
+        # Resolved once and carried, not called per use. Both hooks read the token's block
+        # source in a deployed PEP (`datalog`, ADR-057), which costs ~150-230 µs on a depth-3
+        # chain — cheap once, and three times what it should be when the same answer is
+        # recomputed for the policy binding, the escalation and the record. It was three
+        # calls when `principal_for` only built a dataclass and the repetition did not
+        # matter; it does now.
+        principal = self._principal_for(token)
         decision = decide(
             token,
             context,
             caveats=self._caveats_for(token),
             revocation=self._revocation,  # type: ignore[arg-type]
-            policy=self._policy.bound(self._principal_for(token)),
+            policy=self._policy.bound(principal),
             budget=self._pool,
             drift=self._drift_oracle,
         )
@@ -286,7 +293,7 @@ class Pipeline:
                 escalation = await self._escalation_sink.create(
                     decision_id=decision_id,
                     task_id=token.task_id,
-                    agent_id=self._principal_for(token).agent_id,
+                    agent_id=principal.agent_id,
                     principal_id=token.principal_id,
                     intent_hash=context.request_intent,
                     requested_scopes=frozenset({context.operation}),
@@ -342,7 +349,9 @@ class Pipeline:
             detail=decision.reason_detail,
             reservation=reservation,
             started=started,
+            principal=principal,
             drift_score=decision.drift_score,
+            failing_caveat=decision.failing_caveat,
             context_for_features=context,
         )
 
@@ -508,7 +517,9 @@ class Pipeline:
         detail: str,
         reservation: Reservation | None,
         started: float,
+        principal: AgentPrincipal | None = None,
         drift_score: Decimal | None = None,
+        failing_caveat: CaveatRef | None = None,
         context_for_features: RequestContext | None = None,
     ) -> DecisionRecord:
         from agentiam_core.models import Budget, DecisionRecord
@@ -516,6 +527,11 @@ class Pipeline:
         before = self._pool.remaining(BudgetDimension.SPEND_BDT)
         spent = reservation.amount if reservation is not None else Decimal(0)
         features = self._feature_vector(context_for_features)
+        # Resolved by the caller wherever one exists, because reading it costs a block-source
+        # parse in a deployed PEP. `_record_and_refuse` runs before the decision, so it has
+        # none to pass and resolves here.
+        if principal is None:
+            principal = self._principal_for(token)
         return DecisionRecord(
             decision_id=decision_id,
             trace_id=trace_id,
@@ -524,7 +540,10 @@ class Pipeline:
             token_chain_ids=list(token.revocation_ids),
             principal_id=token.principal_id,
             task_id=token.task_id,
-            agent_id=self._principal_for(token).agent_id,
+            agent_id=principal.agent_id,
+            # The *parent-asserted* role, not the one Cedar evaluated. They are different
+            # claims and `AgentPrincipal` keeps them apart deliberately (ADR-057).
+            role=principal.declared_role,
             depth=token.depth,
             scope=extraction.scope,
             tool_id=extraction.tool,
@@ -532,6 +551,12 @@ class Pipeline:
             outcome=outcome,
             reason_code=reason,
             reason_detail=detail,
+            # Spec 09 §4: populated whenever the cause is a caveat. It was `None` on every
+            # record ever written, and for two reasons stacked — `decide()` had no caveat
+            # list to attribute against (there was no parser), *and* nothing carried the
+            # `CaveatRef` it returns onto the record. Supplying the list uncovered the
+            # second one; this closes it.
+            failing_caveat=failing_caveat,
             policy_version=self._policy.bundle.version or self._settings.policy_version_fallback,
             budget_before=Budget(spend_bdt=before + spent),
             budget_after=Budget(spend_bdt=before),

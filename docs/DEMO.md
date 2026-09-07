@@ -62,6 +62,24 @@ BIIN panels typically include 4 judge profiles. Know what each one wants to hear
 - Decision latency p99 (in-process, honestly separated from proxy overhead)
 - Lease protocol partition behaviour: bounded spend, then deny
 - Rollback procedure documented
+- **Separation of duties on approvals** — see below
+
+**Have this one ready; they will ask for it by name.** Approving an escalation is refused
+when the approver is the principal whose agent raised it: *"cannot approve their own agent's
+escalation"*. It sits alongside the narrowing-only invariant (EC-A09), and the pair is the
+answer to "so who watches the humans?":
+
+| The approver tries to… | Result |
+|---|---|
+| approve an escalation their own agent raised | **403** — separation of duties |
+| approve *more* than was requested (75,000 → 90,000) | **400** — "approval would grant amount 90000, above the requested 75000" |
+| add a scope that was not requested | **400** — "approval would grant ['invoice:write'], which was not requested" |
+| approve *less* (75,000 → 50,000) | **200** — narrowing is the only direction |
+| any of the above with no session | **401** |
+
+All five verified against a running control plane. The line to say: *"an approver can only
+ever narrow what was asked for, and never for their own agent — the elevated token is minted
+from the approval, so there is no path where a human grants more than the request."*
 
 ### 3.2 Payments Executive
 **Cares about:** mandate ceilings, hard stops, reconciliation, chain of custody for a disputed transaction.

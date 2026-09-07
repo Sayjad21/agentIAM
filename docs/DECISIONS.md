@@ -3477,3 +3477,215 @@ step's name, all of them found by either reproducing the exact CI environment or
 running the exact pinned tool version against the exact manifests. `security-scan` failing
 silently for three tickets did not just hide one bug; it hid a whole scanning pass that had
 never executed.
+
+
+---
+
+## ADR-057 — Reading a token's Datalog back: a recognizer, not a parser; and the parent's role is not the organization's
+
+**Status:** accepted · **Closes:** `STATUS.md` §3 gap 2, TODO items 2 and 4 ·
+**Implements:** spec 02 §11, spec 01 §6.1, spec 09 §4 and §8.1
+
+### The context
+
+Gap 2 said there was no way to turn a token's Datalog back into `Caveat` objects. Three
+things were waiting on it: the console's effective bound for a token it did not mint, spec 09
+§4's `failing_caveat`, and real agent identities in the identity tree. Enforcement was *not*
+waiting on it — biscuit's own authorizer evaluates the token's checks natively, which is what
+closed the enforcement half by a different route (TODO item 1).
+
+Two prior findings shaped the whole design and are worth restating, because each one turned a
+plausible implementation into a wrong one.
+
+### 1. The input grammar is the renderer's, not the compiler's
+
+The obvious implementation tests `parse(to_datalog(caveat)) == caveat`. That tests this module
+against the wrong input. The text it actually receives comes from `Biscuit.block_source(i)`,
+and measured against the installed `biscuit-python`, that method **normalizes**: whitespace
+collapses to a fixed form, and facts are grouped ahead of checks regardless of the order the
+block was built in.
+
+That is good news — the grammar to recognize is small and canonical — but it is only known by
+checking. Every round-trip test therefore mints, attenuates, verifies and reads back through a
+real biscuit. Recorded as spec 02 §11.1, and as finding 17 in §11.2.
+
+### 2. `block_source()` escapes nothing, so a string is not a leaf
+
+TM-24 recorded this and T-011 mitigated it at the *write* side: `validate_label` refuses
+quotes, backslashes, controls and bidi marks in `agent_id`, `role` and `principal_id`. Re-run
+against the installed library while building this: a `role` of ``x"); admin(true); role("y``
+renders as block text that re-parses into four facts, two of them named `role`.
+
+Two further behaviours, measured here and new to the record: a `;` inside a string literal
+survives rendering, and a `\n` in a literal renders as a **real newline**. So statements can
+be split neither on `;` nor line by line. `_statements()` tracks quote state instead.
+
+**The decisions that follow from it, and the one that matters most:**
+
+- **Recognize, never parse-and-trust.** Every statement is matched against the closed set of
+  shapes spec 02 §4 defines. Nothing is evaluated.
+- **An unrecognized statement is reported, never dropped.** This is the load-bearing one. A
+  caveat this build cannot read is a restriction the token *has* and the fold does not, so a
+  bound computed without it is an **upper** bound. Dropping it silently would overstate
+  authority — the one direction that matters for a display path — so `TokenAuthority.complete`
+  carries it and a consumer must render it.
+- **A repeated identity fact refuses the field.** Two `role()` facts is finding 14's exact
+  signature and there is no sound way to choose between them, so `role` comes back `None` and
+  the caller falls back to something it derived. Same for `agent`.
+- **A label that would fail `validate_label` is refused on the way out too.** That is what
+  extends the T-011 mitigation to a token this system did not mint.
+
+**Injection cannot widen a bound**, and it is worth being able to say why rather than hoping:
+the fold intersects and takes minima, so a statement smuggled inside a string can only add an
+apparent restriction or land in the unrecognized list. Neither raises a ceiling. The damage a
+crafted token can do is to its own holder.
+
+### 3. The rejected alternative: sourcing Cedar's `principal.role` from the token
+
+This is the decision this ADR exists for, and it looked like the obvious completion of TODO
+item 4 — "give agents real identities" reads as *read `agent()` and `role()` off the block and
+use them*. It is wrong for `role`, and the spec already said so in a sentence that is easy to
+read past: spec 01 §6.1's table calls `role(name)` **"Human-readable role, for the console and
+audit."**
+
+The demo's own corpus bundle makes the consequence concrete:
+
+```cedar
+permit(principal, action == Action::"invoice:write", resource)
+when { principal.role == "senior" };
+
+forbid(principal, action, resource)
+when { resource.sensitivity == "critical" && principal.role != "senior" };
+```
+
+A block's `role` is written by the **delegating parent**. Sourcing `principal.role` from it
+lets any agent that can attenuate name its own child `"senior"`, which both grants
+`invoice:write` and escapes a `forbid` on critical resources — `payment_api` among them. That
+is exactly the `declared_depth` mistake ADR-005 exists to prevent, one field over, and against
+a policy the demo actually ships.
+
+**So the two claims are kept apart.** `AgentPrincipal.role` is what the *organization* says an
+agent is: configuration, and the only thing Cedar sees. `AgentPrincipal.declared_role` is the
+parent's claim, and reaches `DecisionRecord.role`, the console and the identity tree — the use
+spec 01 §6.1 assigns it. A test reads the `Agent` entity at the FFI boundary and asserts its
+attribute set exactly, so adding `declared_role` to it — the obvious tidy-up for someone who
+sees two role fields and assumes one is redundant — fails a test rather than shipping.
+
+**`agent_id` is parent-asserted in the same way and is used anyway**, because it is the only
+place a sub-agent's identity exists; there is nothing else to read. What makes that safe is
+that the name is a label on a node the chain already identifies cryptographically —
+`token_chain_ids` is content-addressed, so a lying `agent_id` is still pinned to one specific
+block. It reaches the Cedar entity uid, so a block that names it ambiguously falls back to the
+depth-derived name rather than letting the crafted block choose.
+
+### What this uncovered
+
+**`failing_caveat` was blocked twice, and only one block was recorded.** Spec 09 §4 said the
+missing parser was why the field was always `None`. Supplying the caveat list showed that the
+pipeline also never carried the `CaveatRef` `decide()` returns onto the `DecisionRecord` at
+all. Verified live afterwards: five caveat-caused denials in the demo scenario, each naming
+its caveat kind and chain position; the two non-caveat denials correctly naming none. A
+limitation that hides a second bug behind it is worth the note — no test could have found the
+second one without first inventing the parser.
+
+**The SSE tree diff collapsed siblings.** `build_tree_diff` keyed on
+`(agent_id, block_ids[0])`, and `block_ids` is root-first — so the second half is the *root*
+block, identical for every node in a task, and `agent_id` was carrying the key alone. With the
+old `agt-depth-{N}` naming, three depth-1 siblings produced **one** diff entry: the stream
+animated one sibling in and dropped two. The initial `snapshot` event sends the full list, so
+the first paint was right and only later updates were wrong, which is how it survived last
+session's live check of the page. Real names fix the symptom; the key now uses the *terminal*
+block — the same key the console's d3 tree already uses, and for the same reason (block ids
+are content-addressed, so uniqueness is structural).
+
+### Verified live
+
+Full demo stack, `down -v` → `build` → `up --wait`: healthy in 47 s (NFR-8 budget 90 s), then
+the 13-call scenario, still reaching all four refusal layers.
+
+`GET /v1/tree/{task}` before this returned six nodes of which three shared the name
+`agt-depth-1`, every one with `role: "unknown"`. After:
+
+| agent_id | role | depth |
+|---|---|---|
+| `agt-depth-0` | unknown | 0 |
+| `agt-doc-reader` | reader | 1 |
+| `agt-negotiator` | worker | 1 |
+| `agt-payer` | payer | 1 |
+| `agt-settlement` | payer | 2 |
+| `agt-subcontractor` | payer | 3 |
+
+`agt-depth-0` and its `unknown` role are **correct, not a shortfall**: a root token has no
+attenuation block, so it declares no agent and no role. The fallback says "not stated" rather
+than inventing a name, which is the whole reason those fields are optional.
+
+
+---
+
+## ADR-058 — A duplicate escalation is a 409, and is not absorbed the way a duplicate revoke is
+
+**Status:** accepted · **Closes:** TODO item 16
+
+`escalations.decision_id` is unique — one decision raises at most one escalation, which is
+right — but a second `POST /v1/escalations` for the same decision surfaced the
+`UniqueViolationError` as an unhandled **500** with a SQLAlchemy traceback in the log. Found
+while verifying EC-A09 (TODO item 14): the second run of the check reused a decision id from
+the first.
+
+**409, because the repository already answers this shape that way.** `app._refuse_activation`
+returns 409 for a policy activation that is well-formed and permitted but conflicts with
+current state, citing ADR-030 and spec 05 §5.5; EC-A10's losing approver gets 409 for the same
+reason. A duplicate escalation is the same case.
+
+**The alternative, considered and rejected: absorb it, the way a repeat revoke is absorbed.**
+Spec 07 §9 makes `POST /v1/revocations` idempotent on `block_id` — a second revoke returns the
+existing row. That is correct *there* because a repeat revoke asks for a state the table
+already holds, so returning the existing row answers the caller's question truthfully. It is
+wrong here: a second escalation may name different scopes, a different amount and a different
+reason, and returning the first one as though it answered this request would report a grant
+nobody asked for. So it errors, and names the escalation that is in the way — both in the
+message and as `existing_escalation_id` in the body, because reading it is the caller's next
+action.
+
+**Which constraint fired is inferred from what is in the table, not from the driver's
+message.** After a failed insert, `create` looks the `decision_id` up: a row means
+`uq_escalations_decision_id`, and anything else re-raises unchanged rather than being reported
+as a duplicate it is not. String-matching a constraint name out of an asyncpg error wrapped by
+SQLAlchemy's adapter would couple this to two layers' formatting, and the lookup costs nothing
+on the path that succeeds.
+
+**The other `POST` routes were checked while there**, as the item asked. `POST
+/v1/revocations` is already idempotent by design (above). `POST /v1/audit/verify` and the two
+`/policy/*` console routes create nothing. `POST .../approve` and `.../deny` are guarded by
+`SELECT ... FOR UPDATE` and already map their conflict to 409. So this was the only one.
+
+### ADR-057 addendum — what reading block source costs, and paying it once
+
+The recognizer runs on the PEP's request path, so its cost is a design constraint rather than
+a footnote. Measured after building it (CPython 3.12), and two things came out of measuring
+rather than assuming.
+
+**The FFI was not the expensive part.** `Biscuit.block_source()` across a four-block chain is
+~42 µs; the recognizer over the same text was ~180 µs. Profiling put 54% of that in
+`_statements()` — the character-by-character loop tracking quote state, at ~2.5M list appends
+per thousand parses. Splitting on `"` instead is exactly equivalent (every quote toggles, so
+odd-indexed segments are the ones inside a literal) and does the work in C. A full token parse
+went 280 → 227 µs at depth 3, and `_statements` from 54% of the time to 15%.
+
+**The bigger cost was calling it at all often.** `Pipeline.authorize` called `_principal_for`
+three times — to bind the policy, to open an escalation, and to build the record. That was
+free when it built a dataclass and is three block-source parses now. It resolves once and is
+carried; `TestThePrincipalIsResolvedOncePerRequest` counts the calls, because the regression is
+one `self._principal_for(token)` appearing somewhere new.
+
+Depth-3 request: ~450 µs for one identity read plus one caveat read, against NFR-2's 8 ms p99.
+The demo stack measures 1.4 ms median end to end, 1.8 ms worst. **NFR-1 is untouched** — the
+parse is in the pipeline, not inside `decide()`, which is exactly why
+`test_the_whole_decision`'s `p99 < 1000 µs` assertion neither moved nor would have caught a
+regression here.
+
+**And the gap that leaves, filed as TODO item 20 rather than papered over:** `serve_pep.py` —
+the harness every number in `performance.md` comes from — hardcodes its principal and passes
+no caveats, so the benchmarked PEP and the deployed PEP no longer do the same work per
+request. Fixing that invalidates the committed benchmark JSON and needs a real re-measurement
+run, which is a benchmarking pass rather than a side effect of this one.
