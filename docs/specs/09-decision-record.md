@@ -248,3 +248,21 @@ Every non-2xx response the PEP originates carries the same shape:
 `decision_id` is what ties the refusal to the audit record, so *why was I denied?* is answerable
 from the client's side without access to the ledger. `detail` names the failing caveat or policy
 statement (§4) and **never** an argument value (§8).
+
+**`decision_id` is absent when there is no record to tie to.** A refusal that happens *before*
+the token verifies — a missing or unparseable credential, an unmapped route — writes nothing to
+the audit chain, and cannot: a `DecisionRecord` requires `principal_id`, `task_id`, `agent_id`,
+`depth` and `token_chain_ids`, every one of which is read off a **verified** token. There is no
+truthful value for any of them, and inventing one would put an unauthenticated caller's guess
+into the ledger. Recording them would also let anyone who can reach the PEP grow the hash chain
+without presenting a credential, which is a denial-of-service the chain has no defence against.
+
+So those responses carry `reason_code`, `detail` and `trace_id`, and **omit `decision_id`**.
+Emitting one anyway is worse than omitting it: it is an identifier the client can quote to an
+operator who will then find nothing, which reads as a *missing* record rather than an absent
+one. `trace_id` still correlates the refusal with the PEP's own logs and spans, which is the
+question a client can actually get answered here.
+
+Verified, and it is the reason this paragraph exists: an unauthenticated request returned
+`decision_id: b67e507f-…`, and `GET /v1/audit/search?decision_id=b67e507f-…` returned
+`{"results": [], "total": 0}` with the chain length unchanged.

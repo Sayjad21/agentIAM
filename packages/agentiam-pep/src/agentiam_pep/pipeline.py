@@ -128,7 +128,13 @@ class Refused:
     status: int
     reason_code: ReasonCode
     detail: str
-    decision_id: uuid.UUID
+    #: `None` for a refusal that never reached the audit chain — spec 09 §11.3. Everything
+    #: refused *before* the token verifies is in that class: a `DecisionRecord` needs
+    #: `principal_id`, `task_id`, `agent_id`, `depth` and `token_chain_ids`, all read off a
+    #: verified token, so there is nothing truthful to record and nothing for an id to
+    #: point at. Handing one back anyway gives the client an identifier an operator will
+    #: look up and not find, which reads as a *lost* record rather than an absent one.
+    decision_id: uuid.UUID | None
     trace_id: str
     #: Set only for `APPROVAL_REQUIRED` / `DRIFT_ESCALATION` with a sink configured — spec
     #: 09 §11: "the escalation id travels in the body, because a client that cannot see it
@@ -140,9 +146,10 @@ class Refused:
         body = {
             "reason_code": self.reason_code.value,
             "detail": self.detail,
-            "decision_id": str(self.decision_id),
             "trace_id": self.trace_id,
         }
+        if self.decision_id is not None:
+            body["decision_id"] = str(self.decision_id)
         if self.escalation_id is not None:
             body["escalation_id"] = str(self.escalation_id)
         return body
@@ -442,11 +449,19 @@ class Pipeline:
     def _refuse(
         self, reason: ReasonCode, detail: str, decision_id: uuid.UUID, trace_id: str
     ) -> Refused:
+        """Refuse *without* writing to the audit chain — spec 09 §11.3.
+
+        `decision_id` is accepted and deliberately dropped. It stays in the signature
+        because the caller has one in hand and the logs and spans still use it; what it
+        must not do is reach the client, where it would name a record that does not exist
+        and cannot (see `Refused.decision_id`). `_record_and_refuse` is the path that has
+        a verified token and therefore something to record.
+        """
         return Refused(
             status=status_for(reason),
             reason_code=reason,
             detail=detail,
-            decision_id=decision_id,
+            decision_id=None,
             trace_id=trace_id,
         )
 

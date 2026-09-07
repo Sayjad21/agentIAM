@@ -411,14 +411,47 @@ class TestRefusals:
         assert isinstance(result, Refused)
         assert result.status == 429
 
-    async def test_every_refusal_carries_a_decision_id(self) -> None:
+    async def test_a_recorded_refusal_carries_a_decision_id(self) -> None:
         """Spec 09 §11.3 — *why was I denied?* must be answerable from the client's side."""
+        pipeline, _, _ = await a_pipeline()
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate(scopes=frozenset()))
+        )
+        assert isinstance(result, Refused)
+        body = result.body()
+        assert body["decision_id"], "a refusal that reached the ledger must name its record"
+        assert body["reason_code"] == result.reason_code.value
+
+    async def test_a_refusal_before_verification_omits_the_decision_id(self) -> None:
+        """Spec 09 §11.3. There is no record, so there must be no id pointing at one.
+
+        A `DecisionRecord` needs `principal_id`, `task_id`, `agent_id`, `depth` and
+        `token_chain_ids` — all read off a *verified* token — so a missing credential
+        cannot be recorded, and recording it would let anyone who can reach the PEP grow
+        the hash chain without presenting one.
+
+        Measured before this changed: an unauthenticated request returned
+        `decision_id: b67e507f-…`, and searching the audit chain for it returned
+        `{"results": [], "total": 0}`. The client had an identifier an operator could only
+        fail to find.
+        """
         pipeline, _, _ = await a_pipeline()
         result = await pipeline.authorize(method="GET", path="/invoices/inv_001")
         assert isinstance(result, Refused)
+
         body = result.body()
-        assert body["decision_id"]
+        assert "decision_id" not in body
+        # `trace_id` survives: it is the question a client can actually get answered here,
+        # correlating the refusal with the PEP's own logs and spans.
+        assert body["trace_id"]
         assert body["reason_code"] == result.reason_code.value
+
+    async def test_an_unmapped_route_omits_it_too(self) -> None:
+        """Routing is decided at step 1, before there is a token to record anything about."""
+        pipeline, _, _ = await a_pipeline()
+        result = await pipeline.authorize(method="GET", path="/nope", headers=bearer(a_mandate()))
+        assert isinstance(result, Refused)
+        assert "decision_id" not in result.body()
 
 
 class TestEscalation:
