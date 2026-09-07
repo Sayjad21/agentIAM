@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down demo-up demo-down logs ps test test-unit test-integration \
+.PHONY: help install up down demo-up demo-seed demo-down logs ps test test-unit \
+        test-integration \
         test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
         benchmarks evidence
 
@@ -24,6 +25,12 @@ down: ## Stop infrastructure, keeping volumes
 # T-056 asks for; NFR-8 (<90s) is measured against this in the `demo-stack` CI job.
 demo-up: ## Build and start the full demo stack (control plane, PEP, tools) and wait healthy
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --wait --build
+
+# The tokens live in the `demo-secrets` volume, written by the `seed` one-shot service
+# during `demo-up` — not on the host — so this runs inside a container that mounts it.
+# `--no-deps` because everything it needs is already up by the time you run this.
+demo-seed: ## Drive the demo scenario through a running stack, so the console has content (T-057)
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080
 
 demo-down: ## Stop the demo stack, keeping volumes
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml down

@@ -59,6 +59,26 @@ services:
       postgres:
         condition: service_healthy
 
+  # T-057. Between `migrate` (schema) and `pep` (which binds its mandate at boot and primes
+  # its lease pool during startup, so the budget row has to exist first). Same one-shot
+  # shape as `bootstrap`, and idempotent for the same reason: compose re-runs these on
+  # every `up`.
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentiam-seed
+    volumes:
+      - demo-secrets:/secrets
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
+    command: ["python", "scripts/seed_demo.py", "--out", "/secrets"]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
   tools:
     build:
       context: .
@@ -126,10 +146,11 @@ services:
       AGENTIAM_PEP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
       AGENTIAM_PEP_REDIS_URL: redis://redis:6379/0
       AGENTIAM_PEP_CONTROL_PLANE_URL: http://controlplane:8000
-      # The PEP is scoped to exactly one mandate (ADR-056, STATUS gap 25). T-057's demo
-      # script is what creates a real one via the control plane's issuance path; this
-      # placeholder lets the container start and prove the pipeline wiring on its own.
-      AGENTIAM_PEP_MANDATE_ID: ${AGENTIAM_PEP_MANDATE_ID:-00000000-0000-0000-0000-000000000000}
+      # The PEP is scoped to exactly one mandate (ADR-056, STATUS gap 25), and it binds it
+      # at boot — so the id has to be known before `seed` runs, which is why
+      # `scripts/seed_demo.DEMO_MANDATE_ID` is a fixed constant rather than a fresh uuid.
+      # The two must agree; `tests/unit/test_demo_compose.py` checks that they do.
+      AGENTIAM_PEP_MANDATE_ID: ${AGENTIAM_PEP_MANDATE_ID:-d0d0d0d0-0000-4000-8000-000000000001}
       AGENTIAM_PEP_ID: pep-1
       AGENTIAM_PEP_POLICY_BUNDLE_PATH: /secrets/policy_bundle.json
       AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH: /secrets/policy_bundle.sig
@@ -143,6 +164,11 @@ services:
       bootstrap:
         condition: service_completed_successfully
       migrate:
+        condition: service_completed_successfully
+      # Without this the PEP primes before the pool row exists, logs the warning, and
+      # refuses every budgeted request until a top-up — which is exactly the empty-console
+      # state T-057 exists to end.
+      seed:
         condition: service_completed_successfully
       redis:
         condition: service_healthy

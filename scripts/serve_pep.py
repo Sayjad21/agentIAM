@@ -65,6 +65,19 @@ ROUTES: Final[dict[str, Any]] = {
             "drift_mode": "off",
         },
         {
+            # `vendor:read` was granted by the corpus policy, permitted by the demo
+            # mandate and served by the stub tools app, and mapped by nothing — so a
+            # sub-agent holding only that scope could not make a single call, and never
+            # appeared in the identity tree, which is derived from decisions. Added for
+            # T-057; the load generator does not touch it, so PB-2/NFR-2 are unaffected.
+            "method": "GET",
+            "path": "/vendors/{id}",
+            "scope": "vendor:read",
+            "tool": "vendor_api",
+            "args": {"vendor.id": "path.id"},
+            "drift_mode": "off",
+        },
+        {
             "method": "POST",
             "path": "/payments",
             "scope": "payment:initiate",

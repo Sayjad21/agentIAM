@@ -16,7 +16,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-down', 'logs', 'ps',
+    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-down', 'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
                  'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'benchmarks', 'evidence',
                  'clean', 'nuke')]
@@ -63,6 +63,7 @@ switch ($Target) {
             'cov'              = 'Run tests with a coverage report'
             'security'         = 'Run bandit, pip-audit, the SBOM check, and the secret-scan test'
             'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
+            'demo-seed'        = 'Drive the demo scenario through a running stack (T-057)'
             'benchmarks'       = 'Regenerate docs/benchmarks/performance.md from committed JSON'
             'evidence'         = 'Regenerate docs/evidence/evidence-pack.html (T-055)'
             'clean'            = 'Remove caches and build artifacts'
@@ -146,6 +147,15 @@ switch ($Target) {
         Invoke-Step @('uv', 'run', 'pytest', 'tests/security/test_secret_scanning.py')
     }
     'sbom' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_sbom.py', '--write') }
+    'demo-seed' {
+        # The tokens live in the `demo-secrets` volume, not on the host, so this runs
+        # inside a container that mounts it.
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
+                      'python', 'scripts/seed_demo.py', '--drive',
+                      '--tokens', '/secrets/demo-tokens.json',
+                      '--pep-url', 'http://pep:8080')
+    }
     'benchmarks' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_benchmark_results.py') }
     'evidence' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_evidence_pack.py') }
     'clean' {

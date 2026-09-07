@@ -136,31 +136,57 @@ Raising the lease is the operator's lever until then, which is what makes `DEMO.
 reachable again. It is a real trade — more stranded budget on a crash — and the variable's
 documentation says so rather than presenting it as free.
 
-### 7. Build T-057's demo seed script
+### ~~7. Build T-057's demo seed script~~ — **DONE**
 
-There is no committed way to get the system into a state where any of the console pages
-show data. Every page renders correctly and is empty on a fresh install, which is what made
-the two P0 defects invisible until this pass. The scenario used for the test report lived
-in a scratchpad and is not reproducible from the repo.
+`scripts/seed_demo.py`, in two phases because the PEP binds its mandate at boot (ADR-056):
 
-- **Do:** one command that creates a mandate and budget, mints a root token, attenuates a
-  realistic delegation tree, and drives enough traffic to populate decisions, budgets,
-  audit, and the tree.
-- **Done when:** `make demo-seed` (or equivalent) leaves every console page showing real
-  data, and `DEMO.md`'s beats can be walked without hand-built tokens.
+- **`--out /secrets`** runs as a one-shot compose service between `migrate` and `pep`.
+  Creates the pool, mints the chain, writes the tokens beside the bootstrap credentials.
+  Idempotent, since compose re-runs one-shot services on every `up`.
+- **`--drive`** sends the scenario's traffic after the stack is healthy. `make demo-seed`.
 
----
+**The mandate id is a fixed constant.** Compose has to name it in the PEP's environment
+before the seeder has run, so the two must agree; `test_demo_compose.py` checks that they
+do. The old all-zeros placeholder is gone, and the PEP now `depends_on` the seed — without
+that ordering it primes against a pool that does not exist, warns, and refuses every
+budgeted request, which is precisely the empty console this item exists to end.
 
-## P2 — correctness and operations debt
+Measured on a fresh `down -v` → `build` → `up --wait`: **stack healthy in 26 s** (NFR-8's
+budget is 90 s), then 12 calls producing **7 allows, 3 SCOPE_ATTENUATED_AWAY, 2
+BUDGET_EXHAUSTED_CAVEAT, 1 POLICY_DENIED**. Afterwards: 6 nodes in the identity tree
+(root → three siblings → depth 2 → depth 3), `committed` moving on the budget dashboard,
+and a 12-record audit chain that verifies.
 
-### 8. Test that the deployed PEP primes its lease pool
+Two things the scenario forced out that are worth recording:
+
+- **`vendor:read` was unroutable.** The corpus policy permits it, the demo mandate grants
+  it, the stub tools app serves `/vendors/{id}` — and `serve_pep.ROUTES` mapped nothing to
+  it. So the negotiator could not make a single call, and never appeared in the tree, which
+  is derived from decisions. Route added; the load generator does not touch it, so PB-2 and
+  NFR-2 are unaffected.
+- **A depth-3 agent is what produces a policy refusal.** The mandate's ceiling and the
+  bundle's are both 500,000, so no *amount* can be refused by one and not the other — a
+  line captioned "the policy forbids" was actually being refused by the token's own budget
+  check. The corpus bundle's `principal.depth <= 2` is the only condition a valid token
+  cannot also violate on its own, so the chain now runs one level past it. A test asserts
+  the scenario keeps reaching all four refusal layers.
+
+### ~~8. Test that the deployed PEP primes its lease pool~~ — **DONE**
 
 The priming bug (fixed in `5c1f845`) was invisible to the suite:
-`tests/unit/test_pep_service.py` passed identically before and after — 22 either way. The
-fix is currently as untested as the bug was.
+`tests/unit/test_pep_service.py` passed identically before and after — 22 either way,
+because `Service` exposed the revocation set, the policy engine and the drift oracle but
+not the pool. Nothing here could see the thing that was broken.
 
-- **Done when:** a test asserts a service built by `build_service()` holds a lease for
-  `spend_bdt` after startup, and fails if the `prime()` call is removed.
+Six tests, and `Service` now exposes the pool — which is what its own docstring says it is
+for. Verified by removing the `prime()` call and re-running: two of them fail.
+
+Two of the six arrived later, from a real regression. `prime()` **raises** as well as
+returning `False` — `ACQUIRE` does `scalar_one()` on the budget row, so a mandate with no
+row raises `NoResultFound` — and handling only the `False` return turned that into a boot
+failure. `docker-compose.demo.yml` points the PEP at exactly such a placeholder mandate on
+purpose, so the container stopped starting and CI's demo-stack job timed out. Fixed in
+`c3ccfa4`; both exception paths are now covered.
 
 ### ~~9. Schedule `reap()`~~ — **DONE** (STATUS gap 27)
 

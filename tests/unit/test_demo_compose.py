@@ -40,6 +40,7 @@ class TestComposeFile:
         assert set(compose["services"]) == {
             "bootstrap",
             "migrate",
+            "seed",
             "tools",
             "controlplane",
             "pep",
@@ -184,3 +185,37 @@ class TestDockerfile:
         ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
         for pattern in (".venv/", "tests/", ".git/", "__pycache__"):
             assert pattern in ignore, pattern
+
+
+class TestSeedService:
+    """T-057's one-shot seeder, and the constant it has to share with the PEP."""
+
+    def test_the_pep_binds_the_mandate_the_seeder_creates(self) -> None:
+        """The one thing that cannot be checked at runtime without breaking the demo.
+
+        The PEP binds its mandate at boot (ADR-056) and primes its lease pool there, so
+        compose has to name the mandate id *before* the seeder has run. That forces a
+        shared constant, and a shared constant that drifts fails silently: the PEP would
+        prime against a mandate with no pool, log a warning, and refuse every budgeted
+        request — the empty-console state T-057 exists to end.
+        """
+        from scripts.seed_demo import DEMO_MANDATE_ID
+
+        configured = _compose()["services"]["pep"]["environment"]["AGENTIAM_PEP_MANDATE_ID"]
+        assert str(DEMO_MANDATE_ID) in configured
+
+    def test_the_pep_waits_for_the_seed(self) -> None:
+        """Ordering is the whole point: priming before the pool row exists refuses everything."""
+        pep = _compose()["services"]["pep"]
+        assert pep["depends_on"]["seed"]["condition"] == "service_completed_successfully"
+
+    def test_the_seed_waits_for_the_schema_and_the_credentials(self) -> None:
+        """It writes a budget row and mints against the bootstrap root key; it needs both."""
+        seed = _compose()["services"]["seed"]
+        assert seed["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
+        assert seed["depends_on"]["bootstrap"]["condition"] == "service_completed_successfully"
+
+    def test_it_shares_the_secrets_volume_with_the_pep(self) -> None:
+        """The tokens file lands beside the bootstrap credentials, for `--drive` to read."""
+        seed = _compose()["services"]["seed"]
+        assert any(str(v).startswith("demo-secrets:") for v in seed["volumes"])
