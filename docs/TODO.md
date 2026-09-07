@@ -689,3 +689,152 @@ failing test is not identifiable from outside. `gh` is not installed on the deve
 - **Worth considering either way:** `pytest -p no:randomly` appears throughout this session's
   local commands and does nothing, since the plugin is absent. Either install it — order
   dependence is a real class of bug and item 19 was one — or stop passing the flag.
+
+---
+
+## Found in the second manual pass (2026-09-07)
+
+A hand-driven pass over the running demo stack — real biscuits, real Postgres, real Cedar,
+real Chrome. 33 control-plane cases, 18 PEP cases, 7 console pages, plus revocation, audit,
+custody, SSE, metrics and the activation gate. Written up in
+[`manual-test-report.md`](manual-test-report.md) §8. Five anomalies; the first is critical.
+
+### ~~24. The PEP stops authorizing every budgeted request 60 seconds after boot~~ — **FIXED**
+
+**Critical, and fixed in this pass.** The deployed PEP primed one lease at startup and never
+renewed it. Sixty seconds later — the default TTL — every request that spends anything was
+refused `LEASE_UNAVAILABLE`, permanently. Reads still worked, so the service looked alive.
+
+**Observed on the live stack** before the fix, after bringing it up and reading the console
+for a couple of minutes:
+
+```
+POST /proxy/payments  {"amount":"100.0000"}   ->  429 LEASE_UNAVAILABLE   (x8, over 16s)
+select … from leases  ->  1 row: granted 5000.0000, settled 0.0000, state 'expired'
+select … from budgets ->  total 500000, committed 0, leased 0
+```
+
+**This is why the demo appeared to work**: `make demo-seed` runs within seconds of
+`up --wait`, inside the first TTL. A judge who brings the stack up, reads the console, then
+tries a payment would have seen every payment refused.
+
+**Mechanism.** `check()` correctly refuses an expired lease and calls
+`_maybe_schedule_topup`, which was guarded by
+
+```python
+if held.lease.remaining_local > held.lease.granted * self._settings.low_water:
+    return
+```
+
+The lease expired **unspent**, so `remaining_local` was still the full 5,000 against a
+low-water mark of 1,250 — the guard returned and no ACQUIRE was ever issued. A lease leaves
+service two ways, by draining or by ageing out, and the guard only asked about the first. The
+comment on `check()`'s refusal branch describes exactly this closed loop and says it was
+"measured, then fixed here"; that fix covered the drained half and fell straight through the
+expiry half.
+
+**The fix** adds the same "no longer usable" test `check()` already refuses on, so the two
+cannot disagree about whether a lease is worth holding. Replacing an expired lease is safe:
+`_acquire` RELEASEs the old one and the ledger's `release()` is a no-op for a lease already in
+a terminal state (spec 04 §3).
+
+**Verified live on a rebuilt stack** — idle 75 s past the TTL, spending nothing:
+
+```
+attempt 1: 429 LEASE_UNAVAILABLE      <- correct: at that instant there is no usable lease
+attempt 2: 200 OK                     <- the refusal scheduled the ACQUIRE
+leases:  granted 5000.0000, settled 100.0000, state 'active'   (a new row)
+budgets: committed 1700.0000, leased 4900.0000                 (reconciles exactly)
+```
+
+Five tests, and the first refusal is asserted as *correct* rather than papered over —
+refusing once is right, refusing forever is the defect. Verified by reverting the guard: four
+of the five fail.
+
+### 25. The SDK's own intent header can never match a demo-minted mandate
+
+`scripts/seed_demo.py:109` mints `intent_hash=hashlib.sha256(DEMO_INTENT.encode()).hexdigest()`
+— a plain SHA-256 of the text. Spec 06 §1 says the intent is bound "using canonical JSON
+serialization and SHA-256 (`agentiam_core.hashing.canonical_json`)", and `PLAN.md` §493 says
+"sha256 of canonicalized description". The PEP agrees with the spec: given
+`AgentIAM-Task-Intent` it computes `hash_object(text)`.
+
+So the two disagree, and the SDK is on the losing side — `client.py:118` sets exactly that
+header. **Observed, same token, same text:**
+
+```
+no intent header                              -> 200 OK       (token's own hash is used)
+AgentIAM-Task-Intent: <the exact minted text> -> 403 INTENT_MISMATCH
+x-agentiam-intent: sha256(text)               -> 200 OK
+```
+
+An agent using the official SDK, asserting the correct intent, is refused every call. The
+demo only works because `seed_demo.py --drive` sends neither header.
+
+`seed_demo.py` is the only place in the tree computing an intent hash this way — everything
+else uses `hash_object`. So the seed is the deviation, not the spec.
+
+- **Done when:** the seed mints with `hash_object`, an SDK client asserting the mandate's own
+  intent text is authorized, and something asserts the two agree so they cannot drift again.
+
+### 26. `email:send` is unroutable, so a whole policy branch is unreachable
+
+The stub tools serve `POST /email/send`; the corpus policy has
+`permit(… "email:send" …) when { !resource.is_external }` plus a `forbid` on critical
+resources; the tool catalogue describes `email_internal` and `email_external` with
+`is_external` set. `serve_pep.ROUTES` maps nothing to `email:send`, so a call returns
+`401 MALFORMED_REQUEST` — an unmapped route.
+
+Same shape as the `vendor:read` gap item 7 found and fixed. Lower severity: the demo mandate
+does not grant `email:send`, so nothing can reach it today and no demo beat depends on it.
+What it costs is that `!resource.is_external` — the one policy condition that keys on a
+*resource* attribute — and the `external_emails` budget dimension have no end-to-end path.
+
+- **Done when:** a route maps `email:send` to the stub's endpoint, or the corpus and tool
+  catalogue stop describing a scope the deployment cannot route. Whichever is chosen, the
+  three places that mention email should agree.
+
+### 27. Chain-of-custody on an unknown task returns 200 with an empty list
+
+`PLAN.md` §11.7 EC-A05: *"Custody query on an unknown action | 404 with a clear message."*
+
+```
+GET /v1/audit/custody/00000000-0000-4000-8000-000000000000
+  -> 200 {"task_id":"00000000-…","entries":[]}
+```
+
+For a real task it is correct — 55 entries, in order. Only the miss is wrong, and it is the
+same shape as item 10: handing the caller something that looks like an answer and resolves to
+nothing. An operator cannot tell "this task did nothing" from "this task does not exist".
+
+- **Note:** the endpoint keys on **task_id**, not the decision id its name suggests. Passing a
+  decision id also yields `200 {"entries":[]}` — the same indistinguishable answer, which is
+  how the confusion survives.
+- **Done when:** an unknown task is a 404 naming what was not found, a real task is unchanged,
+  and a test covers both.
+
+### 28. `DEMO.md`'s F-2 drill scripts a failsafe that does not exist
+
+F-2 says: *"Ollama slow or down → Template fallback engages automatically (T-031). The flow is
+identical. Narrate: 'the template fallback just activated — this is a production-grade
+failsafe.'"*
+
+**T-031 is deferred**, and `STATUS.md` line 112 says so plainly: *"F-2 has no implementation
+while it is deferred."* `tests/chaos/test_ch08_ollama_down.py` asserts its absence in two
+places. So the runbook tells a presenter to narrate, under pressure, a feature the project
+knows it has not built.
+
+Observed with Ollama unreachable, which is the demo stack's default:
+
+```
+POST /policy/compile  ->  200, panel reads
+                          "Error: Ollama network error: All connection attempts failed"
+```
+
+`STATUS.md` is also slightly off in the other direction — it says "beat 5 hangs", and what
+actually happens is a prompt, clear error. Failing visibly is the better behaviour; both
+documents just describe something else.
+
+- **Done when:** F-2 describes what the system does — surface the error and move on — or
+  T-031 is built and F-2 becomes true. Either way `DEMO.md` and `STATUS.md` should not
+  disagree about a drill the presenter is meant to rehearse.

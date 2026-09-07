@@ -3901,3 +3901,52 @@ looks secret to a scanner."*
 
 So the order is: fix the spelling where a better one exists, waive only what history has
 already fixed in place. Re-scanned after both: no leaks found.
+
+---
+
+## ADR-065 — A lease leaves service two ways, and the top-up only knew about one
+
+**Status:** accepted · **Closes:** TODO item 24
+
+`LeasePool._maybe_schedule_topup` decided whether to acquire a replacement by asking one
+question: *has this lease drained?*
+
+```python
+if held.lease.remaining_local > held.lease.granted * self._settings.low_water:
+    return
+```
+
+A lease also leaves service by **ageing out**, and a lease that expires *unspent* answers that
+question "no" — `remaining_local` is still the whole grant. So no ACQUIRE was scheduled,
+`check()` refused the expired lease on every subsequent request, and the PEP stopped
+authorizing anything that costs money until someone restarted it.
+
+**Why it was invisible.** The deployed PEP primes one lease at boot with a 60 s TTL, and
+`make demo-seed` runs within seconds of `up --wait` — inside the first TTL. Every automated
+path spends promptly, so every automated path took the *drained* branch. It needed a human
+bringing the stack up, reading the console for two minutes, and then trying to pay. That is
+the second manual pass, and it is the only thing that found it.
+
+**The correction is to reuse `check()`'s own test rather than write a second one.** `check()`
+already knows what "no longer usable" means — not `ACTIVE`, or past `expires_at - skew` — and
+the top-up now asks the same question. Two predicates that must agree, expressed once. Had
+that been true from the start, the expiry branch could not have been missed: it is the
+condition the refusal was already computing.
+
+**Replacing an expired lease is safe**, which is the thing worth checking before making the
+change rather than after. `_acquire` RELEASEs the lease it replaces, and the ledger's
+`release()` is idempotent for a lease already in a terminal state (spec 04 §3) — so releasing
+one the reaper has retired is a no-op, not the double-decrement of `leased` that TM-21
+describes.
+
+**On the comment that was already there.** `check()`'s refusal branch carries a long note
+about a closed loop — "a lease that reaches empty can never be refilled, because the only
+thing that refills it is the spend path it is now blocking" — ending "measured, then fixed
+here". The analysis is right and the fix covered the half that had been measured. The lesson
+is the same one ADR-063 drew about a drift check: a correct argument attached to one branch
+does not generalise itself to the sibling branch.
+
+**Verified live**, not only in a unit test: a rebuilt stack left idle 75 s past the TTL
+refuses the first payment (correctly — at that instant there is no usable lease) and allows
+the second, with a fresh `active` row in `leases` and `budgets` reconciling to the paisa.
+Before the fix, eight consecutive attempts over sixteen seconds all failed.

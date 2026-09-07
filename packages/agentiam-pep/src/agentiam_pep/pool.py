@@ -320,15 +320,40 @@ class LeasePool:
     # -- top-up ---------------------------------------------------------------------
 
     def _maybe_schedule_topup(self, dimension: BudgetDimension, held: _Held) -> None:
-        """Start an ACQUIRE if the lease has fallen below the low-water mark.
+        """Start an ACQUIRE if the held lease is running out — of budget **or** of time.
 
         Deliberately tolerant of having no event loop: `reserve()` is synchronous and may be
         called from a worker thread, and refusing to spend because nothing can be scheduled
         would be the network dependency this module exists to remove.
+
+        **Both conditions are needed, and only the first used to be here.** A lease leaves
+        service two ways: it drains, or it ages out. The low-water test answers *"has this
+        lease drained?"*, and a lease that expires **unspent** answers "no" — `remaining_local`
+        is still the full grant. So no ACQUIRE was ever scheduled, `check()` refused the
+        expired lease on every later request, and the PEP stopped authorizing anything that
+        costs money until it was restarted.
+
+        Not a corner case: the deployed PEP primes one lease at boot with a 60 s TTL, so any
+        stack left idle for a minute after start-up fell into it, permanently. Found in the
+        second manual pass (TODO item 24) — `make demo-seed` runs inside the first TTL, which
+        is why the demo looked healthy. The comment on `check()`'s refusal branch describes
+        this closed loop and the fix there only ever covered the drained half.
+
+        Replacing an expired lease is safe: `_acquire` RELEASEs the old one, and the ledger's
+        `release()` is a no-op for a lease already in a terminal state (spec 04 §3), which an
+        expired lease is once `reap()` has run.
         """
         if held.topping_up or self._closed:
             return
-        if held.lease.remaining_local > held.lease.granted * self._settings.low_water:
+        lease = held.lease
+        drained = lease.remaining_local <= lease.granted * self._settings.low_water
+        # The same "no longer usable" test `check()` refuses on, so the two cannot disagree
+        # about whether a lease is still worth holding.
+        stale = (
+            lease.state is not LeaseState.ACTIVE
+            or self._now() >= lease.expires_at - self._settings.skew
+        )
+        if not (drained or stale):
             return
         try:
             loop = asyncio.get_running_loop()
