@@ -460,12 +460,33 @@ def build_service(settings: ServiceSettings) -> Service:
         # Not fatal if it fails: an unreachable ledger at boot is the fail-closed case the
         # PEP already handles per request, and crash-looping here would take out the
         # read-only paths (`invoice:read` needs no budget) along with it.
-        if not await pool.prime(BudgetDimension.SPEND_BDT):
+        #
+        # **`prime()` raises as well as returning False, and the difference is not
+        # cosmetic.** `ACQUIRE` does `scalar_one()` on the budget row, so a mandate with no
+        # row at all raises `NoResultFound`, and an exhausted pool raises
+        # `LeaseUnavailableError`; neither the pool nor this module's ledger client catches
+        # either. Handling only the `False` return turned both into a boot failure — and
+        # `docker-compose.demo.yml` points the PEP at a *placeholder* mandate that has no
+        # budget row by design ("this placeholder lets the container start and prove the
+        # pipeline wiring"), so the container stopped starting and CI's demo-stack job
+        # timed out waiting for it. Reproduced against a real Postgres before this line
+        # existed.
+        try:
+            primed = await pool.prime(BudgetDimension.SPEND_BDT)
+        except Exception:
             logger.warning(
-                "could not acquire an initial %s lease; budgeted requests will be refused "
-                "until a top-up succeeds",
+                "could not acquire an initial %s lease (the mandate may have no budget row "
+                "yet); budgeted requests will be refused until a top-up succeeds",
                 BudgetDimension.SPEND_BDT.value,
+                exc_info=True,
             )
+        else:
+            if not primed:
+                logger.warning(
+                    "could not acquire an initial %s lease; budgeted requests will be "
+                    "refused until a top-up succeeds",
+                    BudgetDimension.SPEND_BDT.value,
+                )
         if drift_oracle is not None:
             # `EmbeddingClient.warm()` is synchronous and can take up to 60 s cold
             # (ADR-037 measured 14,244 ms for the embedding call alone) — run it off the

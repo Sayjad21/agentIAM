@@ -400,6 +400,56 @@ class TestLeasePriming:
         service = pep_service.build_service(pep_service.ServiceSettings.from_env())
         await self._run_lifespan(service, monkeypatch)  # must not raise
 
+    async def test_a_prime_that_raises_still_lets_the_service_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """`prime()` raises as well as returning False, and only one of those was handled.
+
+        `ACQUIRE` does `scalar_one()` on the budget row, so a mandate with no row raises
+        `NoResultFound` and an exhausted pool raises `LeaseUnavailableError`. Neither the
+        pool nor this module's ledger client catches either, so handling only the `False`
+        return turned both into a boot failure.
+
+        That is not hypothetical: `docker-compose.demo.yml` points the PEP at a
+        *placeholder* mandate with no budget row on purpose — its own comment says the
+        placeholder "lets the container start and prove the pipeline wiring" — so the
+        container stopped starting and CI's demo-stack job timed out waiting for it.
+        Reproduced against a real Postgres.
+        """
+        from sqlalchemy.exc import NoResultFound
+
+        from agentiam_pep.pool import LeasePool
+
+        async def explodes(_self: object, _dimension: object) -> bool:
+            raise NoResultFound("No row was found when one was required")
+
+        monkeypatch.setattr(LeasePool, "prime", explodes)
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        await self._run_lifespan(service, monkeypatch)  # must not raise
+
+    async def test_a_prime_that_raises_is_logged_with_its_cause(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The traceback is what tells an operator *which* misconfiguration this is."""
+        from sqlalchemy.exc import NoResultFound
+
+        from agentiam_pep.pool import LeasePool
+
+        async def explodes(_self: object, _dimension: object) -> bool:
+            raise NoResultFound("No row was found when one was required")
+
+        monkeypatch.setattr(LeasePool, "prime", explodes)
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        with caplog.at_level(logging.WARNING, logger="scripts.pep_service"):
+            await self._run_lifespan(service, monkeypatch)
+
+        assert any("lease" in r.message.lower() for r in caplog.records), caplog.text
+        assert "NoResultFound" in caplog.text, "the cause must survive into the log"
+
     async def test_a_failed_prime_is_logged_so_it_is_diagnosable(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
