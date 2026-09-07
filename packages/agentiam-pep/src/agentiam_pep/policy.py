@@ -78,14 +78,30 @@ class AgentPrincipal:
     """The principal side, read off the verified token.
 
     Separate from `RequestContext` because the context deliberately carries only what the
-    *verifier* supplies about the call (ADR-005); `role`, `task_id` and `principal_id` come
-    from the token, which `decide()` holds but does not pass to the policy engine.
+    *verifier* supplies about the call (ADR-005); `task_id` and `principal_id` come from the
+    token's authority block, which `decide()` holds but does not pass to the policy engine.
+
+    **`role` and `declared_role` are two different claims and must not be merged** (ADR-057).
+    `role` is what the *organization* says this agent is, and it is a Cedar entity attribute
+    — the corpus bundle both grants `invoice:write` on `principal.role == "senior"` and
+    forbids critical resources unless it holds. `declared_role` is what the delegating parent
+    wrote into the attenuation block, which spec 01 §6.1 assigns to "the console and audit"
+    and nothing else. Sourcing `role` from the block would let any agent that can attenuate
+    name its own child `"senior"` and pass both guards, which is the `declared_depth` mistake
+    ADR-005 exists to prevent, one field over.
+
+    So `declared_role` never becomes an entity attribute. `test_pep_policy.py` asserts the
+    attribute set exactly, so adding it there fails a test rather than shipping.
     """
 
     agent_id: str
     role: str
     principal_id: str
     task_id: uuid.UUID
+    #: The role the parent asserted at `attenuate()` time, for the decision record and the
+    #: identity tree. Empty when the token declares none, or when the block said so
+    #: ambiguously (`datalog.BlockIdentity`). Never an authorization input — see above.
+    declared_role: str = ""
 
 
 def _as_cedar_decimal(value: Decimal) -> dict[str, dict[str, str]]:

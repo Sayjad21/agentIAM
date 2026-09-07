@@ -71,14 +71,16 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Callable, Sequence
 
     from biscuit_auth import PublicKey
     from fastapi import FastAPI
 
     from agentiam_core.decision import DriftOracle
+    from agentiam_core.tokens import VerifiedToken
     from agentiam_pep.config import PepSettings
-    from agentiam_pep.policy import CedarEngine
+    from agentiam_pep.pipeline import Pipeline
+    from agentiam_pep.policy import AgentPrincipal, CedarEngine
     from agentiam_pep.pool import LeasePool
 
 logger = logging.getLogger(__name__)
@@ -167,8 +169,13 @@ class ServiceSettings:
     lease_size: Decimal = DEFAULT_LEASE_SIZE
     lease_ttl_s: float = DEFAULT_LEASE_TTL_S
     low_water: Decimal = DEFAULT_LOW_WATER
-    #: What `principal.role` a Cedar policy sees. Configurable because the real role lives
-    #: in an attenuation block fact this PEP cannot yet read back (`STATUS.md` gap 2).
+    #: What `principal.role` a Cedar policy sees. Configuration, deliberately, and *not* the
+    #: `role` fact in the token's attenuation block — that one is written by the delegating
+    #: parent, and spec 01 §6.1 assigns it to the console and the audit trail. A Cedar bundle
+    #: that grants on `principal.role` is asking what the *organization* says this agent is,
+    #: and a delegating agent is not the organization. ADR-057; `principal_for` has the
+    #: attack this closes. The parent's claim still reaches the console, as
+    #: `AgentPrincipal.declared_role` and `DecisionRecord.role`.
     default_role: str = "agent"
     #: Where `RuleBasedDriftOracle` reaches an embedding model. `None` disables drift
     #: entirely — a legitimate configuration, not a degraded one (spec 06 §2.1).
@@ -313,6 +320,16 @@ class Service:
     #: while `tests/unit/test_pep_service.py` stayed green, because the pool was
     #: unreachable from here.
     pool: LeasePool
+    #: How a verified token becomes a policy principal. Exposed for the same reason as
+    #: `pool`: while this was only a closure nothing outside `build_service` could see it,
+    #: and it spent that time returning `agt-depth-{N}` for every agent at a depth — which
+    #: the identity tree drew as one node per level instead of one per agent. A test that
+    #: cannot reach the function cannot notice that.
+    principal_for: Callable[[VerifiedToken], AgentPrincipal]
+    #: The assembled pipeline. Exposed alongside `principal_for` for the same reason: what
+    #: it was handed at construction — the caveat reader especially — is otherwise
+    #: unobservable, and spec 09 §4's `failing_caveat` was empty for exactly as long.
+    pipeline: Pipeline
 
 
 def build_service(settings: ServiceSettings) -> Service:
@@ -330,8 +347,9 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_controlplane.db.base import make_engine, make_session_factory
     from agentiam_controlplane.db.ledger import acquire, release
     from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
+    from agentiam_core.datalog import token_caveats, token_identity
     from agentiam_core.models import BudgetDimension
-    from agentiam_core.tokens import RootKeySet, VerifiedToken
+    from agentiam_core.tokens import RootKeySet
     from agentiam_pep.app import create_app
     from agentiam_pep.drift import RuleBasedDriftOracle
     from agentiam_pep.emitter import DecisionEmitter, EmitterSettings
@@ -406,19 +424,33 @@ def build_service(settings: ServiceSettings) -> Service:
     def principal_for(token: VerifiedToken) -> AgentPrincipal:
         """Read the policy principal off the verified token.
 
-        `agent_id` and `role` are **not** on `VerifiedToken`: they live in attenuation
-        block facts (spec 01 §6.1), and there is no Datalog-to-caveat parser to recover
-        them (`STATUS.md` gap 2). `serve_pep.py` hardcodes both for the same reason. Until
-        that parser exists a deployed PEP can only report the delegation depth it verified,
-        so `role` is configurable and `agent_id` is derived from depth rather than invented
-        — a Cedar policy keying on `principal.role` sees the configured default, and that
-        limitation is stated rather than papered over with a plausible-looking value.
+        `agent_id` and `role` are not on `VerifiedToken` — they live in attenuation block
+        facts (spec 01 §6.1), and block facts are invisible to the authorizer (spec 02 §9
+        finding 13), so `block_source()` is the only route to them. `datalog.token_identity`
+        is that route, and until it existed this returned `agt-depth-{N}`: every sibling at a
+        depth shared one name, and the identity tree drew them as one node.
+
+        **`role` still comes from configuration, and that is the point** (ADR-057). The
+        block's `role` is written by the delegating parent, and spec 01 §6.1 gives it to "the
+        console and audit". Cedar's `principal.role` is an authority attribute — the corpus
+        bundle grants `invoice:write` on `role == "senior"` and forbids critical resources
+        without it — so sourcing it from the block would let any agent that can attenuate
+        name its own child `"senior"` and pass both guards. That is `declared_depth`'s
+        mistake (ADR-005) one field over. The parent's claim travels as `declared_role`, onto
+        the decision record and from there to the identity tree, where it belongs.
+
+        `agent_id` falls back to the depth-derived name when the token declares none — a root
+        token has no attenuation block, and a block whose `agent` fact was rendered
+        ambiguously (TM-24) has none that can be believed. That fallback is not cosmetic: the
+        alternative is letting a crafted block choose the Cedar entity uid.
         """
+        identity = token_identity(token)
         return AgentPrincipal(
-            agent_id=f"agt-depth-{token.depth}",
+            agent_id=identity.agent_id or f"agt-depth-{token.depth}",
             role=settings.default_role,
             principal_id=token.principal_id,
             task_id=token.task_id,
+            declared_role=identity.role or "",
         )
 
     pipeline = Pipeline(
@@ -426,6 +458,12 @@ def build_service(settings: ServiceSettings) -> Service:
         key_set=RootKeySet(_root_keys(settings)),
         policy=policy,
         principal_for=principal_for,
+        # Spec 09 §4's stated limitation, closed. `decide()` takes the caveat list as an
+        # input because a `VerifiedToken` exposes the grant and not what later blocks added,
+        # and a deployed PEP had nothing to pass — so `failing_caveat` was always `None`. An
+        # incomplete list stays safe by construction: the caveat loop only ever adds a
+        # denial, and biscuit's own authorizer enforces the chain regardless.
+        caveats_for=token_caveats,
         pool=pool,
         emitter=emitter,
         revocation=revocation,
@@ -514,6 +552,8 @@ def build_service(settings: ServiceSettings) -> Service:
         policy=policy,
         drift_oracle=drift_oracle,
         pool=pool,
+        principal_for=principal_for,
+        pipeline=pipeline,
     )
 
 

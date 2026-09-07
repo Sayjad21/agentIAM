@@ -22,10 +22,11 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentiam_controlplane.db.models import EscalationRow
-from agentiam_controlplane.errors import EscalationNotFoundError
+from agentiam_controlplane.errors import DuplicateEscalationError, EscalationNotFoundError
 from agentiam_core.escalation import (
     Escalation,
     EscalationState,
@@ -84,6 +85,10 @@ async def create(
 
     Validation (non-empty scopes, non-negative amount) happens in `request_escalation`
     before anything is written, so a rejected request leaves no row behind.
+
+    Raises:
+        ValueError: The request itself is invalid — see `request_escalation`.
+        DuplicateEscalationError: An escalation already exists for `decision_id`.
     """
     escalation = request_escalation(
         decision_id=decision_id,
@@ -97,24 +102,54 @@ async def create(
         now=now,
         ttl=ttl,
     )
-    async with session.begin():
-        session.add(
-            EscalationRow(
-                id=escalation.id,
-                decision_id=escalation.decision_id,
-                task_id=escalation.task_id,
-                agent_id=escalation.agent_id,
-                principal_id=escalation.principal_id,
-                intent_hash=escalation.intent_hash,
-                requested_scopes=sorted(escalation.requested_scopes),
-                requested_amount=escalation.requested_amount,
-                reason=escalation.reason,
-                created_at=escalation.created_at,
-                expires_at=escalation.expires_at,
-                state=escalation.state.value,
+    try:
+        async with session.begin():
+            session.add(
+                EscalationRow(
+                    id=escalation.id,
+                    decision_id=escalation.decision_id,
+                    task_id=escalation.task_id,
+                    agent_id=escalation.agent_id,
+                    principal_id=escalation.principal_id,
+                    intent_hash=escalation.intent_hash,
+                    requested_scopes=sorted(escalation.requested_scopes),
+                    requested_amount=escalation.requested_amount,
+                    reason=escalation.reason,
+                    created_at=escalation.created_at,
+                    expires_at=escalation.expires_at,
+                    state=escalation.state.value,
+                )
             )
-        )
+    except IntegrityError as exc:
+        existing = await _by_decision(session, decision_id)
+        if existing is None:
+            raise
+        raise DuplicateEscalationError(
+            f"decision {decision_id} already raised escalation {existing.id}, "
+            f"opened {existing.created_at.isoformat()} and now "
+            f"{existing.state_at(now).value}",
+            existing_id=existing.id,
+            decision_id=decision_id,
+        ) from exc
     return escalation
+
+
+async def _by_decision(session: AsyncSession, decision_id: uuid.UUID) -> Escalation | None:
+    """The escalation raised by `decision_id`, or `None`.
+
+    Only reached after a failed insert, so the extra round trip costs nothing on the path
+    that succeeds. Which constraint the database rejected is inferred from *what is there*
+    rather than from parsing the driver's message: a row for this `decision_id` means
+    `uq_escalations_decision_id`, and anything else re-raises unchanged rather than being
+    reported as a duplicate it is not.
+
+    `session.begin()` above has already rolled back by the time this runs, so the session
+    is usable again for a fresh read.
+    """
+    row = (
+        await session.execute(select(EscalationRow).where(EscalationRow.decision_id == decision_id))
+    ).scalar_one_or_none()
+    return _to_domain(row) if row is not None else None
 
 
 async def get(session: AsyncSession, escalation_id: uuid.UUID) -> Escalation | None:

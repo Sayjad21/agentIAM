@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
@@ -440,3 +440,92 @@ class TestT026Corpus:
             f"{case.name}: expected {'allow' if case.expected else 'deny'}, "
             f"got {'allow' if verdict.allowed else 'deny'} — {case.description}"
         )
+
+
+class TestDeclaredRoleIsNotAnAuthorityAttribute:
+    """ADR-057. The parent's claim about its child never reaches Cedar.
+
+    `AgentPrincipal.role` is what the *organization* says an agent is; `declared_role` is
+    what the delegating parent wrote into the attenuation block, which spec 01 §6.1 assigns
+    to "the console and audit". The bundle these tests run against makes the difference
+    concrete: it grants `invoice:write` on `principal.role == "senior"` and forbids critical
+    resources without it. Sourcing `principal.role` from the block would let any agent that
+    can attenuate name its own child `"senior"` and pass both guards — `declared_depth`'s
+    mistake (ADR-005) one field over.
+
+    These tests are the boundary. Adding `declared_role` to the entity's `attrs` — the
+    obvious tidy-up for someone who sees two role fields and assumes one is redundant — fails
+    here rather than shipping.
+    """
+
+    @staticmethod
+    def _agent_attrs(principal: AgentPrincipal, operation: str = "invoice:read") -> dict[str, Any]:
+        """The `Agent` entity Cedar actually receives, captured at the FFI boundary.
+
+        Read from the dict the engine builds rather than inferred from a verdict: a verdict
+        proves only that *this* policy did not key on the attribute, and the claim is that no
+        policy can, because the attribute is not there to key on.
+        """
+        import unittest.mock
+
+        import cedarpy
+
+        captured: dict[str, Any] = {}
+        real = cedarpy.is_authorized
+
+        def spy(
+            request: dict[str, Any],
+            policies: str | cedarpy.PolicySet,
+            entities: list[dict[str, Any]],
+            /,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
+            for entity in entities:
+                if entity["uid"]["type"] == "Agent":
+                    captured.update(entity["attrs"])
+            return real(request, policies, entities, *args, **kwargs)
+
+        with unittest.mock.patch.object(cedarpy, "is_authorized", spy):
+            an_engine().bound(principal).evaluate(ctx(operation))
+        assert captured, "the Agent entity never reached Cedar"
+        return captured
+
+    @staticmethod
+    def _promoted() -> AgentPrincipal:
+        """An agent whose parent called it `senior` while the organization calls it a worker."""
+        return AgentPrincipal(
+            agent_id="agt-sneaky",
+            role="worker",
+            principal_id="kc:alice",
+            task_id=TASK,
+            declared_role="senior",
+        )
+
+    def test_the_agent_entity_carries_exactly_four_attributes(self) -> None:
+        assert sorted(self._agent_attrs(self._promoted())) == [
+            "depth",
+            "principal_id",
+            "role",
+            "task_id",
+        ]
+
+    def test_the_role_cedar_sees_is_the_organization_s_not_the_parent_s(self) -> None:
+        assert self._agent_attrs(self._promoted())["role"] == "worker"
+
+    def test_a_self_declared_senior_role_does_not_win_the_role_guard(self) -> None:
+        """The attack end to end, against the real bundle rather than the entity dict."""
+        assert not an_engine().bound(self._promoted()).evaluate(ctx("invoice:write")).allowed
+
+    def test_a_self_declared_senior_role_does_not_escape_the_critical_forbid(self) -> None:
+        """The other half: `role != "senior"` forbids critical resources, and payment_api is one."""
+        verdict = (
+            an_engine()
+            .bound(self._promoted())
+            .evaluate(ctx("payment:initiate", tool="payment_api", amount="1"))
+        )
+        assert not verdict.allowed
+
+    def test_declared_role_defaults_to_empty_so_existing_callers_are_unchanged(self) -> None:
+        """Every `AgentPrincipal` built before ADR-057 still means exactly what it meant."""
+        assert a_principal().declared_role == ""

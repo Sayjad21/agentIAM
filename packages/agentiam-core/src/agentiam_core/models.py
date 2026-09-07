@@ -597,6 +597,21 @@ class DecisionRecord(BaseModel):
     principal_id: str = Field(min_length=1)
     task_id: UUID
     agent_id: str = Field(min_length=1)
+    #: The role the delegating parent asserted for this agent (spec 01 §6.1), read back off
+    #: the token's terminal attenuation block. Empty when the token declares none — a root
+    #: token has no attenuation block, and a block that named the role ambiguously has none
+    #: that can be believed (TM-24, `datalog.BlockIdentity`).
+    #:
+    #: **Parent-asserted, and the record must be read that way.** It is here for the identity
+    #: tree and the audit trail, which is exactly the use spec 01 §6.1 gives it; it is not
+    #: what the policy engine evaluated. `AgentPrincipal.declared_role` carries the same
+    #: value under the same rule, and ADR-057 has why the two are separate from Cedar's own
+    #: `principal.role`.
+    #:
+    #: Defaulted rather than required, so records written before this field existed still
+    #: validate. The audit chain is unaffected either way: verification recomputes hashes
+    #: over the *stored* body (spec 08 §3), never over a re-serialized model.
+    role: str = ""
     depth: int = Field(ge=0)
     scope: str
     tool_id: str

@@ -29,21 +29,6 @@ fix. Cost: ~102 µs median on the hot path, `decide()` p99 now 395 µs against N
 Left open deliberately: `BUDGET_EXHAUSTED_CAVEAT` maps to HTTP 429, which reads as
 "retry later" for a ceiling that is permanent. Folded into item 11.
 
-### 2. Build the Datalog→caveat parser (STATUS gap 2) — **scope reduced**
-
-**The investigation is answered: enforcement does not need this.** Biscuit's own authorizer
-evaluates the token's checks natively once the request facts are supplied, measured against
-the installed `biscuit-python` — so item 1 closed without a parser, and a token received
-from a third party is now enforced exactly as well as one this process minted.
-
-What still needs the parser is **display**, which is what STATUS gap 2 actually describes:
-naming the effective bound in the console, and the identity tree's per-agent detail. That
-is a real gap and a much smaller one than "attenuation does not work".
-
-- **Note carried from STATUS:** whatever parses block source **must not trust it** — TM-24.
-- **Done when:** a `VerifiedToken` obtained from an untrusted third party yields its true
-  effective bound for the console to display. Enforcement no longer waits on it.
-
 ### ~~3. Correct STATUS gap 2's impact statement~~ — **no longer needed**
 
 Gap 2's text — a *reporting* limitation — is now accurate again, because item 1 closed the
@@ -76,19 +61,91 @@ mandate's own budget, so they were refused at step 4 and never reached Cedar.
 
 ## P1 — visible in the demo
 
-### 4. Give agents real identities instead of `agt-depth-{N}`
+### ~~2. Build the Datalog→caveat parser (STATUS gap 2)~~ — **DONE**
 
-**Downgraded by item 5.** The tree renders correctly now — it keys on the token's terminal
-block id, which is unique — so this is a labelling problem, not a blank-canvas one. `DEMO.md`
-beat 2's *shape* is demonstrable today; the three sub-agents are just all called
-`agt-depth-1`.
+`agentiam_core.datalog` reads a token's rendered block source back into caveats and identity
+facts. Spec 02 gains §11; STATUS gap 2 is closed. Enforcement was already closed by item 1 and
+this changes nothing about it — biscuit's authorizer is still what refuses a request.
 
-`pep_service.py:382` derives `agent_id=f"agt-depth-{token.depth}"` and `role` from a single
-configured default, so every sibling shares one name and every `role` reads `"unknown"`.
+**Two measured facts made the obvious implementation the wrong one**, and both were checked
+against the installed library rather than taken from the notes:
 
-- **Blocked on:** item 2.
-- **Done when:** `/v1/tree/{task}` returns one distinct node per real agent, with the role
-  the parent assigned at `attenuate()` time.
+- **`block_source()` normalizes.** Whitespace collapses and facts are grouped ahead of checks
+  regardless of how the block was built. So the grammar to recognize is biscuit's *output*
+  grammar, not `to_datalog()`'s — a recognizer proved against the compiler's output would be
+  proved against text it never receives. Every round trip in the tests mints, attenuates,
+  verifies and reads back through a real biscuit.
+- **`block_source()` escapes nothing**, which TM-24 already said, plus two things it did not:
+  a `;` inside a string survives rendering, and a `\n` in a literal renders as a **real
+  newline**. Statements can be split neither on `;` nor line by line, so `_statements()`
+  tracks quote state.
+
+**The rule that carries the security weight is what happens to a statement it cannot read.**
+It is reported, never dropped — a caveat this build cannot recognize is a restriction the
+token *has* and the fold does not, so a bound computed without it is an upper bound. Dropping
+it would overstate authority, which is the one direction a display path must never get wrong.
+`TokenAuthority.complete` carries that, and the docstring says a consumer displaying the bound
+must display it too.
+
+TM-24's note was the design constraint, not a footnote. An identity fact appearing twice —
+the exact signature of a value that broke out of its own string literal — refuses the field
+rather than picking one, and a label that would fail `validate_label` is refused on the way
+*out* as well as in, which is what extends T-011's mitigation to a token this system did not
+mint. Injection cannot widen a bound in any case, and the ADR says why rather than hoping: the
+fold intersects and takes minima, so a smuggled clause can only add an apparent restriction.
+
+48 tests. Three consumers wired, all three previously blocked on this.
+
+### ~~4. Give agents real identities instead of `agt-depth-{N}`~~ — **DONE**, minus one field on purpose
+
+`pep_service.principal_for` reads `agent()` and `role()` off the token's terminal block. Verified
+against the running demo stack, which is the form item 4's "done when" asks for:
+
+| agent_id | role | depth |
+|---|---|---|
+| `agt-depth-0` | unknown | 0 |
+| `agt-doc-reader` | reader | 1 |
+| `agt-negotiator` | worker | 1 |
+| `agt-payer` | payer | 1 |
+| `agt-settlement` | payer | 2 |
+| `agt-subcontractor` | payer | 3 |
+
+Three of those used to be `agt-depth-1`, and every role read `unknown`. `agt-depth-0` and its
+`unknown` role are correct rather than left over: a root token has no attenuation block, so it
+declares no agent and no role, and the fallback says "not stated" instead of inventing one.
+
+**`role` deliberately does not become Cedar's `principal.role`, and this is the finding of the
+item.** It looked like the obvious completion and it is an escalation. A block's `role` is
+written by the delegating parent; the demo's own corpus bundle grants `invoice:write` on
+`principal.role == "senior"` and forbids critical resources without it. Sourcing it from the
+block lets any agent that can attenuate name its own child `"senior"` and pass both guards —
+`declared_depth`'s mistake (ADR-005) one field over, against a policy this repo ships. Spec 01
+§6.1 already said so in a sentence easy to read past: `role(name)` is *"for the console and
+audit"*. So the parent's claim travels as `AgentPrincipal.declared_role` → `DecisionRecord.role`
+→ the tree, and Cedar keeps seeing configuration. A test reads the `Agent` entity at the FFI
+boundary and pins its attribute set, so adding `declared_role` there fails rather than ships.
+
+`agent_id` *is* parent-asserted too and is used anyway, because it is the only place a
+sub-agent's identity exists. What makes that safe is that the name labels a node the chain
+already identifies cryptographically; and because it reaches the Cedar entity uid, a block that
+names it ambiguously falls back rather than letting the crafted block choose.
+
+**Two things this uncovered, both fixed here.**
+
+- **`failing_caveat` was blocked twice.** Spec 09 §4 said the missing parser was why the field
+  was always `None`. Supplying the caveat list showed the pipeline also never carried the
+  `CaveatRef` `decide()` returns onto the record at all. Verified live: five caveat-caused
+  denials each naming their caveat kind and chain position, and the two non-caveat denials
+  correctly naming none. No test could have found the second block without first building the
+  parser.
+- **The SSE tree diff collapsed siblings.** `build_tree_diff` keyed on
+  `(agent_id, block_ids[0])`, and `block_ids` is root-first — so the second half is the *root*
+  block, identical for every node in a task, leaving `agent_id` to carry the key alone. Under
+  the old naming, three depth-1 siblings produced **one** diff entry: the stream animated one
+  in and dropped two. The initial `snapshot` event sends the full list, so the first paint was
+  right and only later updates were wrong, which is how it survived item 15's live check. Now
+  keyed on the *terminal* block — the same key the console's d3 tree uses, and for the same
+  reason.
 
 ### ~~5. Make the identity tree fail loudly, and render regardless~~ — **DONE**
 
@@ -393,21 +450,148 @@ else needs a browser. Worth revisiting if a third SSE page appears.
 
 ## Found since
 
-### 16. A duplicate escalation returns 500, not 409
+### ~~16. A duplicate escalation returns 500, not 409~~ — **DONE**
 
-`escalations.decision_id` has a unique constraint — one escalation per decision, which is
-right — but a second `POST /v1/escalations` for the same decision surfaces the
-`UniqueViolationError` as an unhandled 500 with `Internal Server Error` and a SQLAlchemy
-traceback in the log.
+409 now, naming the escalation that is in the way — in the message and as
+`existing_escalation_id` in the body, since reading it is the caller's next action. Seven
+tests against real Postgres; verified by reverting the fix, at which point all seven fail and
+the twenty-five that were already there still pass.
 
-409 is the status this repository already uses for exactly this shape: `_refuse_activation`
-in `app.py` returns 409 for a policy activation that is well-formed and permitted but
-conflicts with current state, citing ADR-030 and spec 05 §5.5. A duplicate escalation is
-the same case.
+**Not absorbed the way a duplicate revoke is**, and the difference is the decision worth
+recording (ADR-058). Spec 07 §9 makes `POST /v1/revocations` idempotent on `block_id`, which
+is correct *there*: a repeat revoke asks for a state the table already holds, so returning the
+existing row answers the caller truthfully. A second escalation may name different scopes, a
+different amount and a different reason, and returning the first as though it answered this
+request would report a grant nobody asked for.
 
-Found while verifying item 14 — the second run of the check reused a decision id from the
-first.
+Which constraint fired is inferred from **what is in the table** — after a failed insert,
+`create` looks the `decision_id` up; a row means `uq_escalations_decision_id`, and anything
+else re-raises unchanged rather than being reported as a duplicate it is not. String-matching
+a constraint name out of an asyncpg error wrapped by SQLAlchemy's adapter would couple this to
+two layers' formatting, and the lookup costs nothing on the path that succeeds.
 
-- **Done when:** the duplicate returns 409 naming the existing escalation, and a test
-  covers it. Worth checking the other `POST` routes for the same pattern while there.
+**The other `POST` routes checked, as the item asked.** `/v1/revocations` is already
+idempotent by design. `/v1/audit/verify` and the two `/policy/*` console routes create
+nothing. `.../approve` and `.../deny` are guarded by `SELECT ... FOR UPDATE` and already map
+their conflict to 409. This was the only one.
 
+---
+
+### 17. The authority block's own budget ceiling reports `BUDGET_EXHAUSTED_CAVEAT`
+
+Spec 02 §7's table separates the two: a `BudgetCeiling` **caveat** is
+`BUDGET_EXHAUSTED_CAVEAT`, and the **authority budget** is `BUDGET_EXHAUSTED_MANDATE`. A root
+token that asks for more than its mandate grants is refused by the authority block's own
+`check if requested("spend_bdt", $v), $v <= …`, and comes back as `BUDGET_EXHAUSTED_CAVEAT`.
+
+The cause is that `tokens._FACT_REASONS` maps a failed check to a reason code by the fact it
+quantifies over — `requested(` → `BUDGET_EXHAUSTED_CAVEAT` — and cannot tell block 0 from
+block *n*. `AuthorityFailure` already carries the block number, so distinguishing them is
+mechanical.
+
+Observed live in the demo scenario, seq 12: *"root attempts more than the mandate grants"*,
+`BUDGET_EXHAUSTED_CAVEAT`, `failing_caveat: null`. The null is correct — it is not a caveat,
+which is exactly the point — so the record contradicts itself in a small way: a code naming a
+caveat, next to a field correctly saying there wasn't one.
+
+Both codes map to 429, so no client sees a different status. What changes is what an operator
+reads: "the token narrowed itself" versus "the mandate never granted this", which have
+different fixes.
+
+- **Investigate first:** whether spec 09 §11's reachability table (`§7`) assumes the current
+  mapping anywhere, and whether `BUDGET_EXHAUSTED_MANDATE` becoming reachable by a second
+  route needs a note there. Item 11's lesson applies — read the spec section that governs a
+  reason code before changing it.
+- **Done when:** a refusal by the authority block's own budget check reports
+  `BUDGET_EXHAUSTED_MANDATE`, a caveat ceiling still reports `BUDGET_EXHAUSTED_CAVEAT`, and a
+  test covers both against a real chain.
+
+### 18. The root node in the identity tree has no name of its own
+
+`GET /v1/tree/{task}` reports the depth-0 node as `agt-depth-0`, role `unknown`, beside five
+real names. That is *correct* — a root token has no attenuation block, so it declares no
+`agent()` and no `role()`, and item 4's fallback deliberately says "not stated" rather than
+inventing one. But on screen, next to `agt-doc-reader` and `agt-payer`, it reads like the bug
+item 4 just fixed rather than like the absence it is.
+
+The honest name for the root is the *principal* — the human the mandate was issued to
+(`kc:…`), which `DecisionRecord.principal_id` already carries. Whether the tree should render
+that, or render "the mandate holder" as a distinct node kind, is a console decision.
+
+- **Note:** the PEP must keep doing what it does. Inventing an `agent_id` in `principal_for`
+  is what spec 01 §6.1's fallback rule exists to prevent; this is about how the console
+  renders a node that honestly has no agent name.
+- **Done when:** the depth-0 node is legible as "the principal, acting directly" rather than
+  as a missing label, without the PEP asserting an identity the token does not carry.
+
+### 19. Two log-assertion tests go vacuous when every suite runs in one process
+
+`test_compile_nl_to_policy_does_not_log_the_statement_verbatim` and
+`TestLimitDetailLogging::test_the_body_reaches_the_log_on_a_retry` fail under
+`pytest tests` (everything in one process, integration included) and pass under
+`pytest tests/unit`. Reproduced on a clean tree at `1c07c93` as well as on the current one,
+so this predates the current work and is not a regression.
+
+**Not a CI risk**, checked rather than assumed: `ci.yml`'s `quality` job runs
+`-m "not integration and not e2e and not chaos and not perf"`, and the integration/e2e/chaos
+jobs each select a single marker, so the suites never share a process there. This only
+appears locally.
+
+**The reason it is worth an item anyway.** The failure is `caplog.records` coming back
+**empty** — running one integration module first is enough (`test_oidc_login.py` reproduces
+it). The NL-compiler test's first two assertions are
+
+```python
+assert statement not in combined
+assert "alice@example.com" not in combined
+```
+
+and both pass trivially against `""`. Those are the assertions that enforce rule 10 and
+NFR-5. The test only fails because a *third* assertion checks that the expected digest line
+is present — so the guard survives by luck of having been written with a positive assertion
+next to the negative ones. A test whose security claim can silently become vacuous should
+say so itself.
+
+- **Investigate:** what empties `caplog` — a handler or `propagate` flag left changed by an
+  earlier module is the obvious candidate, and `logging.disable`/`basicConfig` appear nowhere
+  in first-party code (grepped), so it is coming from a dependency's import or fixture.
+- **Done when:** the two tests pass in a single-process full-suite run, **and** the negative
+  assertions cannot pass against empty captured output — assert the record exists first, so a
+  future capture failure is a failure rather than a silent pass. Worth grepping for the same
+  `assert X not in caplog` shape elsewhere while there.
+
+### 20. `performance.md`'s numbers do not include the block-source parse
+
+`serve_pep.py` is the harness every number in [`benchmarks/performance.md`](benchmarks/performance.md)
+comes from, and it hardcodes `agent_id="agt-perf"` and passes no `caveats_for`. The *deployed*
+PEP (`pep_service.py`) now does neither: `principal_for` reads the token's identity out of
+`Biscuit.block_source()` and `caveats_for` reads its caveats (ADR-057). So the benchmarked PEP
+and the deployed PEP no longer do the same work per request, and the published NFR-2 figure
+does not include the difference.
+
+**Measured, so the size of the gap is known rather than guessed** (CPython 3.12, this host):
+
+| chain depth | one `token_identity()` / `token_caveats()` |
+|---|---|
+| 0 (root) | ~125 µs median |
+| 1 | ~160 µs |
+| 2 | ~195 µs |
+| 3 | ~227 µs |
+
+The pipeline resolves the principal **once** per request and reads the caveats once, so a
+depth-3 request pays roughly 450 µs, not the ~900 µs three calls would have cost (there is a
+test pinning the once-per-request property). Against NFR-2's 8 ms p99 budget that is
+comfortable, and the demo stack measures 1.4 ms median / 1.8 ms worst end to end. **NFR-1 is
+unaffected** — the parse happens in the pipeline, not inside `decide()`, which is why
+`test_the_whole_decision`'s `p99 < 1000 µs` assertion did not move and would not have caught
+this either way.
+
+- **Why this was not just fixed here:** `serve_pep.py`'s own docstring says the committed
+  numbers depend on it staying exactly as it is, and changing it invalidates
+  `performance.md`, `pb2-breakdown.json` and `nfr2-load.json` — which then need a real
+  re-measurement run, not a re-render. That is a benchmarking pass, not a side effect.
+- **Investigate:** whether the harness should mirror the deployed composition root, or
+  whether `performance.md` should report both configurations and say which one a reader
+  should believe for a production deployment.
+- **Done when:** the published NFR-2 number reflects the work a deployed PEP actually does,
+  or the document states plainly that it does not and by how much.

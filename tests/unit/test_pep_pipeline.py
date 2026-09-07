@@ -31,14 +31,16 @@ from agentiam_core.models import (
     Budget,
     BudgetDimension,
     Caveat,
+    CaveatKind,
     DecisionRecord,
     Mandate,
     Outcome,
     RequestContext,
     RequiresApproval,
     ScopeSubset,
+    ToolDeny,
 )
-from agentiam_core.tokens import RootKeySet, generate_keypair, mint_root
+from agentiam_core.tokens import RootKeySet, VerifiedToken, generate_keypair, mint_root
 from agentiam_pep.app import create_app
 from agentiam_pep.config import PepSettings
 from agentiam_pep.drift import FeatureExtractor
@@ -1101,3 +1103,143 @@ def a_record_placeholder(pipeline: Pipeline) -> DecisionRecord:
         budget_after=Budget(),
         latency_us=1,
     )
+
+
+class TestFailingCaveatReachesTheRecord:
+    """Spec 09 §4: `failing_caveat` is populated whenever the cause is a caveat.
+
+    It was `None` on every record this project has ever written, and two separate things had
+    to be true for that. `decide()` had no caveat list to attribute against, because there
+    was no Datalog→caveat parser (`STATUS.md` gap 2) — and *even when handed one*, nothing
+    carried the `CaveatRef` it returns onto the `DecisionRecord`. Supplying the list is what
+    uncovered the second half; the field was unreachable behind the first, so a test could
+    not have found it earlier without also inventing the parser.
+    """
+
+    @staticmethod
+    async def _records_for(**over: object) -> list[DecisionRecord]:
+        pipeline, sink, _ = await a_pipeline(**over)  # type: ignore[arg-type]
+        emitter = pipeline._emitter
+        await emitter.start()
+        await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        await emitter.flush()
+        return [r for r in sink.records if isinstance(r, DecisionRecord)]
+
+    async def test_a_caveat_denial_names_the_caveat_on_the_record(self) -> None:
+        (record,) = await self._records_for(
+            caveats=(ScopeSubset(scopes=frozenset({"vendor:read"})),)
+        )
+        assert record.reason_code is ReasonCode.SCOPE_ATTENUATED_AWAY
+        assert record.failing_caveat is not None
+        assert record.failing_caveat.kind is CaveatKind.SCOPE_SUBSET
+
+    async def test_the_ref_points_at_the_caveat_that_denied_not_the_first_one(self) -> None:
+        """`block_index` is the caveat's position in the chain as supplied (spec 09 §4).
+
+        An index that always read 0 would look populated while naming the wrong restriction,
+        which is worse for whoever has to act on it than an honest `None`.
+        """
+        (record,) = await self._records_for(
+            caveats=(
+                ScopeSubset(scopes=frozenset({"invoice:read", "vendor:read"})),
+                ToolDeny(tools=frozenset({"invoice_api"})),
+            )
+        )
+        assert record.failing_caveat is not None
+        assert record.failing_caveat.kind is CaveatKind.TOOL_DENY
+        assert record.failing_caveat.block_index == 1
+
+    async def test_a_denial_that_is_not_a_caveat_leaves_the_ref_none(self) -> None:
+        """Spec 09 §4's other half: `None` where a caveat is not the cause.
+
+        A policy refusal names a policy statement in `reason_detail`. Attaching a caveat ref
+        to it would claim the token restricted something the token never mentioned.
+        """
+        (record,) = await self._records_for(
+            policy_source='permit(principal, action == Action::"vendor:read", resource);\n'
+        )
+        assert record.reason_code is ReasonCode.POLICY_DENIED
+        assert record.failing_caveat is None
+
+    async def test_an_allow_names_no_caveat(self) -> None:
+        """Nothing failed, so nothing is pointed at."""
+        (record,) = await self._records_for(
+            caveats=(ScopeSubset(scopes=frozenset({"invoice:read"})),)
+        )
+        assert record.outcome is Outcome.ALLOW
+        assert record.failing_caveat is None
+
+
+class TestThePrincipalIsResolvedOncePerRequest:
+    """`principal_for` reads the token's block source in a deployed PEP, so repetition costs.
+
+    It was called three times per request — once to bind the policy, once for an escalation,
+    once for the record — which was free when it only built a dataclass. Since ADR-057 it
+    parses `Biscuit.block_source()`, measured at ~150-230 µs on a depth-3 chain, and three
+    calls is three parses of a token that has not changed.
+
+    Asserted by counting rather than by reading the code, because the regression is a single
+    `self._principal_for(token)` appearing somewhere new.
+    """
+
+    @staticmethod
+    def _counting(pipeline: Pipeline) -> list[int]:
+        calls = [0]
+        inner = pipeline._principal_for
+
+        def counted(token: VerifiedToken) -> AgentPrincipal:
+            calls[0] += 1
+            return inner(token)
+
+        object.__setattr__(pipeline, "_principal_for", counted)
+        return calls
+
+    async def test_an_allow_resolves_it_once(self) -> None:
+        pipeline, _, _ = await a_pipeline()
+        calls = self._counting(pipeline)
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        assert isinstance(result, Authorized)
+        assert calls[0] == 1
+
+    async def test_a_denial_resolves_it_once(self) -> None:
+        pipeline, _, _ = await a_pipeline(caveats=(ScopeSubset(scopes=frozenset({"vendor:read"})),))
+        calls = self._counting(pipeline)
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        assert isinstance(result, Refused)
+        assert calls[0] == 1
+
+    async def test_an_escalation_resolves_it_once(self) -> None:
+        """The escalation branch needs `agent_id` too, and used to ask for it separately."""
+        sink = FakeEscalationSink()
+        pipeline, _, _ = await a_pipeline(
+            caveats=(RequiresApproval(scopes=frozenset({"invoice:read"})),),
+            escalation_sink=sink,
+        )
+        calls = self._counting(pipeline)
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=bearer(a_mandate())
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.APPROVAL_REQUIRED
+        assert calls[0] == 1
+
+    async def test_a_refusal_before_the_decision_resolves_it_at_most_once(self) -> None:
+        """`_record_and_refuse` runs before a principal exists, so it resolves its own.
+
+        Still once — the point is that no path resolves it twice.
+        """
+        pipeline, _, _ = await a_pipeline(granted=Decimal(1))
+        calls = self._counting(pipeline)
+        await pipeline.authorize(
+            method="POST",
+            path="/payments",
+            headers=bearer(a_mandate()),
+            body=b'{"amount": "999999.0000", "recipient": {"account_id": "acct_1"}}',
+        )
+        assert calls[0] <= 1

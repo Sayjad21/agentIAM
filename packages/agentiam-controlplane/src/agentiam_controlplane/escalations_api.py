@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 from agentiam_controlplane.auth import require_session_principal
 from agentiam_controlplane.db import escalations as store
-from agentiam_controlplane.errors import EscalationNotFoundError
+from agentiam_controlplane.errors import DuplicateEscalationError, EscalationNotFoundError
 from agentiam_core.errors import TokenTooLargeError
 from agentiam_core.escalation import (
     ApproverNotAuthorized,
@@ -119,7 +119,7 @@ class _ErrorMap:
             return 403
         if isinstance(exc, EscalationExpired):
             return 410
-        if isinstance(exc, EscalationNotPending):
+        if isinstance(exc, (EscalationNotPending, DuplicateEscalationError)):
             return 409
         if isinstance(exc, (NarrowingWidensRequest, ValueError, TokenTooLargeError)):
             return 400
@@ -127,7 +127,14 @@ class _ErrorMap:
 
 
 def _error_response(exc: Exception) -> JSONResponse:
-    return JSONResponse({"detail": str(exc)}, status_code=_ErrorMap.status_for(exc))
+    body: dict[str, object] = {"detail": str(exc)}
+    if isinstance(exc, DuplicateEscalationError):
+        # The conflicting row is the caller's next action — `GET /v1/escalations` to read
+        # it, or approve/deny it — so it travels as a field rather than only inside prose
+        # the client would have to parse.
+        body["existing_escalation_id"] = str(exc.existing_id)
+        body["decision_id"] = str(exc.decision_id)
+    return JSONResponse(body, status_code=_ErrorMap.status_for(exc))
 
 
 def build_router(
@@ -156,7 +163,7 @@ def build_router(
                     now=now(),
                     ttl=_seconds(body.ttl_s),
                 )
-            except ValueError as exc:
+            except (DuplicateEscalationError, ValueError) as exc:
                 return _error_response(exc)
         return JSONResponse(_serialize(escalation, now=now()), status_code=201)
 

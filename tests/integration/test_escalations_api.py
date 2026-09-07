@@ -149,6 +149,69 @@ async def test_a_forged_session_cookie_is_rejected_like_no_session(
         assert result.status_code == 401
 
 
+async def test_opening_twice_for_the_same_decision_is_409(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """Item 16. This was a 500 with a SQLAlchemy traceback in the log.
+
+    409 is the status this repository already gives a well-formed, permitted request that
+    conflicts with current state — `app._refuse_activation` (ADR-030, spec 05 §5.5) and
+    EC-A10's losing approver both.
+    """
+    decision_id = str(uuid.uuid4())
+    async with await _client(migrated_engine, signed_in_as="kc:manager") as client:
+        first = await client.post("/v1/escalations", json=_open_body(decision_id=decision_id))
+        assert first.status_code == 201
+
+        second = await client.post(
+            "/v1/escalations",
+            json=_open_body(decision_id=decision_id, requested_amount="90000"),
+        )
+
+    assert second.status_code == 409
+    body = second.json()
+    assert body["existing_escalation_id"] == first.json()["id"]
+    assert body["decision_id"] == decision_id
+    assert "already raised" in body["detail"]
+
+
+async def test_the_refused_duplicate_does_not_enqueue_a_second_row(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """A 409 leaves the queue with one escalation, still on the first request's terms."""
+    decision_id = str(uuid.uuid4())
+    async with await _client(migrated_engine, signed_in_as="kc:manager") as client:
+        first = await client.post("/v1/escalations", json=_open_body(decision_id=decision_id))
+        await client.post(
+            "/v1/escalations",
+            json=_open_body(decision_id=decision_id, requested_amount="90000"),
+        )
+        listed = await client.get("/v1/escalations", params={"state": "pending"})
+
+    queue = listed.json()
+    assert [e["id"] for e in queue] == [first.json()["id"]]
+    assert queue[0]["requested_amount"] == "50000.0000"
+
+
+async def test_a_distinct_decision_still_opens_after_a_duplicate_is_refused(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """The rolled-back insert must not leave the next caller's request broken.
+
+    Each request gets its own session, but the failed one and the next one come from the
+    same pool — worth one test that the pool hands back a usable connection.
+    """
+    decision_id = str(uuid.uuid4())
+    async with await _client(migrated_engine, signed_in_as="kc:manager") as client:
+        await client.post("/v1/escalations", json=_open_body(decision_id=decision_id))
+        refused = await client.post("/v1/escalations", json=_open_body(decision_id=decision_id))
+        assert refused.status_code == 409
+
+        other = await client.post("/v1/escalations", json=_open_body())
+
+    assert other.status_code == 201
+
+
 async def test_approving_twice_is_409(migrated_engine: AsyncEngine) -> None:
     async with await _client(migrated_engine, signed_in_as="kc:manager") as manager_client:
         opened = await manager_client.post("/v1/escalations", json=_open_body())
