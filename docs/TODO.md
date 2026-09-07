@@ -583,20 +583,34 @@ inside `decide()`, which is why the PB-2 breakdown needs no such note.
 
 ---
 
-### 21. Re-measure NFR-2 against the deployed PEP's composition
+### 21. Re-measure NFR-2 — **half done**: the harness now matches, the numbers do not yet
 
-`scripts/serve_pep.py` hardcodes its policy principal and supplies no caveat reader, so tier 3
-of the NFR-2 measurement does less work than a production request (ADR-057). Item 20 documented
-the gap and measured its size (~0.45 ms at depth 3, against an 8 ms budget); closing it means
-making the harness match and re-running.
+**Done (ADR-062).** `scripts/serve_pep.py` composes the PEP the way `scripts/pep_service.py`
+deploys it — it reads the agent identity and the caveats off the token instead of hardcoding
+one and skipping the other. `TestTheHarnessMatchesTheDeployedComposition` compares the two
+pipelines *by behaviour*, because source text cannot tell a wired hook from a mentioned one,
+which is how the drift survived review. Verified by reverting each half separately.
 
-- **Why it is its own ticket:** the re-run must happen on the same host as the committed
-  2026-08-18 figures, or the before/after comparison measures the hardware rather than the
-  change. It rewrites `pb2-breakdown.json` and `nfr2-load.json` together, and
-  `performance.md` is regenerated from both.
-- **Watch out for:** `pytest -m perf` rewrites `pb2-breakdown.json` as a side effect, which is
-  the noise gap 24 described and item 13 routed around. Any run that is not a deliberate
-  re-measurement should `git checkout` that file afterwards.
-- **Done when:** the harness composes the PEP the way `pep_service.py` does, the JSON is
-  re-measured on one host in one sitting, and item 20's three block quotes come out of
-  `generate_benchmark_results.py` because they no longer describe anything.
+`create_app` also puts the pipeline on `app.state` now. It was a closure variable visible to
+nothing outside its composition root, and that has cost this project three times — an unprimed
+lease pool (item 8), an unwired caveat reader (item 4), and this.
+
+**Still open: the measurement itself.** The committed figures were taken before the harness
+changed, so they understate it by the ~0.45 ms a depth-3 request now pays.
+`performance.md` says exactly that, with the numbers, instead of the earlier note claiming the
+harness was deliberately left alone — which stopped being true.
+
+- **Why it is still its own sitting:** it rewrites `pb2-breakdown.json` and `nfr2-load.json`
+  together, and both have to come from one host in one run or the before/after comparison
+  measures the hardware rather than the change. A full run is 2 profiles × 3 repeats ×
+  3 tiers × 20 s of held load plus setup.
+- **Watch out for:** `pytest -m perf` rewrites `pb2-breakdown.json` as a side effect (gap 24,
+  item 13), and a run whose py-spy step fails can leave `.perf-profile-*` scratch files in
+  `docs/benchmarks/` — now gitignored, because that directory is tracked evidence and
+  `git add -A` would have swept them in.
+- **What a smoke run showed** (5 s, 1 repeat, 100 RPS, this host, harness already matching):
+  enforcement p50 1.79 ms / p99 6.829 ms, inside NFR-2's 8 ms budget. One short run is not
+  the three `PLAN.md` §13.1 asks for and is recorded here as a sanity check, not as evidence.
+- **Done when:** both JSONs are re-measured in one sitting and `performance.md`'s three
+  "predate a change" block quotes come out of `generate_benchmark_results.py`, because they
+  no longer describe anything.

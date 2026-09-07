@@ -6,8 +6,11 @@ deliberate rather than duplication for its own sake:
 * **`serve_pep.py` (T-053)** is the load-test harness. It generates an ephemeral root
   keypair per run, mints a mandate, seeds a budget row, hardcodes a two-line policy and a
   pool sized so a 500 RPS run cannot exhaust it. Its own docstring calls itself *"the shape
-  T-056's deployment artifacts will want"* — the shape, not the thing — and the numbers in
-  `docs/benchmarks/performance.md` depend on it staying exactly as it is.
+  T-056's deployment artifacts will want"* — the shape, not the thing. What it must *not*
+  differ on is the work done per request: `docs/benchmarks/performance.md` is a claim about
+  this file's overhead, measured through that one. It drifted once — the harness hardcoded
+  its principal and read no caveats while this file did both (ADR-057) — and the two are
+  back in step. A change here that adds work to the request path belongs there too.
 * **This file** takes every one of those from configuration, seeds nothing, mints nothing,
   and refuses to start if anything it needs to enforce with is absent.
 

@@ -120,6 +120,14 @@ def create_app(
         redoc_url=None,
         lifespan=lifespan,
     )
+    # The pipeline is otherwise a closure variable, visible to nothing outside whichever
+    # composition root built it. That has cost this project three times — a lease pool that
+    # was never primed (TODO item 8), a `caveats_for` hook that was never wired (item 4),
+    # and a load harness that quietly stopped matching the deployment (item 21). All three
+    # shipped green, because no test could reach the object to ask it anything.
+    # `None` in T-018 transport mode, which is the same answer `/readyz`'s `enforcing` flag
+    # gives.
+    app.state.pipeline = pipeline
 
     @app.get("/healthz")
     async def healthz() -> JSONResponse:

@@ -155,27 +155,28 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         "",
         "**(3) - (2) is what authorization costs.** (2) - (1) is TCP and Python's HTTP stack.",
         "",
-        "> **What tier 3 does not include.** The harness behind these numbers "
-        "(`scripts/serve_pep.py`) hardcodes its policy principal and supplies no caveat "
-        "reader. The *deployed* PEP (`scripts/pep_service.py`) does neither since ADR-057: "
-        "it reads each agent's identity and its caveats out of the token's own block source, "
-        "because block facts are unreachable any other way. So the enforcing tier below "
-        "measures slightly less work than a production request does.",
+        "> **These figures predate a change to the harness, and understate it slightly.** "
+        "NFR-2 is a claim about the *deployed* PEP's overhead, measured through "
+        "`scripts/serve_pep.py`. The harness used to hardcode its policy principal and "
+        "supply no caveat reader, while the deployed PEP read both out of the token's "
+        "own block source (ADR-057) — so it was measuring less work than production "
+        "does. The two compositions match as of ADR-062, and a unit test now compares them "
+        "by behaviour so they cannot drift apart again. **The numbers below were taken "
+        "before that**, and a re-measurement is owed.",
         "",
         "> **By how much, measured** (CPython 3.12, `agentiam_core.datalog`): one "
-        "`token_identity()` or `token_caveats()` costs ~125 µs at chain depth 0, ~160 µs at "
-        "depth 1, ~195 µs at depth 2 and ~227 µs at depth 3. The pipeline resolves the "
-        "principal once per request and reads the caveats once, so a depth-3 request pays "
-        "roughly **0.45 ms** on top of what tier 3 reports — against an 8 ms budget. "
+        "`token_identity()` or `token_caveats()` costs ~125 µs at chain depth 0, "
+        "~160 µs at depth 1, ~195 µs at depth 2 and ~227 µs at depth 3. The "
+        "pipeline resolves the principal once per request and reads the caveats once, so a "
+        "depth-3 request pays roughly **0.45 ms** beyond what tier 3 reports — against "
+        "an 8 ms budget, and well inside the run-to-run spread the table already shows. "
         "**NFR-1 is unaffected**: the parse happens in the pipeline, not inside `decide()`, "
-        "which is why the PB-2 breakdown above needs no such caveat.",
+        "which is why the PB-2 breakdown above carries no such note.",
         "",
-        "> The harness is deliberately not changed to match, and this note is the "
-        "alternative. Its own docstring records that these committed numbers depend on it "
-        "staying as it is; re-pointing it invalidates `pb2-breakdown.json` and "
-        "`nfr2-load.json` together, and the replacement figures would have to come from the "
-        "same host as the ones above or the comparison measures the hardware rather than "
-        "the change. That is a re-measurement sitting of its own, tracked in the backlog.",
+        "> The re-run is deliberately not folded into another ticket. It rewrites "
+        "`pb2-breakdown.json` and `nfr2-load.json` together and has to happen on one host "
+        "in one sitting, or the before/after comparison measures the hardware rather than "
+        "the change.",
         "",
     ]
 
@@ -232,11 +233,16 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
     ]
     for profile in unstable:
         enforce = profile["spread_ms"]["enforcement_overhead_ms"]
+        # Computed, not written down. This sentence used to say "nearly ten times it",
+        # which was true of the run being described and would silently become false of the
+        # next one — a generated document must not carry a ratio the data does not support.
+        over = enforce["max"] / OVERHEAD_BUDGET
+        how_far = f"{over:.1f}\u00d7 it" if over >= 1.5 else "past it"
         lines += [
             f"At **{profile['target_rps']} RPS the enforcement p99 ranged "
             f"{enforce['min']}-{enforce['max']} ms across {profile['runs']} runs**, which "
             f"straddles NFR-2's {OVERHEAD_BUDGET} ms budget. The best run is comfortably "
-            f"inside it and the worst is nearly ten times it, so **the honest statement is "
+            f"inside it and the worst is {how_far}, so **the honest statement is "
             f"that this host cannot establish the p99 either way** — the median run's p50 "
             f"is the only figure here stable enough to quote. Something outside the request "
             f"path is contributing tens of milliseconds intermittently: the generator, the "

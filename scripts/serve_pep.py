@@ -10,6 +10,14 @@ needs a socket.
 So this is the composition root. It is also what the flame graph attaches to (a profiler
 needs a process), and it is the shape T-056's deployment artifacts will want.
 
+**It composes the PEP the way `scripts/pep_service.py` deploys it, and that is load-bearing
+for the numbers.** NFR-2 is a claim about the *deployed* proxy's overhead, so a harness that
+does less work per request measures the wrong thing. That drifted once and was caught: this
+file hardcoded its policy principal and supplied no caveat reader, while the deployed PEP
+read both out of the token's own block source (ADR-057). It does both now. Anything the
+deployment adds to the request path belongs here too, or `performance.md` stops describing
+production.
+
 **It seeds as well as serves, and that is deliberate.** A load profile needs a mandate that
 exists, a budget row with money in it, and a bearer token signed by a key the server
 accepts. Generating those in one place, in the same process that will serve them, removes
@@ -208,6 +216,7 @@ def build_app(
     from agentiam_controlplane.db.base import make_engine, make_session_factory
     from agentiam_controlplane.db.ledger import acquire, release
     from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
+    from agentiam_core.datalog import token_caveats, token_identity
     from agentiam_core.hashing import hash_object
     from agentiam_core.models import Budget, BudgetDimension, Mandate
     from agentiam_core.tokens import mint_root
@@ -296,11 +305,26 @@ def build_app(
     )
 
     def principal_for(token: VerifiedToken) -> AgentPrincipal:
+        """The same composition `scripts/pep_service.py` deploys — deliberately.
+
+        This used to hardcode `agent_id` and pass no caveat reader, which made the harness
+        do measurably less work per request than a production PEP: `token_identity()` and
+        `token_caveats()` each read the token's own block source, because block facts are
+        unreachable any other way (ADR-057). NFR-2 is a claim about the *deployed* proxy's
+        overhead, so a harness that skips part of it measures the wrong thing.
+
+        `role` still comes from configuration rather than from the token's block, for the
+        reason ADR-057 gives: the block's role is written by the delegating parent, and a
+        Cedar bundle keying on `principal.role` is asking what the organization says. The
+        constant here plays the part the deployment's `AGENTIAM_PEP_DEFAULT_ROLE` plays.
+        """
+        identity = token_identity(token)
         return AgentPrincipal(
-            agent_id="agt-perf",
+            agent_id=identity.agent_id or f"agt-depth-{token.depth}",
             role="worker",
             principal_id=token.principal_id,
             task_id=token.task_id,
+            declared_role=identity.role or "",
         )
 
     pipeline = Pipeline(
@@ -316,6 +340,10 @@ def build_app(
             },
         ),
         principal_for=principal_for,
+        # Also the deployed composition. Reading the chain's caveats back is what lets a
+        # decision record name the caveat that refused a request (spec 09 §4), and it is
+        # work every production request does.
+        caveats_for=token_caveats,
         pool=pool,
         emitter=emitter,
         revocation=InMemoryRevocationSet(),
