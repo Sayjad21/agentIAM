@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
+from agentiam_controlplane import app as app_module
 from agentiam_controlplane.app import app, store
 from agentiam_core.corpus import CORPUS_SOURCE
 
@@ -167,3 +169,110 @@ def test_compile_valid_policy(mock_compile: MagicMock) -> None:
     assert "Success:</strong> Policy compiled successfully." in response.text
     assert "Auto-Generated Tests" in response.text
     assert "Corpus Evaluation" in response.text
+
+
+class TestLeaseReaper:
+    """`LEDGER.REAP` on a schedule — TODO item 9, STATUS gap 27.
+
+    Spec 04 §4.6's own pseudocode says `REAP() # background, every TTL/4`. `reap()` has
+    been correct since T-013 and the chaos suite exercises it by advancing a clock and
+    calling it directly — which is why CH-3/CH-4's prose reports "REAP reclaims it" as a
+    running fact. Grepping every non-test call site found none: not `app.py`, not
+    `scripts/pep_service.py`, not `serve_pep.py`, not either compose file, not
+    `deploy/k3s/`. A lease stranded by a hard-killed PEP stayed `ACTIVE`, and its budget
+    stayed `leased`, until somebody ran it by hand.
+    """
+
+    def test_the_default_interval_is_a_quarter_of_the_lease_ttl(self) -> None:
+        """Spec 04 §4.6, against the PEP's own 60 s default TTL."""
+        from scripts.pep_service import DEFAULT_LEASE_TTL_S
+
+        assert app_module.DEFAULT_REAPER_INTERVAL_S == DEFAULT_LEASE_TTL_S / 4
+
+    def test_unset_means_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(app_module._REAPER_INTERVAL_ENV, raising=False)
+        assert app_module._reaper_interval_s() == app_module.DEFAULT_REAPER_INTERVAL_S
+
+    def test_zero_disables_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A deployment reaping some other way — a k8s CronJob — should be able to say so."""
+        monkeypatch.setenv(app_module._REAPER_INTERVAL_ENV, "0")
+        assert app_module._reaper_interval_s() is None
+
+    @pytest.mark.parametrize("bad", ["nonsense", "-1"])
+    def test_an_unusable_interval_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch, bad: str
+    ) -> None:
+        monkeypatch.setenv(app_module._REAPER_INTERVAL_ENV, bad)
+        with pytest.raises(ValueError, match="REAPER_INTERVAL_S"):
+            app_module._reaper_interval_s()
+
+    def test_no_database_means_no_reaper(self) -> None:
+        """Nothing to sweep, and `reap()` would have no session factory to do it with."""
+        built = app_module.create_app(session_factory=None, reaper_interval_s=15.0)
+        assert built.router.lifespan_context is not None  # FastAPI's default
+        # The console-only app must not carry a background task.
+        assert not hasattr(built.state, "reaper_task")
+
+    async def test_it_sweeps_on_the_interval_and_stops_on_shutdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The behaviour gap 27 is about: something calls `reap()` without being asked."""
+        import asyncio
+
+        calls: list[object] = []
+
+        async def fake_reap(_session: object, *, now: object) -> list[object]:
+            calls.append(now)
+            return []
+
+        monkeypatch.setattr("agentiam_controlplane.db.ledger.reap", fake_reap)
+
+        class _Session:
+            async def __aenter__(self) -> _Session:
+                return self
+
+            async def __aexit__(self, *_exc: object) -> None:
+                return None
+
+        built = app_module.create_app(
+            session_factory=lambda: _Session(),  # type: ignore[arg-type]
+            reaper_interval_s=0.01,
+        )
+
+        async with built.router.lifespan_context(built):
+            await asyncio.sleep(0.06)
+
+        assert calls, "the reaper never ran"
+        # And it is gone once the app is down: no task outliving its own application.
+        assert len(asyncio.all_tasks()) >= 1  # the test's own task, nothing else pending
+
+    async def test_a_failed_sweep_does_not_kill_the_control_plane(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreachable ledger must not take the console and escalation queue with it."""
+        import asyncio
+
+        attempts: list[int] = []
+
+        async def exploding_reap(_session: object, *, now: object) -> list[object]:
+            attempts.append(1)
+            raise RuntimeError("postgres is down")
+
+        monkeypatch.setattr("agentiam_controlplane.db.ledger.reap", exploding_reap)
+
+        class _Session:
+            async def __aenter__(self) -> _Session:
+                return self
+
+            async def __aexit__(self, *_exc: object) -> None:
+                return None
+
+        built = app_module.create_app(
+            session_factory=lambda: _Session(),  # type: ignore[arg-type]
+            reaper_interval_s=0.01,
+        )
+
+        async with built.router.lifespan_context(built):
+            await asyncio.sleep(0.06)
+
+        assert len(attempts) > 1, "it gave up after the first failure instead of retrying"

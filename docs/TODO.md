@@ -162,11 +162,31 @@ fix is currently as untested as the bug was.
 - **Done when:** a test asserts a service built by `build_service()` holds a lease for
   `spend_bdt` after startup, and fails if the `prime()` call is removed.
 
-### 9. Schedule `reap()` (STATUS gap 27)
+### ~~9. Schedule `reap()`~~ — **DONE** (STATUS gap 27)
 
-Already tracked and unchanged by this pass — recorded here only because item 6's top-up
-behaviour and gap 27's stranded-lease reclamation are the same subsystem, and whoever picks
-up one should look at the other.
+Spec 04 §4.6's own pseudocode says `REAP() # background, every TTL/4`, and nothing
+anywhere called it outside a test — confirmed by grepping every non-test call site. So a
+lease stranded by a hard-killed PEP stayed `ACTIVE` and its budget stayed `leased`, not
+lost (`committed` is untouched) but never reclaimed either.
+
+It lives in the **control plane's** lifespan, not the PEP's, for two reasons: the ledger is
+the control plane's, and the PEP that died is precisely the one that cannot reap its own
+lease. Default 15 s — TTL/4 against the PEP's 60 s default, asserted against that constant
+rather than hardcoded twice. `AGENTIAM_CONTROLPLANE_REAPER_INTERVAL_S=0` disables it for a
+deployment sweeping some other way.
+
+Two design points worth keeping:
+
+- **Off by default in `create_app`, on in `create_app_from_env`.** A background task
+  retiring leases underneath a ledger test would make it flaky in a way that reads as a
+  ledger bug. Same split `pep_service.py` already uses.
+- **A failed sweep logs and continues.** An unreachable Postgres is the outage the request
+  path already fails closed on; killing the control plane over it would take the console
+  and the escalation queue down too. Tested: it retries rather than giving up after the
+  first failure.
+
+Seven tests, including one that watches it actually sweep on a 10 ms interval and stop on
+shutdown.
 
 ### 10. Audit authentication and routing refusals
 

@@ -5,7 +5,9 @@ Provides the Cedar Authoring UI (T-027).
 
 from __future__ import annotations
 
+import logging
 import pathlib
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -38,7 +40,8 @@ from agentiam_core.policy_testing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncIterator, Callable
+    from contextlib import AbstractAsyncContextManager
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -133,12 +136,97 @@ def _refuse_activation(detail: str) -> HTMLResponse:
     return HTMLResponse(content=f'<div class="alert danger">{detail}</div>', status_code=409)
 
 
+#: Spec 04 §4.6's own pseudocode: `REAP() # background, every TTL/4`. The PEP's default
+#: lease TTL is 60 s (`scripts/pep_service.DEFAULT_LEASE_TTL_S`), so 15 s.
+DEFAULT_REAPER_INTERVAL_S = 15.0
+
+#: `AGENTIAM_CONTROLPLANE_REAPER_INTERVAL_S`. `0` disables the reaper — a legitimate
+#: configuration for a deployment running `reap()` some other way (a k8s CronJob, say),
+#: and one an operator should be able to choose without editing code.
+_REAPER_INTERVAL_ENV = "AGENTIAM_CONTROLPLANE_REAPER_INTERVAL_S"
+
+logger = logging.getLogger(__name__)
+
+
+def _reaper_interval_s() -> float | None:
+    """How often to sweep expired leases, from the environment. `None` disables."""
+    import os
+
+    raw = os.environ.get(_REAPER_INTERVAL_ENV, "").strip()
+    if not raw:
+        return DEFAULT_REAPER_INTERVAL_S
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{_REAPER_INTERVAL_ENV} is not a number: {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"{_REAPER_INTERVAL_ENV} must not be negative, got {raw!r}")
+    return value or None
+
+
+def _reaper_lifespan(
+    session_factory: async_sessionmaker[AsyncSession],
+    interval_s: float,
+    now: Callable[[], datetime],
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """A lifespan that runs `LEDGER.REAP` on a loop — spec 04 §4.6, STATUS gap 27.
+
+    A lease stranded by a hard-killed PEP stays `ACTIVE` and its budget stays `leased`
+    until something retires it. `reap()` has existed and been correct since T-013, and
+    CH-3/CH-4 exercise it by advancing a clock and calling it directly — which is why the
+    chaos suite's prose reports "REAP reclaims it" as a running fact. Nothing scheduled it:
+    not this module, not `scripts/pep_service.py`, not `serve_pep.py`, not either compose
+    file, not `deploy/k3s/`.
+
+    A lifespan rather than `@app.on_event`, which FastAPI 0.141 deprecates and
+    `tests/unit/test_pep_service.py` already asserts the PEP does not use.
+
+    Failures are logged and the loop continues. A sweep that cannot reach Postgres is the
+    same outage the request path already fails closed on, and killing the control plane
+    over it would take the console and the escalation queue down with it.
+    """
+    import asyncio
+    import contextlib
+
+    from agentiam_controlplane.db.ledger import reap
+
+    async def _sweep_forever() -> None:
+        while True:
+            # Sleep first: at startup every lease is either fresh or already stranded, and
+            # sweeping in the first milliseconds of boot races the migrations a compose
+            # stack may still be applying.
+            await asyncio.sleep(interval_s)
+            try:
+                async with session_factory() as session:
+                    reclaimed = await reap(session, now=now())
+            except Exception:
+                logger.exception("lease reaper sweep failed; retrying in %.1fs", interval_s)
+                continue
+            if reclaimed:
+                # Only when it did something. A line every 15 seconds reading "reclaimed 0"
+                # is how a log stops being read.
+                logger.info("lease reaper reclaimed %d expired lease(s)", len(reclaimed))
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        task = asyncio.create_task(_sweep_forever())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    return lifespan
+
+
 def create_app(
     *,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     escalation_settings: ControlPlaneSettings | None = None,
     oidc_settings: OIDCSettings | None = None,
     revocation_publisher: RevocationPublisher | None = None,
+    reaper_interval_s: float | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
     """Create the FastAPI application for the Control Plane.
@@ -163,8 +251,19 @@ def create_app(
     `revocation_publisher` is independently optional (spec 07 §5.2): a `None` publisher still
     lets `POST /v1/revocations` persist and `GET /v1/revocations` serve pulls — a deployment
     without Redis wired up is correct, only slower.
+
+    `reaper_interval_s` schedules `LEDGER.REAP` (spec 04 §4.6). **`None` — the default —
+    means no reaper**, which is deliberate: this constructor is what the test suite drives,
+    and a background task retiring expired leases underneath a ledger test would make it
+    flaky in a way that looks like a ledger bug. `create_app_from_env()` turns it on, the
+    same split `pep_service.py` uses for everything a deployment needs and a test does not.
     """
-    app = FastAPI(title="AgentIAM Control Plane")
+    lifespan = (
+        _reaper_lifespan(session_factory, reaper_interval_s, now)
+        if session_factory is not None and reaper_interval_s is not None and reaper_interval_s > 0
+        else None
+    )
+    app = FastAPI(title="AgentIAM Control Plane", lifespan=lifespan)
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
@@ -659,6 +758,16 @@ def create_app_from_env() -> FastAPI:
         escalation_settings=settings,
         oidc_settings=oidc_settings,
         revocation_publisher=revocation_publisher,
+        # Spec 04 §4.6 prescribes `REAP() # background, every TTL/4`, and until now
+        # nothing anywhere called it outside a test: not this module, not
+        # `scripts/pep_service.py`, not `serve_pep.py`, not either compose file, not
+        # `deploy/k3s/` (STATUS gap 27, found by grepping every non-test call site). A
+        # lease stranded by a crash or a SIGKILL therefore stayed `leased` and
+        # unavailable — not lost, since `committed` is untouched, but never reclaimed.
+        #
+        # It belongs here rather than in the PEP for two reasons: the ledger is this
+        # service's, and a PEP that died is exactly the one that cannot reap its own lease.
+        reaper_interval_s=_reaper_interval_s(),
     )
 
 
