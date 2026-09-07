@@ -305,17 +305,29 @@
         const link = g.selectAll(".link")
             .data(treeData.links(), d => d.target.id);
 
+        // `linkHorizontal`'s `.x`/`.y` accessors receive each *endpoint*, not the link —
+        // the source and target are already extracted for them. The tree is drawn left to
+        // right, so a node's layout `y` is its horizontal position and `x` its vertical
+        // one, which is why they look swapped and are not.
+        const linkPath = d3.linkHorizontal().x(d => d.y).y(d => d.x);
+
         link.enter().insert("path", "g")
             .attr("class", "link")
-            .attr("d", d3.linkHorizontal()
-                .x(d => d.source.y)
-                .y(d => d.source.x))
+            // Collapsed at the parent, so the link grows outward as the child appears.
+            //
+            // This was `d3.linkHorizontal().x(d => d.source.y).y(d => d.source.x)`, which
+            // dereferenced twice: the accessor is handed the source point and then asked
+            // for *its* `.source`, giving undefined. It threw `TypeError: Cannot read
+            // properties of undefined (reading 'y')` on the very first link, and because
+            // that happens before the node join, **no node was ever created** — the tree
+            // drew its edges and nothing else. Only visible by driving the real page:
+            // re-running `updateTree()` by hand afterwards worked, because by then the
+            // enter selection was empty and this line never ran.
+            .attr("d", d => linkPath({ source: d.source, target: d.source }))
             .attr("opacity", 0)
             .merge(link)
             .transition().duration(500)
-            .attr("d", d3.linkHorizontal()
-                .x(d => d.y)
-                .y(d => d.x))
+            .attr("d", linkPath)
             .attr("opacity", 1);
 
         link.exit().transition().duration(500).attr("opacity", 0).remove();
@@ -373,15 +385,21 @@
             })
             .attr("height", 4);
 
-        nodeEnter.transition().duration(500)
-            .attr("opacity", 1);
-
         // Update existing
         const nodeUpdate = node.merge(nodeEnter)
             .attr("class", d => `node ${d.data.revoked ? 'revoked' : ''} ${d.data.has_pending_escalation ? 'escalated' : ''}`);
 
+        // Position *and* opacity in one transition on the merged selection.
+        //
+        // These used to be two: `nodeEnter.transition()` faded the new nodes in, and this
+        // one moved everything. An element can only run one unnamed transition at a time —
+        // starting the second cancels the first — and the entering nodes are in both
+        // selections, so the fade was cancelled before it ran and they stayed at the
+        // `opacity: 0` they were created with. The tree had all its nodes in the DOM and
+        // showed none of them; only the links were visible.
         nodeUpdate.transition().duration(500)
-            .attr("transform", d => `translate(${d.y},${d.x})`);
+            .attr("transform", d => `translate(${d.y},${d.x})`)
+            .attr("opacity", 1);
 
         nodeUpdate.select(".budget-bar-fg").transition().duration(500)
             .attr("width", d => {

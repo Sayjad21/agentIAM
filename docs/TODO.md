@@ -105,12 +105,14 @@ the search was both slower and the thing collapsing siblings onto one node.
 what made a broken tree look like an empty one, under a status indicator still reading
 "Connected". There is now a visible banner, and a missing depth-0 node says so too.
 
-Verified by replaying `updateTree()` against the exact five-node payload that used to
-throw `ambiguous: agt-depth-1`: **5 descendants drawn**, shaped root → three siblings →
-one grandchild, which is `DEMO.md` beat 2.
+**My verification here was not good enough, and item 15 caught it.** Replaying
+`updateTree()`'s stratify block against a real payload proved the *keying* was fixed and
+nothing else — the page still drew no nodes at all, for two further reasons found only by
+driving the real thing. Both are fixed and written up under item 15. A harness that
+replays one function is evidence about that function, not about the page.
 
-**This downgrades item 4.** Real agent names are now a *labelling* problem — the tree
-renders correctly without them, where before the duplicate ids stopped it drawing at all.
+**This downgrades item 4.** Real agent names are a *labelling* problem now — the tree
+renders, and the labels on it read `agt-depth-N`.
 
 ### ~~6. Make lease size configurable~~ — **DONE**, and the second half deliberately not
 
@@ -336,23 +338,39 @@ leans on hardest has never been demonstrated against a running system.
 - **Done when:** a live `POST /v1/escalations/{id}/approve` asking for more than was
   requested is refused, with the refusal shown in the console.
 
-### 15. Exercise the console pages that this pass could only check over HTTP
+### ~~15. Exercise the console pages that this pass could only check over HTTP~~ — **DONE**, and it found two bugs
 
-The decisions and identity-tree pages hold open `EventSource` connections, so headless
-screenshot capture never terminates and they were verified via their APIs rather than
-rendered. Budgets, overview, policy, audit and escalations were confirmed visually.
+`chrome --headless --screenshot` waits for the load event, and both pages hold an
+`EventSource` open forever, so it never writes a file — which is why they had only ever
+been checked through their APIs. Driving Chrome over the DevTools Protocol instead
+(navigate, settle, `Page.captureScreenshot`, plus `Runtime.evaluate` to read the DOM and
+`Runtime.exceptionThrown` to catch errors) works, and the DOM probe matters more than the
+picture: a screenshot proves the page painted, not that it painted the right thing.
 
-- **Done when:** the two SSE pages are confirmed rendering live rows, ideally with a
-  browser-driven check that can run unattended.
+**Decisions** was fine: 13 rows, `live`, empty state hidden, each refusal naming the block
+and check that caused it, sub-millisecond latencies.
 
----
+**The identity tree had never rendered a single node.** Two bugs, stacked behind the one
+item 5 fixed:
 
-## Suggested order
+1. `d3.linkHorizontal()`'s `.x`/`.y` accessors receive each *endpoint*, not the link, so
+   `.x(d => d.source.y)` dereferenced twice and threw `TypeError: Cannot read properties
+   of undefined (reading 'y')` on the first link. That happens *before* the node join, so
+   no node was ever created — the tree drew its edges and nothing else.
+2. With that fixed, all six nodes existed and none were visible. `nodeEnter.transition()`
+   faded them in and `nodeUpdate.transition()` moved them; an element runs one unnamed
+   transition at a time, and starting the second **cancels** the first, so the fade never
+   ran and they stayed at the `opacity: 0` they were created with.
 
-**P0 is clear.** Items 1 and 3b are done, 2 shrank to a display concern, 3 became
-unnecessary.
+Neither is visible from the API, and neither is visible from replaying `updateTree` — the
+re-run works precisely because the enter selection is empty by then. Only the real page
+under a real browser shows it.
 
-What is left: **4 needs 2**, and **5, 6, 7 are independent and can start any time** — 7
-first if the goal is to make the system demonstrable again, since it is what turns every
-other item on this list into something you can see rather than read about. 8 is small and
-closes a real hole: the lease-priming fix currently has no test.
+Verified after both fixes: `nodes: 6, visible: 6, labels: 6, links: 5`, no exception, and
+the picture is root → three siblings → depth 2 → depth 3 with circles, labels and budget
+bars. `DEMO.md` beat 2, on screen, for the first time.
+
+**Not committed:** the CDP driver lives in the session scratchpad. Making it a permanent
+check means either a browser-automation dependency (Playwright pulls a browser download)
+or a hand-rolled CDP client in CI, and neither is worth it for two pages until something
+else needs a browser. Worth revisiting if a third SSE page appears.

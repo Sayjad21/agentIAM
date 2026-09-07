@@ -50,7 +50,7 @@ The signed Cedar bundle permits `invoice:read` and `vendor:read` unconditionally
 |---|---|---|---|
 | **1** | **Critical** | The deployed PEP never evaluates token caveats. `ScopeSubset` and `BudgetCeiling` are ignored — a read-only agent successfully moved money. | **Fixed** — see §5 |
 | **2** | **Critical** | The deployed PEP never primed its lease pool, so *every* budgeted request was refused and `budgets.committed` never moved. This is the "nothing changes" symptom. | **Fixed** in this pass |
-| **3** | **High** | The identity tree renders **blank** whenever two agents share a depth — `d3.stratify` throws `ambiguous: agt-depth-1` and the error is silently swallowed. | **Open** |
+| **3** | **High** | The identity tree renders **blank** whenever two agents share a depth — `d3.stratify` throws `ambiguous: agt-depth-1` and the error is silently swallowed. | **Fixed** — plus two further render bugs behind it, see §5 |
 | 4 | Medium | Max single payment is hard-capped at the 5,000 lease size, with no environment override. A 500,000 mandate cannot authorize a 8,000 payment. | Open |
 | 5 | Low | Authentication and routing failures are **not** written to the audit chain, but still hand the caller a `decision_id` that resolves to nothing. | Open |
 | 6 | Low | Unmapped routes and revoked tokens return `401`, where `403` is the accurate status. | Open |
@@ -317,11 +317,16 @@ so **nothing is drawn, no error is shown, and the status indicator still reads
 3. `d3.stratify()` requires unique ids and throws on duplicates.
 4. The catch swallows it.
 
-**Two things worth separating.** The blank canvas is a *display* bug and cheap to improve:
-the tree should key on something unique (the terminal `block_id` is already in the payload
-and *is* unique per agent) and should surface a stratify failure instead of hiding it.
-But real per-agent names still need the gap 2 parser — until then the tree can only ever
-show one node per depth level, which is not what `DEMO.md` beat 2 promises.
+**Fixed, and it took three changes rather than one.** The tree now keys on the terminal
+`block_id` (unique per agent, already in the payload) and surfaces a stratify failure
+instead of hiding it. That alone was not enough: driving the real page under a browser
+found two further bugs that had kept it from ever rendering a node —
+`d3.linkHorizontal()`'s accessors were dereferenced twice and threw before the node join,
+and a cancelled transition left every node at `opacity: 0`. See `TODO.md` item 15; the
+tree now draws root → three siblings → depth 2 → depth 3.
+
+What remains is *labelling*: the nodes read `agt-depth-N` and their roles read `UNKNOWN`,
+which still needs the gap 2 parser (`TODO.md` item 4).
 
 ### Finding 4 — Single payments are capped at the hardcoded lease size (Medium, open)
 
