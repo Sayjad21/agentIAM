@@ -326,17 +326,31 @@ claiming the old figure.
 
 ## P3 — verification gaps in this pass
 
-### 14. Verify the narrowing-only approval invariant against a live request
+### ~~14. Verify the narrowing-only approval invariant against a live request~~ — **DONE**
 
-The manual pass could **not** confirm "approve narrows, never widens" (EC-A09) end to end:
-the auth gate returns `401` before the widening check runs, so the check was never reached.
-It is covered by `tests/integration/test_escalations_api.py`, but the property `DEMO.md`
-leans on hardest has never been demonstrated against a running system.
+EC-A09 holds against a running control plane. The session cookie is forged with the
+deployment's own secret, exactly as `tests/integration/test_escalations_api.py` does —
+which is not a shortcut past the auth gate but the only way *through* it to the check
+under test. Keycloak decides who a principal is; this is about what an authenticated
+approver may then do.
 
-- **Needs:** the Keycloak login path wired far enough to obtain a session cookie for an
-  approver on the allowlist.
-- **Done when:** a live `POST /v1/escalations/{id}/approve` asking for more than was
-  requested is refused, with the refusal shown in the console.
+| approve request | result |
+|---|---|
+| widen the amount, 75,000 requested → 90,000 approved | **400** — "approval would grant amount 90000, above the requested 75000.0000" |
+| widen the scopes, adding `invoice:write` | **400** — "approval would grant ['invoice:write'], which was not requested" |
+| narrow, 75,000 → 50,000, scopes unchanged | **200** |
+| any of the above with no session | 401 — the gate that hid all of this |
+
+**Two things the exercise turned up.**
+
+A *separation of duties* control I did not know existed and which is not in `DEMO.md`:
+approving is refused with "cannot approve their own agent's escalation" when the approver
+is the principal that raised it. My first run had them as the same identity, so both
+widening cases were refused for the wrong reason and passed — the same shape of masking
+that hid this invariant in the first place. Worth putting in the demo script; it is a
+control a bank CTO would ask about.
+
+And a small defect, filed as item 16.
 
 ### ~~15. Exercise the console pages that this pass could only check over HTTP~~ — **DONE**, and it found two bugs
 
@@ -374,3 +388,26 @@ bars. `DEMO.md` beat 2, on screen, for the first time.
 check means either a browser-automation dependency (Playwright pulls a browser download)
 or a hand-rolled CDP client in CI, and neither is worth it for two pages until something
 else needs a browser. Worth revisiting if a third SSE page appears.
+
+---
+
+## Found since
+
+### 16. A duplicate escalation returns 500, not 409
+
+`escalations.decision_id` has a unique constraint — one escalation per decision, which is
+right — but a second `POST /v1/escalations` for the same decision surfaces the
+`UniqueViolationError` as an unhandled 500 with `Internal Server Error` and a SQLAlchemy
+traceback in the log.
+
+409 is the status this repository already uses for exactly this shape: `_refuse_activation`
+in `app.py` returns 409 for a policy activation that is well-formed and permitted but
+conflicts with current state, citing ADR-030 and spec 05 §5.5. A duplicate escalation is
+the same case.
+
+Found while verifying item 14 — the second run of the check reused a decision id from the
+first.
+
+- **Done when:** the duplicate returns 409 naming the existing escalation, and a test
+  covers it. Worth checking the other `POST` routes for the same pattern while there.
+
