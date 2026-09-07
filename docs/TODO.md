@@ -188,23 +188,31 @@ Two design points worth keeping:
 Seven tests, including one that watches it actually sweep on a 10 ms interval and stop on
 shutdown.
 
-### 10. Audit authentication and routing refusals
+### ~~10. Audit authentication and routing refusals~~ — **DONE**, as the alternative
 
-An unauthenticated request returns a `decision_id`, but
-`/v1/audit/search?decision_id=…` returns `{"results":[],"total":0}` and the chain total does
-not move. Refusals before token verification take `_refuse` rather than
-`_record_and_refuse`, so they never reach the ledger.
+The item said to investigate whether the omission was deliberate before changing either
+side. It is, and structurally so: a `DecisionRecord` requires `principal_id`, `task_id`,
+`agent_id`, `depth` and `token_chain_ids`, every one read off a **verified** token. A
+refusal that happens before verification has no truthful value for any of them, and
+inventing one would put an unauthenticated caller's guess into the hash chain. Recording
+them would also let anyone who can reach the PEP grow the chain without presenting a
+credential.
 
-Two consequences: credential probing leaves no audit trail, and the `decision_id` handed to
-a caller cannot be looked up by the operator they would quote it to.
+So the fix is the one the item named as the alternative: **stop returning a `decision_id`
+that resolves to nothing.** Spec 09 §11.3 assumed every refusal has a record — it says
+`decision_id` "ties the refusal to the audit record" — and now states the exception and
+why. `trace_id` still travels, which is the question a client can actually get answered
+here.
 
-- **Investigate first:** whether this is deliberate. Recording pre-verification refusals
-  makes the chain writable by an unauthenticated caller, which is a denial-of-service and
-  a chain-growth concern — that may be exactly why it is built this way. If so, the fix is
-  to **stop returning a `decision_id`** for unrecorded refusals rather than to record them.
-  Check the threat model and spec 08 before changing either side.
-- **Done when:** a refusal either appears in the chain or does not claim an id that implies
-  it does.
+Measured before the change: an unauthenticated request returned `decision_id: b67e507f-…`
+and `GET /v1/audit/search?decision_id=b67e507f-…` returned `{"results": [], "total": 0}`
+with the chain length unchanged — an identifier the client could quote to an operator who
+would then find nothing, which reads as a *lost* record rather than an absent one.
+
+One existing test asserted the old contract (`test_every_refusal_carries_a_decision_id`,
+using a request with no token at all — the very case). Split into three: a recorded
+refusal names its record, a pre-verification refusal omits the id and keeps `trace_id`,
+and an unmapped route does the same because routing is decided before there is a token.
 
 ### ~~11. Fix the status codes~~ — **investigated, no change. I was wrong.**
 
