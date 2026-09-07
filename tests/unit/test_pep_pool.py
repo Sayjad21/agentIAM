@@ -516,3 +516,106 @@ class TestCommit:
 
         with pytest.raises(ReservationInsufficientError):
             pool.commit(BudgetDimension.TOOL_CALLS, reservation, Decimal(1))
+
+
+class TestALeaseThatExpiresUnspentIsReplaced:
+    """TODO item 24 — the PEP used to stop authorizing anything that costs money.
+
+    A lease leaves service two ways: it drains, or it ages out. `_maybe_schedule_topup` only
+    tested the first, so a lease that expired **unspent** — `remaining_local` still the full
+    grant — never triggered an ACQUIRE. `check()` then refused it on every later request,
+    forever.
+
+    Not a corner case. The deployed PEP primes one lease at boot with a 60 s TTL, so any
+    stack idle for a minute after start-up fell into it. Found by leaving the demo stack up
+    and reading the console before sending traffic: eight payments over sixteen seconds, all
+    `LEASE_UNAVAILABLE`, with `select … from leases` showing one row, `granted 5000.0000`,
+    `settled 0.0000`, `state 'expired'`.
+    """
+
+    @staticmethod
+    def _clocked(ledger: FakeLedger) -> tuple[LeasePool, dict[str, datetime]]:
+        clock = {"t": NOW}
+        settings = PoolSettings(
+            pep_id="pep-1",
+            lease_size=Decimal(100),
+            ttl=timedelta(seconds=60),
+            skew=timedelta(seconds=5),
+            low_water=Decimal("0.25"),
+        )
+        return LeasePool(ledger, settings, mandate_id=MANDATE, now=lambda: clock["t"]), clock
+
+    async def test_an_expired_unspent_lease_schedules_a_replacement(self) -> None:
+        """The defect itself: full lease, past its TTL, and no ACQUIRE was ever issued."""
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger)
+        await pool.prime(SPEND)
+        assert len(ledger.acquired) == 1
+
+        clock["t"] = NOW + timedelta(seconds=61)
+        assert not pool.check({SPEND: Decimal(1)}).ok, "an expired lease must refuse"
+        await pool.drain()
+
+        assert len(ledger.acquired) == 2, "the refusal must have asked for a new lease"
+
+    async def test_the_next_request_after_the_refusal_is_covered(self) -> None:
+        """Recovery is the point: refusing once is correct, refusing forever is not."""
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger)
+        await pool.prime(SPEND)
+
+        clock["t"] = NOW + timedelta(seconds=61)
+        pool.check({SPEND: Decimal(1)})
+        await pool.drain()
+
+        assert pool.check({SPEND: Decimal(1)}).ok
+
+    async def test_a_healthy_lease_is_not_replaced(self) -> None:
+        """The guard still has to say no, or every request would top up.
+
+        Both halves matter: a lease with time left *and* budget left is the common case, and
+        acquiring a second one would strand budget this PEP has no plan to spend.
+        """
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger)
+        await pool.prime(SPEND)
+
+        clock["t"] = NOW + timedelta(seconds=10)
+        assert pool.check({SPEND: Decimal(1)}).ok
+        await pool.drain()
+
+        assert len(ledger.acquired) == 1
+
+    async def test_the_replacement_releases_the_lease_it_replaces(self) -> None:
+        """The old lease is handed back rather than left to the reaper.
+
+        Safe even though it has expired: the ledger's `release()` is a no-op for a lease
+        already in a terminal state (spec 04 §3), so this cannot double-decrement `leased`.
+        """
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger)
+        await pool.prime(SPEND)
+        first = pool._held[SPEND].lease.id
+
+        clock["t"] = NOW + timedelta(seconds=61)
+        pool.check({SPEND: Decimal(1)})
+        await pool.drain()
+
+        assert ledger.released == [first]
+        assert pool._held[SPEND].lease.id != first
+
+    async def test_expiry_inside_the_skew_margin_also_replaces(self) -> None:
+        """`check()` refuses at `expires_at - skew`, so the top-up must use the same line.
+
+        A top-up that waited for the true expiry would leave a five-second window in which
+        every request is refused and nothing is being done about it.
+        """
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger)
+        await pool.prime(SPEND)
+
+        clock["t"] = NOW + timedelta(seconds=56)  # past 60 - 5, before 60
+        assert not pool.check({SPEND: Decimal(1)}).ok
+        await pool.drain()
+
+        assert len(ledger.acquired) == 2

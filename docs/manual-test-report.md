@@ -397,3 +397,140 @@ rescued a violated one, and an omitted dimension was allowed rather than denied.
 masked in practice by the ledger, which enforces the mandate ceiling when it issues a lease
 — but not for the offline-verification claim, which is the one that rests on the token
 alone. Spec 01 §2.3 now records it; `mint_root` emits one check per dimension.
+
+---
+
+# Second pass — 2026-09-07
+
+A fresh hand-driven pass over the **demo stack as shipped** (`make demo-up`), run after
+TODO items 1–20 and 22 closed. Same standard as the first pass: nothing mocked, everything
+over HTTP, and every case records what was sent, what the specs say should come back, and
+what did.
+
+**Commit under test:** `46b9939` · **Result:** 58 cases across 9 areas.
+**5 anomalies found**, filed as TODO items 24–28. One is critical.
+
+## 8.1 What was running
+
+| Component | Started by | Port |
+|---|---|---|
+| Postgres 16 / Redis 7 / Keycloak | `docker compose … up -d --wait --build` | 5433 / 6379 / 8085 |
+| Control plane | the demo compose | 8000 |
+| **PEP** (`scripts/pep_service.py`) | the demo compose | 8082 |
+| Stub tools | the demo compose | internal |
+
+Stack healthy in 53 s (NFR-8 budget: 90 s). Tokens read out of the `demo-secrets` volume, so
+the chain under test is the one `make demo-up` produces.
+
+## 8.2 Findings at a glance
+
+| # | Severity | Finding | TODO |
+|---|---|---|---|
+| **1** | **Critical** | The PEP refuses every budgeted request 60 s after boot, permanently. The boot lease expires *unspent*, and the top-up guard tests the amount remaining rather than the expiry, so no ACQUIRE is ever issued. | 24 |
+| 2 | High | The SDK's `AgentIAM-Task-Intent` header can never match a demo-minted mandate: the seed hashes the intent with plain `sha256`, the spec and the PEP use canonical-JSON + SHA-256. | 25 |
+| 3 | Medium | `email:send` is served by the stub, governed by the corpus policy and described in the tool catalogue — and mapped by no route, so a whole policy branch has no end-to-end path. | 26 |
+| 4 | Low | Chain-of-custody on an unknown task returns `200` with an empty list, where EC-A05 specifies `404`. | 27 |
+| 5 | Low (doc) | `DEMO.md`'s F-2 drill scripts a narration for the T-031 template fallback, which is deferred and absent. | 28 |
+
+## 8.3 Case-by-case
+
+### Authentication and request shape — 4/4 as specified
+
+| Sent | Expected | Observed |
+|---|---|---|
+| no `Authorization` header | 401 `MALFORMED_REQUEST` | ✅ same |
+| `Bearer not-a-biscuit` | 401, refused before parsing cost | 401 `TOKEN_INVALID_SIGNATURE` — *more precise than expected* |
+| a token truncated mid-chain | 401 | 401 `TOKEN_INVALID_SIGNATURE` |
+| `GET /proxy/nope/x` (unmapped) | 401 `MALFORMED_REQUEST` (spec 09 §11, item 11) | ✅ same |
+
+### Root authority — 4/4
+
+`invoice:read` and `vendor:read` allowed; a payment inside every ceiling allowed; an
+`x-agentiam-intent` the token is not bound to refused `INTENT_MISMATCH`.
+
+### Attenuation, the core guarantee — 6/6
+
+| Agent | Action | Expected | Observed |
+|---|---|---|---|
+| `agt-doc-reader` | read invoice (scope kept) | 200 | ✅ |
+| `agt-doc-reader` | pay (scope given up) | 403 `SCOPE_ATTENUATED_AWAY` | ✅ |
+| `agt-negotiator` | read vendor (kept) | 200 | ✅ |
+| `agt-negotiator` | read invoice (given up) | 403 `SCOPE_ATTENUATED_AWAY` | ✅ |
+| `agt-payer` | read invoice (given up) | 403 `SCOPE_ATTENUATED_AWAY` | ✅ |
+| `agt-settlement` (depth 2) | pay (kept) | 200 | ✅ |
+
+### Quantitative caps — 3/3
+
+`agt-settlement` over its 25,000 caveat ceiling → `BUDGET_EXHAUSTED_CAVEAT`; root over the
+mandate's 500,000 → `BUDGET_EXHAUSTED_MANDATE`. The two are distinguishable at last (item 17).
+
+### Policy — 1/1, plus the activation gate 4/4
+
+`agt-subcontractor` at depth 3 holds a valid token and is refused `POLICY_DENIED` by
+`principal.depth <= 2` — the layer separation the demo exists to show.
+
+| `POST /policy/activate` | Expected | Observed |
+|---|---|---|
+| unparseable Cedar | 409 | ✅ |
+| parses, fails the corpus | 409 | ✅ |
+| the real corpus policy | 200 | ✅ |
+| empty source | 409 | ✅ |
+
+### Revocation — 9/9, including the subtree property
+
+Revoking `agt-doc-reader`'s terminal block took effect on the **next request** (< 1 s via the
+Redis push path). Revoking `agt-payer`'s block:
+
+```
+agt-payer         -> 401 TOKEN_REVOKED
+agt-settlement    -> 401 ANCESTOR_REVOKED     (child)
+agt-subcontractor -> 401 ANCESTOR_REVOKED     (grandchild)
+agt-negotiator    -> unaffected               (unrelated sibling)
+```
+
+INV-10 exactly. Re-revoking the same block id is idempotent and returns the same row
+(spec 07 §9); an invalid scope is 400; a non-approver is 403.
+
+### Escalations — 18/18
+
+Open 201; **duplicate for the same decision 409 naming the existing escalation** (item 16);
+list 200; invalid state 400; approve with no session 401; widening the amount 400; adding an
+unrequested scope 400; unknown id 404; non-approver 403; **approving your own agent's
+escalation 403** (separation of duties); narrowing 200 with a verifiable elevated token at the
+narrowed amount; approving twice 409 (EC-A10); deny 200.
+
+### Audit and custody — 4/5
+
+Chain verifies (`ok: true`) across every record; search 200; custody for the real task returns
+55 ordered entries. Only the unknown-task case deviates — see finding 4.
+
+### Console, under a real Chrome — 7/7 pages, no errors
+
+Every page renders with no error banner and no uncaught exception. Identity tree: 6 nodes, the
+root labelled by its principal and subtitled `principal` (item 18), the revoked subtree
+correctly marked `REVOKED` and the untouched sibling keeping its role. Budgets reconciles to
+the paisa — `committed 1,600` = 100 + 1,000 + 500, invariants holding. Both SSE streams emit
+their opening `snapshot`. `/metrics` on both services; 46 `agentiam_*` series on the PEP.
+
+> **The budgets page shows `ACTIVE LEASES 0` while the PEP is running.** That is finding 1
+> visible on screen, and it is the single most useful symptom to recognise.
+
+## 8.4 What this pass confirms works
+
+Everything the first pass found broken is fixed and stayed fixed: caveats are enforced,
+the pool primes, the tree renders with real names. Added since and confirmed here: the
+mandate's own ceiling is distinguishable from a caveat's, `failing_caveat` is populated,
+duplicate escalations are 409, the root node reads as the principal, and separation of duties
+holds. The four refusal layers — scope, caveat ceiling, mandate ceiling, policy — are each
+reachable and each name themselves correctly.
+
+## 8.5 Reproducing this
+
+```
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --wait --build
+docker compose … run --rm --no-deps -T seed cat /secrets/demo-tokens.json > tokens.json
+# then drive the PEP on :8082 and the control plane on :8000
+```
+
+For finding 1, the important part is **not** to run `make demo-seed` first: wait 60 seconds
+after the stack reports healthy, then send a payment.
