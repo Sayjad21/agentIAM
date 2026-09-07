@@ -3950,3 +3950,104 @@ does not generalise itself to the sibling branch.
 refuses the first payment (correctly — at that instant there is no usable lease) and allows
 the second, with a fresh `active` row in `leases` and `budgets` reconciling to the paisa.
 Before the fix, eight consecutive attempts over sixteen seconds all failed.
+
+---
+
+## ADR-066 — An intent hash has one definition, and it now has one name
+
+**Status:** accepted · **Closes:** TODO item 25
+
+Two sides compute the hash a mandate is bound to. A mandate is *minted* with one; the PEP
+*recomputes* one from the `AgentIAM-Task-Intent` header the SDK sends. They disagreed:
+`Pipeline._context_for` called `hash_object(text)` — canonical JSON, then SHA-256, which is
+what spec 06 §1 and `PLAN.md` §493 specify — while `scripts/seed_demo.py` minted a bare
+`sha256(text.encode())`.
+
+Same text, two hashes. Measured against the running demo stack, one token:
+
+```
+no intent header                              -> 200 OK   (the token's own hash is used)
+AgentIAM-Task-Intent: <the exact minted text> -> 403 INTENT_MISMATCH
+x-agentiam-intent: sha256(text)               -> 200 OK
+```
+
+So an agent using the official SDK to assert the **correct** intent was refused on every
+call, and the demo only worked because its driver sends neither header. `client.py:118` sets
+exactly the header that fails.
+
+**The fix is a name, not a formula.** `agentiam_core.hashing.intent_hash()` is now the one
+definition, and both the minter and the verifier call it. The old code was not wrong in some
+subtle way — one side simply spelled it differently, which is what happens when a rule lives
+in two expressions instead of one function. The seed was the deviation: every other site in
+the tree already canonicalized.
+
+Verified after the change, same stack:
+
+```
+AgentIAM-Task-Intent: the exact minted text  -> 200 OK
+AgentIAM-Task-Intent: a different task       -> 403 INTENT_MISMATCH
+x-agentiam-intent: the old bare sha256       -> 403 INTENT_MISMATCH
+```
+
+The second and third lines matter as much as the first: the binding still refuses a wrong
+intent, and the fix moved the check rather than loosening it.
+
+---
+
+## ADR-067 — `email:send` gets two routes, because one could not express the condition
+
+**Status:** accepted · **Closes:** TODO item 26 · **Uncovered:** TODO item 29
+
+`email:send` was the second instance of the shape T-057 found for `vendor:read`: served by
+the stub tools, governed by the corpus policy, described in the tool catalogue — and mapped
+by no route, so the deployed PEP answered `401 MALFORMED_REQUEST`. A whole policy branch with
+no end-to-end path.
+
+**Two routes rather than one**, because the catalogue's `email_internal` and `email_external`
+differ only by `is_external`, and that is precisely the attribute
+`permit(email:send) when { !resource.is_external }` turns on. The route table chooses the tool
+statically, so a single route could name only one of them and the condition would have had
+nothing to distinguish. The stub gains `POST /email/send-external` as the counterpart — a
+path rather than a body flag, for the same reason.
+
+Verified live, and the distinction is the proof:
+
+```
+POST /proxy/email/send            -> 403 SCOPE_NOT_GRANTED   (routed, refused by the mandate)
+POST /proxy/email/send-external   -> 403 SCOPE_NOT_GRANTED   (routed)
+POST /proxy/email/nope            -> 401 MALFORMED_REQUEST   (still genuinely unmapped)
+```
+
+`SCOPE_NOT_GRANTED` is the *right* refusal here — the demo mandate does not grant
+`email:send` — and reaching it at all is what shows the route exists.
+
+**What this uncovered is bigger than what it fixed.** Wiring the tools raised the question of
+which catalogue the deployed PEP actually uses, and the answer is: none.
+`scripts/pep_service.py` builds `CedarEngine(bundle)` with no `tools=`, so every tool resolves
+to `_UNKNOWN_TOOL` and every resource-attribute rule in the bundle is inert — including a
+`forbid` on critical resources that five corpus cases assert. Filed as item 29 rather than
+fixed here, because wiring the catalogue would refuse every payment in the demo, and choosing
+which of the three conflicting facts gives is a decision, not a patch.
+
+---
+
+## ADR-068 — EC-A05's 404, and a test that had pinned the deviation
+
+**Status:** accepted · **Closes:** TODO item 27
+
+`GET /v1/audit/custody/{task_id}` returned `200 {"entries": []}` for a task that does not
+exist. `PLAN.md` §11.7 EC-A05 says *"custody query on an unknown action: 404 with a clear
+message."*
+
+Same shape as item 10: handing back something that looks like an answer and resolves to
+nothing. An operator cannot tell *this task did nothing* from *this task does not exist* —
+and the route keys on a **task** id, so passing the decision id its name suggests produced
+the same silent empty result. The 404's message now says so explicitly, because that
+confusion is the likeliest way to arrive at it.
+
+**The test asserted the wrong contract.** `test_custody_of_an_unknown_task_is_an_empty_narrative`
+expected `200` and an empty list — it pinned what the endpoint did rather than what the
+acceptance case requires, so EC-A05 read as covered while being unmet. Corrected rather than
+weakened (rule 9): the spec is right here and the code was wrong, so the test moves to the
+spec. A companion test asserts a real task still returns its entries, since the easy mistake
+in the other direction is a 404 that swallows a live task.

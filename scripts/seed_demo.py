@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import sys
 import uuid
@@ -100,13 +99,14 @@ _DESCENDANTS: Final[tuple[tuple[str, str, str, frozenset[str], Decimal], ...]] =
 
 def _mandate(now: datetime) -> Mandate:
     """The demo grant. Fixed ids so compose can name the mandate before this runs."""
+    from agentiam_core.hashing import intent_hash
     from agentiam_core.models import Budget, Mandate
 
     return Mandate(
         mandate_id=DEMO_MANDATE_ID,
         task_id=DEMO_TASK_ID,
         principal_id="kc:11111111-1111-1111-1111-111111111111",
-        intent_hash=hashlib.sha256(DEMO_INTENT.encode()).hexdigest(),
+        intent_hash=intent_hash(DEMO_INTENT),
         scopes=frozenset({"invoice:read", "vendor:read", "payment:initiate"}),
         budget=Budget(spend_bdt=POOL_TOTAL, tool_calls=1000, rows_read=100_000),
         max_depth=4,

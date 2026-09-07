@@ -436,9 +436,13 @@ class Pipeline:
         )
 
         if task_intent_text is not None:
-            from agentiam_core.hashing import hash_object
+            # The same function the mandate was minted with. It used not to be: this
+            # computed `hash_object(text)` while `seed_demo.py` minted a bare
+            # `sha256(text.encode())`, so an agent using the SDK to assert the *correct*
+            # intent was refused on every call (TODO item 25).
+            from agentiam_core.hashing import intent_hash
 
-            request_intent = hash_object(task_intent_text)
+            request_intent = intent_hash(task_intent_text)
         else:
             request_intent = headers.get(INTENT_HEADER, token.intent_hash)
 

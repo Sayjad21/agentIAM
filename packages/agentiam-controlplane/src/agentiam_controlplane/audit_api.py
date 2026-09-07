@@ -95,8 +95,26 @@ def build_router(
         Each entry carries `explanation` from the same `explain()` the live stream uses, so
         a refusal in the custody view names the exact caveat rather than a generic message —
         the same guarantee T-046 gave the live feed, here for the historical record.
+
+        Raises:
+            HTTPException: 404 if the task has no records — `PLAN.md` §11.7 EC-A05, *"custody
+                query on an unknown action: 404 with a clear message"*. This returned
+                `200 {"entries": []}` until the second manual pass (TODO item 27), which is
+                the same shape item 10 removed elsewhere: an answer that looks like one and
+                resolves to nothing. An operator could not tell *this task did nothing* from
+                *this task does not exist*, and the endpoint keys on **task_id** — so a
+                decision id, the thing its name suggests, produced the same empty answer
+                rather than an error.
         """
         entries = await custody(session, task_id=task_id)
+        if not entries:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"no audit records for task {task_id}. This endpoint takes a task id, "
+                    f"not a decision id — a decision id resolves to no task and lands here."
+                ),
+            )
         narrative: list[dict[str, Any]] = [
             {
                 "seq": entry.seq,

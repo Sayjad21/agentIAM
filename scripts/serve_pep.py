@@ -86,6 +86,28 @@ ROUTES: Final[dict[str, Any]] = {
             "drift_mode": "off",
         },
         {
+            # `email:send` was the second scope in the `vendor:read` shape: served by the
+            # stub, governed by the corpus policy, described in the tool catalogue — and
+            # mapped by nothing, so `401 MALFORMED_REQUEST`. Two routes rather than one,
+            # because `email_internal` and `email_external` differ only by `is_external`,
+            # and that is the attribute `permit(email:send) when { !resource.is_external }`
+            # turns on; a single route could name only one of them. TODO item 26.
+            "method": "POST",
+            "path": "/email/send",
+            "scope": "email:send",
+            "tool": "email_internal",
+            "args": {"email.to": "body.to"},
+            "drift_mode": "off",
+        },
+        {
+            "method": "POST",
+            "path": "/email/send-external",
+            "scope": "email:send",
+            "tool": "email_external",
+            "args": {"email.to": "body.to"},
+            "drift_mode": "off",
+        },
+        {
             "method": "POST",
             "path": "/payments",
             "scope": "payment:initiate",

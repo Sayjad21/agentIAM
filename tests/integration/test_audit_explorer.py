@@ -187,14 +187,39 @@ class TestTheEndpoints:
         assert "block 2" in denied["explanation"]
         assert "60000" in denied["explanation"]
 
-    async def test_custody_of_an_unknown_task_is_an_empty_narrative(
+    async def test_custody_of_an_unknown_task_is_404(
         self, client: AsyncClient, migrated_engine: AsyncEngine
     ) -> None:
+        """EC-A05: an unknown task is a 404 with a clear message.
+
+        `PLAN.md` §11.7 names it. This test previously asserted `200` with an empty list,
+        which is what the endpoint did — so it pinned the deviation rather than the
+        contract, and the acceptance case
+        it exists for read as covered. Corrected in the second manual pass (TODO item 27),
+        which found the behaviour by querying a made-up id and getting an answer back.
+
+        It is the same shape item 10 removed elsewhere: handing back something that looks
+        like an answer and resolves to nothing. An operator cannot tell *this task did
+        nothing* from *this task does not exist* — and since the route keys on a **task**
+        id, passing the decision id its name suggests produced the same silent empty
+        result.
+        """
         await seed(migrated_engine, [a_record()])
         async with client:
             resp = await client.get(f"/v1/audit/custody/{uuid.uuid4()}")
+        assert resp.status_code == 404
+        assert "task id" in resp.json()["detail"], "the message must say what was expected"
+
+    async def test_custody_of_a_real_task_is_unchanged(
+        self, client: AsyncClient, migrated_engine: AsyncEngine
+    ) -> None:
+        """The 404 must not swallow a task that genuinely has records."""
+        task = uuid.uuid4()
+        await seed(migrated_engine, [a_record(task_id=task)])
+        async with client:
+            resp = await client.get(f"/v1/audit/custody/{task}")
         assert resp.status_code == 200
-        assert resp.json()["entries"] == []
+        assert resp.json()["entries"]
 
     async def test_verify_reports_an_intact_chain(
         self, client: AsyncClient, migrated_engine: AsyncEngine

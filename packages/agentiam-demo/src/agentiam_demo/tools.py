@@ -137,10 +137,25 @@ def create_tools_app() -> FastAPI:
 
     @app.post("/email/send")
     async def send_email(body: dict[str, Any]) -> dict[str, Any]:
-        """Accept an email. Sends nothing, which is the entire point of a stub here."""
+        """Accept an internal email. Sends nothing, which is the point of a stub here."""
         to = body.get("to")
         if not to:
             raise HTTPException(status_code=400, detail="to is required")
         return {"message_id": _stable_id("msg", str(to)), "to": to, "status": "queued"}
+
+    @app.post("/email/send-external")
+    async def send_email_external(body: dict[str, Any]) -> dict[str, Any]:
+        """The same thing, addressed outside the organization.
+
+        A separate path rather than a flag in the body, because the *route table* is what
+        chooses the tool, and `email_internal` / `email_external` differ only by
+        `is_external` — the attribute the corpus policy's `permit(email:send) when
+        { !resource.is_external }` turns on. One endpoint could not express both sides, so
+        the condition had nothing to distinguish and no end-to-end path (TODO item 26).
+        """
+        to = body.get("to")
+        if not to:
+            raise HTTPException(status_code=400, detail="to is required")
+        return {"message_id": _stable_id("msg-ext", str(to)), "to": to, "status": "queued"}
 
     return app
