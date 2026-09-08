@@ -91,6 +91,10 @@ spec:
               value: /secrets/policy_bundle.sig
             - name: AGENTIAM_PEP_ROUTES_PATH
               value: /secrets/routes.json
+            # Organization-asserted roles, keyed by delegation path. Optional: unset,
+            # every agent falls back to AGENTIAM_PEP_DEFAULT_ROLE.
+            - name: AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH
+              value: /secrets/role_assignments.json
             - name: AGENTIAM_PEP_ROOT_PUBLIC_KEYS
               valueFrom:
                 secretKeyRef:

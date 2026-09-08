@@ -91,8 +91,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BlockIdentity",
+    "ChainIdentity",
     "ParsedBlock",
     "TokenAuthority",
+    "chain_identity",
     "effective_authority",
     "parse_block_source",
     "parse_token",
@@ -217,6 +219,25 @@ class BlockIdentity:
     agent_id: str | None = None
     role: str | None = None
     declared_depth: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChainIdentity:
+    """Who a whole chain names — the terminal block's identity, and the route to it.
+
+    One object because one `parse_token` answers both, and a caller on the request path
+    cannot afford two: a parse costs ~227 µs at depth 3 (`docs/benchmarks/performance.md`
+    §tier 4), and the per-request budget there already accounts for exactly two — the
+    principal and the caveats.
+    """
+
+    #: The terminal block's declared identity, or an empty `BlockIdentity` for a root token.
+    #: Identical to what `token_identity` returns, which is now defined in terms of this.
+    terminal: BlockIdentity
+    #: One agent id per attenuation block, root-first; empty for a root token. The last
+    #: segment is `terminal.agent_id`, or the positional fallback where the block declared
+    #: none. See `chain_identity` for what this is and is not evidence of.
+    path: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,6 +599,40 @@ def token_caveats(token: VerifiedToken) -> tuple[Caveat, ...]:
     return tuple(c for block in parse_token(token)[1:] for c in block.caveats)
 
 
+def chain_identity(token: VerifiedToken) -> ChainIdentity:
+    """Read the chain's identities in one parse — the terminal block's, and the path to it.
+
+    The path is one segment per attenuation block, root-first, so a root token's is empty and
+    the last segment is the terminal block's `agent_id`. A block that declares no agent, or
+    declares one ambiguously, contributes the positional `agt-depth-{index}` its
+    `BlockIdentity` could not supply — a name for the *slot*, which no block can choose
+    because it is the block's own position in the chain. The index is the depth at that
+    block, since `depth` is `block_count - 1`.
+
+    **Every segment is parent-asserted; the path as a whole is still worth more than any one
+    of them.** A bare `agent_id` is worth nothing as an authorization input — any agent that
+    can attenuate may name its child anything, so a lookup keyed on a name alone lets an
+    agent claim any identity in the deployment, which is the `declared_depth` mistake
+    (ADR-005) and ADR-057's rejected `role` fact in a third guise. A *path* narrows that to
+    identities the claimant could actually have created: a block can only be appended below
+    the chain that already exists, so an agent can forge paths that extend its own and no
+    others. Anything an organization keys on a path therefore trusts each agent with the
+    authority of its own descendants — which delegation already implies, a parent holding at
+    least what it hands down — and not with the authority of the tree.
+
+    That is weaker than an issued, organization-signed identity, and it is what is available
+    without an issuance service (`STATUS.md` gap 7). It holds only while what is keyed on the
+    path does not *widen* with depth: an ancestor granted less than its own descendant can
+    reach the descendant's grant by minting it. `pep_service.load_role_assignments` is the
+    caller this bears on, and it checks exactly that.
+    """
+    blocks = parse_token(token)
+    return ChainIdentity(
+        terminal=blocks[-1].identity if len(blocks) >= 2 else BlockIdentity(),
+        path=tuple(b.identity.agent_id or f"agt-depth-{b.index}" for b in blocks[1:]),
+    )
+
+
 def token_identity(token: VerifiedToken) -> BlockIdentity:
     """The identity the terminal block declares — who this token was delegated to.
 
@@ -588,11 +643,12 @@ def token_identity(token: VerifiedToken) -> BlockIdentity:
     Parent-asserted, like everything in `BlockIdentity`. Spec 01 §6.1 gives `role` to "the
     console and audit"; treating it as an authorization input would repeat the
     `declared_depth` mistake ADR-005 exists to prevent.
+
+    A caller that also needs the delegation path should call `chain_identity` instead and
+    take `.terminal` — this is that, with the path thrown away, and the parse is the
+    expensive part.
     """
-    blocks = parse_token(token)
-    if len(blocks) < 2:
-        return BlockIdentity()
-    return blocks[-1].identity
+    return chain_identity(token).terminal
 
 
 def effective_authority(token: VerifiedToken) -> TokenAuthority:

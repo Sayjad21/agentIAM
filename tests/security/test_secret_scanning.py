@@ -474,6 +474,11 @@ def test_env_example_carries_only_placeholders() -> None:
             "AGENTIAM_PEP_POLICY_BUNDLE_PATH",
             "AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH",
             "AGENTIAM_PEP_ROUTES_PATH",
+            # A Cedar role name, and the least privileged one the shipped corpus knows.
+            # It grants nothing by itself — the bundle decides what a role may do, and the
+            # value here is what an agent gets when the organization has said nothing about
+            # it. `AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH` is a path and stays empty anyway.
+            "AGENTIAM_PEP_DEFAULT_ROLE",
             "AGENTIAM_CONTROLPLANE_REDIS_URL",
         }:
             continue

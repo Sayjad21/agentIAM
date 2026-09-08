@@ -75,14 +75,16 @@ _CEDAR = 'permit(principal, action == Action::"invoice:read", resource);\n'
 # --------------------------------------------------------------------------- fixtures
 
 
-def _write_bundle(tmp_path: Path) -> tuple[Path, Path, str]:
+def _write_bundle(
+    tmp_path: Path, *, tools: dict[str, dict[str, object]] | None = None
+) -> tuple[Path, Path, str]:
     """Write a signed bundle + detached signature, returning both paths and the pubkey hex."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from agentiam_core.bundles import PolicyBundle, public_key_to_hex, sign_bundle
 
     private_key = Ed25519PrivateKey.generate()
-    bundle = PolicyBundle(version="v1", cedar_source=_CEDAR, serial=1)
+    bundle = PolicyBundle(version="v1", cedar_source=_CEDAR, serial=1, tools=tools)
     signature = sign_bundle(bundle, private_key)
 
     bundle_path = tmp_path / "bundle.json"
@@ -92,6 +94,7 @@ def _write_bundle(tmp_path: Path) -> tuple[Path, Path, str]:
                 "version": bundle.version,
                 "cedar_source": bundle.cedar_source,
                 "serial": bundle.serial,
+                "tools": bundle.tools,
             }
         ),
         encoding="utf-8",
@@ -107,9 +110,21 @@ def _routes_file(tmp_path: Path) -> Path:
     return path
 
 
-def _base_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+def _role_file(tmp_path: Path, assignments: dict[str, str]) -> Path:
+    path = tmp_path / "role_assignments.json"
+    path.write_text(json.dumps(assignments), encoding="utf-8")
+    return path
+
+
+def _base_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    tools: dict[str, dict[str, object]] | None = None,
+    roles: dict[str, str] | None = None,
+) -> str:
     """Set every required variable. Returns the policy public key hex."""
-    bundle_path, sig_path, policy_pub = _write_bundle(tmp_path)
+    bundle_path, sig_path, policy_pub = _write_bundle(tmp_path, tools=tools)
     monkeypatch.setenv("AGENTIAM_PEP_UPSTREAM_BASE_URL", "http://tools:8081")
     monkeypatch.setenv("AGENTIAM_PEP_DATABASE_URL", "postgresql+asyncpg://a:b@localhost:5432/c")
     monkeypatch.setenv("AGENTIAM_PEP_REDIS_URL", "redis://localhost:6379/0")
@@ -122,6 +137,11 @@ def _base_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
     monkeypatch.setenv("AGENTIAM_PEP_ID", "pep-test-1")
     monkeypatch.setenv("AGENTIAM_PEP_MANDATE_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("AGENTIAM_PEP_DRIFT_MODE", raising=False)
+    monkeypatch.delenv("AGENTIAM_PEP_DEFAULT_ROLE", raising=False)
+    if roles is None:
+        monkeypatch.delenv("AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH", raising=False)
+    else:
+        monkeypatch.setenv("AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH", str(_role_file(tmp_path, roles)))
     return policy_pub
 
 
@@ -240,6 +260,97 @@ class TestPolicyLoading:
         monkeypatch.delenv("AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH", raising=False)
         with pytest.raises(ValueError, match="POLICY_BUNDLE_SIG_PATH"):
             pep_service.ServiceSettings.from_env()
+
+
+class TestTheDeployedEngineHasTheBundleSCatalogue:
+    """TODO item 29's surface defect: the deployed PEP had no tool catalogue at all.
+
+    `CedarEngine.__init__` does `self.tools = dict(tools or {})` and `_facts_for` falls back
+    to `_UNKNOWN_TOOL` — `sensitivity="low"`, `is_external=False`, the safe end of every axis.
+    `load_policy` passed no `tools=`, so in the deployment every resource looked
+    low-sensitivity and internal whatever the catalogue said, and both resource-attribute
+    rules in the shipped bundle were inert:
+
+        forbid(principal, action, resource)
+        when { resource.sensitivity == "critical" && principal.role != "senior" };
+
+        permit(principal, action == Action::"email:send", resource)
+        when { !resource.is_external };
+
+    They passed in CI the whole time, because every corpus case builds its own engine with
+    `CORPUS_TOOLS` in hand. Nothing asserted the *deployed* engine had one, which is the gap
+    this class closes — and the reason the catalogue now travels inside the bundle is so that
+    there is no second artifact for a deployment to forget.
+    """
+
+    _TOOLS: ClassVar[dict[str, dict[str, object]]] = {
+        "payment_api": {
+            "tool_id": "payment_api",
+            "server": "bank",
+            "sensitivity": "critical",
+            "is_external": True,
+        },
+        "invoice_api": {"tool_id": "invoice_api", "server": "erp"},
+    }
+
+    def test_the_engine_takes_its_catalogue_from_the_bundle_it_verified(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agentiam_pep.policy import ToolFacts
+
+        _base_env(monkeypatch, tmp_path, tools=self._TOOLS)
+        engine = pep_service.load_policy(pep_service.ServiceSettings.from_env())
+
+        assert engine.tools == {
+            "payment_api": ToolFacts(
+                tool_id="payment_api", server="bank", sensitivity="critical", is_external=True
+            ),
+            # Absent attributes take `ToolFacts`' defaults, which are the safe end of each.
+            "invoice_api": ToolFacts(
+                tool_id="invoice_api", server="erp", sensitivity="low", is_external=False
+            ),
+        }
+
+    def test_a_bundle_without_a_catalogue_still_loads(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No catalogue is a legitimate bundle — every resource is then `_UNKNOWN_TOOL`.
+
+        The defect was never "the catalogue is empty"; it was that nothing could make it
+        non-empty. A deployment whose policy reads no resource attribute needs none.
+        """
+        _base_env(monkeypatch, tmp_path)
+        assert pep_service.load_policy(pep_service.ServiceSettings.from_env()).tools == {}
+
+    def test_editing_the_catalogue_on_disk_fails_the_signature(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Why the catalogue is inside the bundle rather than mounted beside it.
+
+        `resource.sensitivity` is an authorization input: downgrading `payment_api` from
+        `critical` to `low` disarms the forbid completely, and does it silently — every
+        request still returns a decision. An unsigned catalogue would be an authorization
+        layer anyone with disk access can rewrite, which is the exact threat `verify_bundle`
+        exists to close for the Cedar source.
+        """
+        _base_env(monkeypatch, tmp_path, tools=self._TOOLS)
+        bundle_path = tmp_path / "bundle.json"
+        payload = json.loads(bundle_path.read_text(encoding="utf-8"))
+        payload["tools"]["payment_api"]["sensitivity"] = "low"
+        bundle_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        settings = pep_service.ServiceSettings.from_env()
+        with pytest.raises(pep_service.ServiceConfigError, match="signature"):
+            pep_service.load_policy(settings)
+
+    def test_a_malformed_catalogue_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Fail closed at boot rather than serve a policy whose attributes went missing."""
+        _base_env(monkeypatch, tmp_path, tools={"payment_api": {"sensitivty": "critical"}})
+        settings = pep_service.ServiceSettings.from_env()
+        with pytest.raises(pep_service.ServiceConfigError, match="sensitivty"):
+            pep_service.load_policy(settings)
 
 
 # --------------------------------------------------------------------------- assembly
@@ -712,6 +823,240 @@ class TestAgentIdentity:
         assert [sorted(c.scopes) for c in recovered if isinstance(c, ScopeSubset)] == [
             ["invoice:read"]
         ]
+
+
+class TestOrganizationAssertedRoles:
+    """TODO item 29's real blocker: `principal.role` was one constant for the whole process.
+
+    ADR-057 is why the role does not come from the token — a delegating parent is not the
+    organization. What it does not settle is *how much* the organization can say, and until
+    now the answer was one word per process: `settings.default_role`, the same role for every
+    agent a PEP serves. A Cedar policy that discriminates on `principal.role` is therefore
+    always-on or always-off, never discriminating, and the shipped corpus asserts both halves
+    of a discrimination it could not make — `forbid_critical_tool_payment_worker` (beat 3)
+    and `forbid_critical_tool_payment_senior` (beat 8). They pass in CI only because each
+    corpus case constructs its own principal.
+
+    The fix keeps the source (configuration, organization-side) and drops the arity. It is
+    not the issuance service (`STATUS.md` gap 7): these roles are static until an operator
+    edits the file and restarts.
+
+    **Keyed on the delegation path, and that is a security property, not a format choice.**
+    An `agent_id` is written by the delegating parent. Keying on it would let any agent that
+    can attenuate name its child `agt-payer` and collect `agt-payer`'s role — ADR-057's own
+    attack routed through the name instead of the `role` fact. A path can only be forged by
+    an agent already on it, so the most an attacker reaches is a role the organization gave
+    to its own descendant; `_refuse_widening_roles` closes even that at boot.
+    """
+
+    NOW: ClassVar = TestAgentIdentity.NOW
+    _root = TestAgentIdentity._root
+    _delegate = TestAgentIdentity._delegate
+
+    @staticmethod
+    def _service(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, roles: dict[str, str] | None = None
+    ) -> pep_service.Service:
+        _base_env(monkeypatch, tmp_path, roles=roles)
+        return pep_service.build_service(pep_service.ServiceSettings.from_env())
+
+    # -- the arity fix ---------------------------------------------------------------
+
+    def test_two_agents_can_now_hold_two_different_roles(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The defect itself. One process, two agents, two roles the organization asserted."""
+        service = self._service(monkeypatch, tmp_path, {"agt-payer": "senior"})
+        root, key_set = self._root(frozenset({"invoice:read", "vendor:read"}))
+        payer = self._delegate(root, key_set, agent_id="agt-payer", role="payer")
+        reader = self._delegate(root, key_set, agent_id="agt-doc-reader", role="reader")
+
+        assert service.principal_for(payer).role == "senior"
+        assert service.principal_for(reader).role == "agent"
+
+    def test_an_unnamed_agent_falls_back_to_the_default_role(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        service = self._service(monkeypatch, tmp_path, {"agt-payer": "senior"})
+        root, key_set = self._root()
+        stranger = self._delegate(root, key_set, agent_id="agt-unknown", role="worker")
+
+        assert service.principal_for(stranger).role == "agent"
+
+    def test_no_role_file_leaves_every_agent_on_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The unconfigured deployment behaves exactly as it did before this existed."""
+        service = self._service(monkeypatch, tmp_path)
+        root, key_set = self._root()
+        token = self._delegate(root, key_set, agent_id="agt-payer", role="payer")
+
+        assert service.principal_for(token).role == "agent"
+
+    def test_the_default_role_is_finally_readable_from_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """`default_role` called itself configuration and nothing ever read the variable.
+
+        `serve_pep.py` names `AGENTIAM_PEP_DEFAULT_ROLE` in a comment as the thing its own
+        hardcoded constant stands in for, and `from_env` did not look it up — so the one role
+        a deployed PEP could assert was the dataclass default, unchangeable.
+        """
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("AGENTIAM_PEP_DEFAULT_ROLE", "contractor")
+        assert pep_service.ServiceSettings.from_env().default_role == "contractor"
+
+    # -- the path is the key ---------------------------------------------------------
+
+    def test_a_deeper_agent_is_keyed_by_its_whole_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        service = self._service(
+            monkeypatch,
+            tmp_path,
+            {"agt-payer": "senior", "agt-payer/agt-settlement": "senior"},
+        )
+        root, key_set = self._root()
+        payer = self._delegate(root, key_set, agent_id="agt-payer", role="payer")
+        settlement = self._delegate(payer, key_set, agent_id="agt-settlement", role="payer")
+
+        assert service.principal_for(settlement).role == "senior"
+
+    def test_a_stolen_name_under_a_different_parent_gets_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The attack a bare-id key would have opened, and the reason for the path.
+
+        `agt-negotiator` is not senior. It writes its child's block, so it can call that child
+        `agt-settlement` — the name the organization *did* make senior. Keyed on the name
+        alone the child collects `senior` and pays through a critical tool. Keyed on the path
+        it is `agt-negotiator/agt-settlement`, which the organization never assigned.
+        """
+        service = self._service(
+            monkeypatch,
+            tmp_path,
+            {"agt-payer": "senior", "agt-payer/agt-settlement": "senior"},
+        )
+        root, key_set = self._root()
+        negotiator = self._delegate(root, key_set, agent_id="agt-negotiator", role="worker")
+        impostor = self._delegate(negotiator, key_set, agent_id="agt-settlement", role="payer")
+
+        assert service.principal_for(impostor).agent_id == "agt-settlement"
+        assert service.principal_for(impostor).role == "agent"
+
+    def test_the_root_token_is_keyed_by_the_empty_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A root token has no attenuation block, so its path is empty rather than absent."""
+        service = self._service(monkeypatch, tmp_path, {"": "senior"})
+        root, _ = self._root()
+
+        assert service.principal_for(root).role == "senior"
+
+    def test_the_token_still_cannot_choose_its_own_role(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """ADR-057 unchanged. Per-agent configuration is not per-agent self-assertion."""
+        service = self._service(monkeypatch, tmp_path, {"agt-payer": "senior"})
+        root, key_set = self._root()
+        promoted = self._delegate(root, key_set, agent_id="agt-sneaky", role="senior")
+
+        principal = service.principal_for(promoted)
+        assert principal.declared_role == "senior"
+        assert principal.role == "agent"
+
+    # -- the loader fails closed -----------------------------------------------------
+
+    def test_an_unassigned_ancestor_claims_nothing_and_is_allowed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Only a *configured* ancestor with a different role is refusable."""
+        _base_env(monkeypatch, tmp_path, roles={"agt-payer/agt-settlement": "senior"})
+        settings = pep_service.ServiceSettings.from_env()
+
+        assert pep_service.load_role_assignments(settings) == {"agt-payer/agt-settlement": "senior"}
+
+    def test_a_descendant_outranking_its_ancestor_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The one residual in the path argument, closed at boot.
+
+        It cannot be closed at request time: the forged chain is a real chain, indistinguishable
+        from the intended one. If `agt-payer` is not senior and `agt-payer/agt-settlement` is,
+        `agt-payer` reaches senior by minting a child it names `agt-settlement`.
+        """
+        _base_env(
+            monkeypatch,
+            tmp_path,
+            roles={"agt-payer": "agent", "agt-payer/agt-settlement": "senior"},
+        )
+        settings = pep_service.ServiceSettings.from_env()
+
+        with pytest.raises(pep_service.ServiceConfigError, match="ancestor"):
+            pep_service.load_role_assignments(settings)
+
+    def test_it_looks_past_the_immediate_parent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A grandparent can mint a whole subtree, so every prefix counts, not just the last."""
+        _base_env(
+            monkeypatch,
+            tmp_path,
+            roles={"agt-payer": "agent", "agt-payer/agt-settlement/agt-sub": "senior"},
+        )
+        settings = pep_service.ServiceSettings.from_env()
+
+        with pytest.raises(pep_service.ServiceConfigError, match="agt-payer"):
+            pep_service.load_role_assignments(settings)
+
+    def test_a_lineage_that_agrees_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _base_env(
+            monkeypatch,
+            tmp_path,
+            roles={
+                "agt-payer": "senior",
+                "agt-payer/agt-settlement": "senior",
+                "agt-payer/agt-settlement/agt-subcontractor": "senior",
+            },
+        )
+        loaded = pep_service.load_role_assignments(pep_service.ServiceSettings.from_env())
+
+        assert set(loaded.values()) == {"senior"}
+
+    @pytest.mark.parametrize(
+        ("payload", "match"),
+        [
+            ('["agt-payer"]', "JSON object"),
+            ('{"agt-payer": 7}', "non-empty string"),
+            ('{"agt-payer": ""}', "non-empty string"),
+            ("not json at all", "not valid JSON"),
+        ],
+    )
+    def test_a_malformed_role_file_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: str, match: str
+    ) -> None:
+        """A half-loaded role map grants or withholds authority by accident, invisibly."""
+        _base_env(monkeypatch, tmp_path)
+        path = tmp_path / "roles.json"
+        path.write_text(payload, encoding="utf-8")
+        monkeypatch.setenv("AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH", str(path))
+
+        settings = pep_service.ServiceSettings.from_env()
+        with pytest.raises(pep_service.ServiceConfigError, match=match):
+            pep_service.load_role_assignments(settings)
+
+    def test_a_missing_role_file_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Configured-but-absent is a deployment mistake. *Unset* is "no roles"."""
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH", str(tmp_path / "nope.json"))
+
+        settings = pep_service.ServiceSettings.from_env()
+        with pytest.raises(pep_service.ServiceConfigError, match="cannot read"):
+            pep_service.load_role_assignments(settings)
 
 
 class TestTheHarnessMatchesTheDeployedComposition:

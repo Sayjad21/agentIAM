@@ -155,6 +155,11 @@ services:
       AGENTIAM_PEP_POLICY_BUNDLE_PATH: /secrets/policy_bundle.json
       AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH: /secrets/policy_bundle.sig
       AGENTIAM_PEP_ROUTES_PATH: /secrets/routes.json
+      # What the organization says each agent is, keyed by delegation path. Without it
+      # every agent gets `default_role` and the bundle's `role != "senior"` forbid is
+      # always-on or always-off — TODO item 29. `scripts/bootstrap_demo_secrets.py`
+      # writes the file; `tests/unit/test_demo_compose.py` checks the two agree.
+      AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH: /secrets/role_assignments.json
       AGENTIAM_PEP_OLLAMA_URL: ${AGENTIAM_PEP_OLLAMA_URL:-}
     command: >
       sh -c "export AGENTIAM_PEP_ROOT_PUBLIC_KEYS=$$(cat /secrets/root_public_key.hex) &&

@@ -47,7 +47,33 @@ _FILES: Final = (
     "policy_bundle.sig",
     "policy_public_key.hex",
     "routes.json",
+    "role_assignments.json",
 )
+
+#: What the organization says each demo agent is, keyed by delegation path (root-first,
+#: `/`-separated) because an `agent_id` alone is the delegating parent's word — see
+#: `agentiam_core.datalog.chain_identity`.
+#:
+#: The whole payer lineage is `senior` and nothing else is. That is not a convenience to keep
+#: payments green: `payment_api` is `sensitivity: "critical"` in the catalogue, the corpus
+#: bundle forbids critical resources to non-seniors, and these three are exactly the agents
+#: the demo entrusts with `payment:initiate`. `agt-doc-reader` and `agt-negotiator` are
+#: *not* senior, so the forbid is live rather than disarmed — which is the difference between
+#: this and setting `AGENTIAM_PEP_DEFAULT_ROLE=senior` and calling the catalogue wired.
+#:
+#: `agt-subcontractor` is senior too, and its payment is still refused: it sits at depth 3 and
+#: the bundle permits payments only at `principal.depth <= 2`. Leaving it unassigned would
+#: refuse the same call for the *wrong* reason — the sensitivity forbid, shadowing the depth
+#: rule that beat is built to show (`scripts/seed_demo.py`, `_TRAFFIC`'s last line).
+#:
+#: Every path here carries the same role as its ancestors, which
+#: `pep_service._refuse_widening_roles` requires: an ancestor can mint any descendant path,
+#: so a descendant that outranks it would be an escalation the PEP could not see.
+ROLE_ASSIGNMENTS: Final[dict[str, str]] = {
+    "agt-payer": "senior",
+    "agt-payer/agt-settlement": "senior",
+    "agt-payer/agt-settlement/agt-subcontractor": "senior",
+}
 
 DEFAULT_OUT: Final = _REPO_ROOT / "deploy" / "demo-secrets"
 
@@ -61,7 +87,7 @@ def generate(out: Path) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from agentiam_core.bundles import PolicyBundle, public_key_to_hex, sign_bundle
-    from agentiam_core.corpus import CORPUS_SOURCE
+    from agentiam_core.corpus import CORPUS_SOURCE, CORPUS_TOOLS
     from agentiam_core.tokens import generate_keypair
     from scripts.serve_pep import ROUTES
 
@@ -72,7 +98,13 @@ def generate(out: Path) -> None:
     (out / "root_public_key.hex").write_text(root.public_key.to_bytes().hex(), encoding="utf-8")
 
     signing_key = Ed25519PrivateKey.generate()
-    bundle = PolicyBundle(version="demo-1", cedar_source=CORPUS_SOURCE, serial=1)
+    # `tools=` is inside the signature, so the catalogue the policy reads cannot be edited on
+    # disk without the bundle failing to verify. Without it every resource fell back to
+    # `_UNKNOWN_TOOL` and the bundle's two resource-attribute rules were inert in the
+    # deployment while passing in CI — TODO item 29.
+    bundle = PolicyBundle(
+        version="demo-1", cedar_source=CORPUS_SOURCE, serial=1, tools=CORPUS_TOOLS
+    )
     signature = sign_bundle(bundle, signing_key)
 
     (out / "policy_bundle.json").write_text(
@@ -81,6 +113,7 @@ def generate(out: Path) -> None:
                 "version": bundle.version,
                 "cedar_source": bundle.cedar_source,
                 "serial": bundle.serial,
+                "tools": bundle.tools,
             }
         ),
         encoding="utf-8",
@@ -91,6 +124,7 @@ def generate(out: Path) -> None:
     )
 
     (out / "routes.json").write_text(json.dumps(ROUTES), encoding="utf-8")
+    (out / "role_assignments.json").write_text(json.dumps(ROLE_ASSIGNMENTS), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:

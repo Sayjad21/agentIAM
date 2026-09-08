@@ -839,74 +839,119 @@ documents just describe something else.
   T-031 is built and F-2 becomes true. Either way `DEMO.md` and `STATUS.md` should not
   disagree about a drill the presenter is meant to rehearse.
 
-### 29. The deployed PEP has an empty tool catalogue — and cannot vary `principal.role` anyway
+### ~~29. The deployed PEP has an empty tool catalogue — and cannot vary `principal.role` anyway~~ — **FIXED**, and the investigation is what made it possible
 
-**Investigated, not fixed.** The ticket's own first line said *"investigate first, and this is
-the whole ticket"* and *"do not pick by what makes the demo pass"*. The investigation says the
-obvious fix is not available, and why is the useful part.
+Closed by ADR-069. The investigation stands as written — both defects were real, and the
+second is why the first could not simply be wired — but its conclusion that option (b) needed
+an issuance service was one step too strong.
 
-**The surface defect.** `scripts/pep_service.py` builds `CedarEngine(bundle)` with no
-`tools=`. `CedarEngine.__init__` does `self.tools = dict(tools or {})` and `_facts_for` falls
-back to `_UNKNOWN_TOOL`, whose attributes are deliberately the *safe* end of every axis —
-`sensitivity="low"`, `is_external=False`. So in the deployed PEP every tool looks
-low-sensitivity and internal, whatever the catalogue says, and both resource-attribute rules
-in the shipped corpus policy are inert:
+**What shipped.**
 
-```cedar
-forbid(principal, action, resource)
-when { resource.sensitivity == "critical" && principal.role != "senior" };
+1. **The catalogue travels inside the signed bundle.** `PolicyBundle` grew a `tools` field,
+   `signing_payload` covers it, and `CedarEngine` reads its catalogue from the bundle it was
+   handed unless a caller passes one explicitly. `pep_service.load_policy` passes none, so the
+   deployed engine cannot be running a policy about `resource.sensitivity` against a catalogue
+   that never arrived — there is no second artifact to forget, and one serial names both.
 
-permit(principal, action == Action::"email:send", resource)
-when { !resource.is_external };
-```
+   Signed rather than mounted beside the bundle because `sensitivity` is an authorization
+   input: downgrade `payment_api` from `critical` to `low` on disk and the forbid is disarmed
+   *silently*, since every request still returns a decision. Same threat `verify_bundle`
+   already closes for `cedar_source`.
 
-**Why wiring it is not the fix.** Measured against the real bundle:
+2. **Roles are asserted per agent, by delegation path.**
+   `AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH` reads a JSON object of path to role. ADR-057 is
+   untouched: the role still comes from the organization and never from the token. What
+   changed is the *arity* — configuration could previously say one word for the whole
+   process, which is what made a role-discriminating policy always-on or always-off.
 
-| operation / tool | catalogue absent (as deployed) | wired, `role=agent` | wired, `role=senior` |
+   **Keyed on the path and not the `agent_id`**, because the id is written by the delegating
+   parent: keying on it would let any agent name its child `agt-payer` and collect
+   `agt-payer`'s role, which is ADR-057's own attack one field over. A path can only be forged
+   by an agent already on it. The one residual — an ancestor assigned less than its own
+   descendant could mint that descendant — is refused at boot by
+   `pep_service._refuse_widening_roles`, because at request time the forged chain *is* a real
+   chain.
+
+3. **`AGENTIAM_PEP_DEFAULT_ROLE` is finally read.** `default_role`'s docstring called itself
+   configuration and `serve_pep.py` names the variable in a comment; `from_env` never looked
+   it up, so the only role a deployed PEP could assert was the dataclass default.
+
+**Measured against the real bundle**, which is the table the investigation asked for, extended
+with what now runs:
+
+| operation / tool | catalogue absent (as deployed) | wired, `role=agent` | wired, per-agent roles |
 |---|---|---|---|
 | `invoice:read` via `invoice_api` | allow | allow | allow |
 | `vendor:read` via `vendor_api` | allow | allow | allow |
-| `payment:initiate` via `payment_api`, depth 1 | allow | **DENY** | allow |
-| `payment:initiate` via `payment_api`, depth 3 | DENY | DENY | DENY |
+| `payment:initiate` via `payment_api`, depth 1 | allow | **DENY** | allow (payer is senior) |
+| `payment:initiate` via `payment_api`, depth 3 | DENY | DENY | DENY (on depth, as intended) |
+| `email:send` via `email_internal` | allow | allow | allow |
+| `email:send` via `email_external` | **allow** | DENY | DENY |
 
-Wiring the catalogue with the deployment's current role refuses **every payment in the demo**
-— the beat the whole scenario is built on. (Depth 3 is denied in all three columns: that
-refusal keys on `principal.depth`, not on a resource attribute, which is why the POLICY_DENIED
-beat works today.)
+Every demo beat behaves exactly as it did; both resource-attribute rules are now live. The
+`email_external` row is the second inert rule and the one item 26 could not have known about:
+ADR-067 split `email:send` into two routes so `is_external` would have something to
+distinguish, and the attribute was never reaching Cedar.
 
-**The real blocker, and it is bigger than the catalogue.** `principal_for` sets
-`role=settings.default_role` — **one constant for the whole process**. Every agent a PEP
-serves gets the same Cedar role. That is ADR-057 working as intended (the role must be
-organization-asserted, never the parent's claim from the token) meeting the fact that the
-deployment has nowhere to assert it *from*: there is no issuance or identity service, which is
-`STATUS.md` gap 7 and ADR-039's missing publisher in another guise.
+**Verified live on a rebuilt demo stack**, and the negative half is the part worth having.
+With the role map as shipped, all 13 scenario calls land on their intended outcome:
 
-So with a single role, a policy that discriminates on it is **always-on or always-off**, never
-discriminating. The corpus's own two cases spell out the intent — `forbid_critical_tool_payment_worker`
-(a worker paying via `payment_api` → denied, tagged beat-3) and `forbid_critical_tool_payment_senior`
-(a senior → allowed, tagged beat-8) — and the deployed PEP can express exactly one of them at
-a time. They pass in CI only because each corpus case constructs its own principal.
+```
+allow 200  payer settles a small invoice                OK
+allow 200  settlement agent pays within its slice       OK
+deny  429  settlement agent exceeds its ceiling         BUDGET_EXHAUSTED_CAVEAT
+deny  429  root attempts more than the mandate grants   BUDGET_EXHAUSTED_MANDATE
+deny  403  sub-contractor is too deep for the policy    POLICY_DENIED
+```
 
-**Three facts, and only two can hold:**
+Then the same stack with `/secrets/role_assignments.json` replaced by `{}` and the PEP
+restarted — every other input identical:
 
-1. `payment_api` is `sensitivity: "critical"`, and five corpus cases assert the forbid.
-2. `principal.role` is organization-asserted and process-wide (ADR-057), defaulting to `agent`.
-3. Payments succeed in the demo.
+```
+deny  403  payer settles a small invoice                POLICY_DENIED
+deny  403  settlement agent pays within its slice       POLICY_DENIED
+```
 
-Today (3) holds because (1) is silently disabled. The options:
+That is the forbid firing in a deployed PEP, which it had never done. It also proves the two
+halves are both load-bearing: the catalogue is what makes `payment_api` critical, and the role
+map is what lets the payer lineage through it. Restored and re-driven afterwards to confirm
+the stack returns to the first table.
 
-- **(a) Wire the catalogue, set the demo's role to `senior`.** Restores resource attributes
-  for every deployment, and keeps the demo working. Cost: the forbid still never fires in the
-  demo — now because everyone is senior rather than because sensitivity is missing. Honest,
-  but it makes `agt-doc-reader` "senior" too, which is a claim nobody would write down.
-- **(b) Wire the catalogue and give the PEP a per-agent role source.** The correct answer, and
-  it needs the issuance service that does not exist. This is the ticket that unblocks it.
-- **(c) Change the predicate.** If "may touch a critical tool" is really about delegation
-  depth or granted scope rather than a job title, the policy should say so. That is a change
-  to a shipped, corpus-tested bundle and belongs to whoever owns the policy.
+**The demo's assignment is the payer lineage and nothing else** — `agt-payer`,
+`agt-payer/agt-settlement`, `agt-payer/agt-settlement/agt-subcontractor`, which is exactly who
+`seed_demo` grants `payment:initiate`. `agt-doc-reader` and `agt-negotiator` are *not* senior,
+which is the difference between this and option (a)'s "set the demo's role to senior".
 
-- **Not chosen here on purpose.** Each option asserts something different about what a role
-  *means* in a delegation system, and the ticket says not to pick by what keeps the demo
-  green. What is not in doubt: the deployed PEP should not silently ignore half its policy,
-  and a test should assert the deployed engine's catalogue matches the bundle it was given —
-  that part is safe to build under any of the three.
+**What is still open, and it is the honest remainder:**
+
+- **No demo beat exercises the discrimination end to end.** The only agents holding
+  `payment:initiate` are the ones the organization made senior, and `agt-doc-reader`'s payment
+  attempt dies at its own scope subset before Cedar is consulted. The rule is live and
+  corpus-tested; the scenario does not show it. Making it visible means giving some non-senior
+  agent the payment scope — demo *content*, T-057's call, filed as item 30.
+- **This is not the issuance service.** Roles are static until an operator edits the file and
+  restarts; nothing rotates, expires or attests them. `STATUS.md` gap 7 stands, and the
+  path-keyed map is what is available without it.
+
+---
+
+## Found while closing item 29
+
+### 30. No demo beat shows the role discrimination the corpus asserts
+
+**Demo content, not a defect.** `forbid_critical_tool_payment_worker` (beat 3) and
+`forbid_critical_tool_payment_senior` (beat 8) are both enforced by the deployed PEP as of
+item 29, and neither is visible in the scenario: every agent that can reach `payment_api`
+holds a role the organization made senior, and the one non-senior agent that tries to pay
+(`agt-doc-reader`) is refused by its own scope subset several steps earlier.
+
+**What to do:** give `seed_demo` a fourth child that holds `payment:initiate` and is left off
+`bootstrap_demo_secrets.ROLE_ASSIGNMENTS`, then a `_TRAFFIC` line where it attempts a payment.
+The refusal is `POLICY_DENIED` naming the sensitivity forbid — a distinct beat from the depth
+refusal `agt-subcontractor` already provides.
+
+**Done when:** the console shows a payment refused because the agent's organization-asserted
+role does not permit a critical tool, and `DEMO.md` beat 3 or 8 points at it.
+
+**Weigh first:** it is a fourth sibling in a tree the docs describe as three, so `DEMO.md`
+beat 2's "root spawns 3 sub-agents" and the identity-tree screenshots move with it.

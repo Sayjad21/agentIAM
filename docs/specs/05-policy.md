@@ -121,12 +121,12 @@ assumed.
 ## 5. The bundle
 
 ```
-{serial, version, cedar_source, entity_schema, created_at, signature}
+{serial, version, cedar_source, entity_schema, created_at, tools, signature}
 ```
 
 T-024 consumed `version`, `cedar_source` and optionally `entity_schema`. Signature
 verification, staleness, rollback and hot reload are **T-025** and are specified in
-§5.1–§5.4 below.
+§5.1–§5.4 below. `tools` is §5.6.
 
 **A bundle is parsed once, at load, not per request** — see §6. A bundle whose source does not
 parse MUST be rejected at load rather than at the first request that touches it. `cedarpy`
@@ -145,8 +145,12 @@ one bundle must produce one signature, or re-encoding a bundle in transit breaks
 The signed payload is every field **except** the signature itself:
 
 ```
-{serial, version, cedar_source, entity_schema, created_at}
+{serial, version, cedar_source, entity_schema, created_at, tools}
 ```
+
+`tools` is inside it for the reason §5.6 gives: it carries authorization inputs, not metadata.
+An absent catalogue (`null`) and an empty one (`{}`) sign differently and must, because they
+are different assertions.
 
 **Measured**, against `cryptography` 50:
 
@@ -225,6 +229,48 @@ that accidentally blocks standard workflow components.
 An empty corpus passes vacuously — an operator deploying the initial system without tests
 sees a warning, but is not blocked.
 
+
+---
+
+### 5.6 The resource catalogue travels inside the bundle
+
+A Cedar policy reads attributes off the resource it is asked about — the shipped corpus has
+two such rules:
+
+```cedar
+forbid(principal, action, resource)
+when { resource.sensitivity == "critical" && principal.role != "senior" };
+
+permit(principal, action == Action::"email:send", resource)
+when { !resource.is_external };
+```
+
+Those attributes come from a **tool catalogue**, `{tool_id: {server, sensitivity,
+is_external}}`, and a request naming a tool the catalogue does not hold resolves to the safe
+end of every axis (`sensitivity: "low"`, `is_external: false`) so an unknown tool cannot
+satisfy a policy written about a sensitive one.
+
+**The catalogue is part of the bundle and inside its signature.** Two reasons, and the first
+is a security property:
+
+1. `sensitivity` is an **authorization input**. A catalogue held in its own unsigned file is an
+   authorization layer anyone with disk access can rewrite: downgrade one tool from `critical`
+   to `low` and the forbid above is disarmed *silently*, because every request still returns a
+   decision. That is the same threat §5.1's signature closes for `cedar_source`, and it is not
+   weaker for being about an attribute rather than a rule.
+2. A policy and the attributes it reads cannot arrive out of step, because **one serial names
+   both**. A bundle that references `resource.sensitivity` and a catalogue that defines it are
+   one versioned artifact, not two that a deployment has to keep aligned.
+
+A PEP MUST take its catalogue from the bundle it verified unless a caller supplies one
+explicitly, and MUST refuse a malformed entry at load rather than at request time — the
+failure otherwise is a PEP that starts, looks like it is enforcing resource attributes, and is
+not. That failure is not hypothetical: it is what the deployed PEP did until ADR-069, and
+every conformance case passed throughout because each one builds its own catalogue by hand.
+
+A misspelled attribute is refused rather than ignored. Splatting an entry into the facts type
+would raise on some misspellings by luck and silently drop others, and a dropped `is_external`
+is the difference between a permit that fires and one that does not.
 
 ---
 
