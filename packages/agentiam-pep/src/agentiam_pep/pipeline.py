@@ -259,8 +259,24 @@ class Pipeline:
             return self._refuse(exc.reason, exc.detail, decision_id, trace_id)
 
         # --- step 2: verify --------------------------------------------------------
-        raw = header_map.get(AUTH_HEADER, "")
-        token_text = raw[7:].strip() if raw.lower().startswith("bearer ") else raw.strip()
+        # `Bearer` is required, not merely stripped when present. This used to fall back to
+        # `raw.strip()` for a header carrying no scheme at all, so `Authorization: <token>`
+        # authenticated — measured against a live PEP, which returned 200. Nothing exploitable
+        # followed from it (the token still had to verify), and nothing in the tree relied on
+        # it either: `SdkClient`, both reference assemblies, the load driver and every test
+        # send `Bearer`. But it was an undocumented, untested tolerance in the one path whose
+        # whole job is deciding whether a caller is who they say, and RFC 6750 §2.1 makes the
+        # scheme part of the credential rather than decoration around it. Refusing is the
+        # fail-closed reading, and `MALFORMED_REQUEST` says what to fix.
+        raw = header_map.get(AUTH_HEADER, "").strip()
+        if not raw.lower().startswith("bearer "):
+            return self._refuse(
+                ReasonCode.MALFORMED_REQUEST,
+                f"{AUTH_HEADER} must carry a Bearer credential",
+                decision_id,
+                trace_id,
+            )
+        token_text = raw[7:].strip()
         try:
             token = verify(token_text, self._key_set, now=self._now())
         except TokenError as exc:
