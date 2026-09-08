@@ -64,6 +64,7 @@ Specs `05`–`09` (policy, drift, revocation, audit, decision record) are writte
 | Document | What it holds |
 |---|---|
 | [`DEMO.md`](DEMO.md) | The 8-beat demo runbook, 7 failure drills, judge archetypes, pre-presentation checklist |
+| [`RUNNING.md`](RUNNING.md) | The operator's guide under `DEMO.md`: bring-up, every surface with the output it actually produces, and what to do when it differs |
 
 `PLAN.md` §14 (evidence pack), §18 (research and IP), and §19 (submission checklist) cover the
 rest of the submission material.

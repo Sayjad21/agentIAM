@@ -335,6 +335,52 @@ class TestRefusals:
         assert isinstance(result, Refused)
         assert result.status == 401
 
+    async def test_an_authorization_header_without_the_bearer_scheme_is_refused(self) -> None:
+        """`Authorization: <token>` used to authenticate, and nothing said so.
+
+        The extraction was `raw[7:] if raw.lower().startswith("bearer ") else raw.strip()`, so a
+        header carrying no scheme at all fell through to the bare-token branch. Measured against
+        a live PEP while sweeping the demo stack: it returned 200.
+
+        Nothing exploitable followed — the token still had to verify against a root key — and
+        nothing depended on it either: `SdkClient`, both reference assemblies, the load driver
+        and every test in this file send `Bearer`. What it was, is an undocumented and untested
+        tolerance in the one step whose job is deciding whether a caller is who they say, in a
+        codebase where every deviation is written down. RFC 6750 §2.1 makes the scheme part of
+        the credential, so the strict reading is also the fail-closed one.
+        """
+        pipeline, _, _ = await a_pipeline()
+        mandate = a_mandate()
+        raw = str(mint_root(mandate, ROOT.private_key))
+
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=[("authorization", raw)]
+        )
+
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.MALFORMED_REQUEST
+        assert result.status == 401
+
+    async def test_the_scheme_is_matched_case_insensitively(self) -> None:
+        """RFC 6750 §2.1: the scheme is case-insensitive, so `bearer` must still work."""
+        pipeline, _, _ = await a_pipeline()
+        raw = str(mint_root(a_mandate(), ROOT.private_key))
+
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=[("authorization", f"bearer {raw}")]
+        )
+
+        assert not isinstance(result, Refused)
+
+    async def test_a_scheme_with_no_credential_is_refused(self) -> None:
+        """`Authorization: Bearer` alone names a scheme and hands over nothing."""
+        pipeline, _, _ = await a_pipeline()
+        result = await pipeline.authorize(
+            method="GET", path="/invoices/inv_001", headers=[("authorization", "Bearer")]
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.MALFORMED_REQUEST
+
     async def test_an_unmapped_route_is_401_malformed(self) -> None:
         pipeline, _, _ = await a_pipeline()
         result = await pipeline.authorize(

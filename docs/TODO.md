@@ -994,3 +994,89 @@ the way the deployment does.
 
 Verified live: after the fix, a stack left idle well past the TTL authorizes the first payment
 it is asked for.
+
+---
+
+## Found in the third manual pass (2026-09-08) — a full sweep of the running stack
+
+48 probes across the PEP's proxy, its auth and intent gates, every console page, every
+`/v1` API, the SSE stream, the escalation flow, revocation, the activation gate and both CLI
+tools. **Everything behaves as specified except item 32.** The other two entries are
+operational truths about the demo that no code change fixes and every runbook needs.
+
+Recorded because the sweep is only worth as much as its record: `docs/RUNNING.md` is the guide
+it produced, with the expected output for each surface.
+
+### ~~32. The PEP authenticated a request with no `Bearer` scheme~~ — **FIXED**
+
+`Authorization: <token>`, no scheme, returned **200** against a live PEP. The extraction was:
+
+```python
+token_text = raw[7:].strip() if raw.lower().startswith("bearer ") else raw.strip()
+```
+
+so a header carrying no scheme fell through to the bare-token branch.
+
+**Nothing exploitable followed** and nothing depended on it: the token still had to verify
+against a root key, and `SdkClient`, both reference assemblies, the load driver and every test
+send `Bearer`. What it was, is an undocumented and untested tolerance in the one step whose job
+is deciding whether a caller is who they say — in a codebase where every deviation is written
+down and justified. RFC 6750 §2.1 makes the scheme part of the credential, so the strict
+reading is also the fail-closed one.
+
+Now refused with `MALFORMED_REQUEST`, which names what to fix. Three tests pin it: no scheme is
+refused, a lowercase `bearer` still works (RFC 6750 makes the scheme case-insensitive), and
+`Bearer` with no credential is refused.
+
+### 33. The demo's tokens expire 8 hours after seeding — **operational, no fix intended**
+
+`seed_demo._mandate` sets `expires_at = now + 8 hours`. Past that every call returns
+**401 `TOKEN_EXPIRED`**, which is the token layer working exactly as designed — and it is also
+the single most likely way to find a dead demo, because a stack brought up the evening before a
+morning presentation is outside the window.
+
+Found the blunt way: a sweep against a stack up for 20 hours returned `TOKEN_EXPIRED` for all
+six agents on every route.
+
+**Not a defect and deliberately not "fixed" by widening the window** — a mandate that never
+expires is a worse product than one a presenter has to re-seed. The fix is procedural and lives
+in `docs/RUNNING.md`: re-seed before presenting.
+
+```
+docker compose -f docker-compose.yml -f docker-compose.demo.yml \
+  run --rm --no-deps seed python scripts/seed_demo.py --out /secrets
+```
+
+Idempotent for the mandate and the budget row; it re-mints the six tokens.
+
+**Worth considering if the demo grows a pre-flight check:** `DEMO.md` §6's checklist has no
+step that would catch this, and `/readyz` cannot — the PEP is healthy, it is the tokens that are
+dead. A one-line `curl` of an `invoice:read` through the PEP is the cheapest possible canary.
+
+### 34. Re-seeding a used volume leaves ghost nodes in the identity tree — **known, benign**
+
+Each seed run mints new tokens, so new block ids. The identity tree is derived from the
+append-only audit chain, so a task's old generations stay in it: after three seed runs
+`agt-depth-0` appears as **three nodes**, each with its own block id and its own last outcome.
+
+Benign, and already survivable because item 5 made it so — the console keys nodes on something
+unique per node and no longer throws `d3.stratify: ambiguous` and blanks the canvas. The tree is
+*cluttered*, not wrong: every node it draws really did make those calls.
+
+Two things follow, both in `docs/RUNNING.md`:
+
+- For a pristine tree, start from a clean volume (`make demo-down` then remove the
+  `demo-secrets` volume) rather than re-seeding in place.
+- Revocation targets a **block id**, so it applies to one generation. Revoking a stale
+  generation's block appears to do nothing, and revoking the *current* root authority block
+  cascades to every agent — measured, `ANCESTOR_REVOKED` for all six, which is
+  `subtree`-shaped behaviour arriving through a `token`-scoped record because the block
+  revoked *is* the root of every chain.
+
+**Also confirmed while here, and worth stating because it reads like a bug and is not:** a
+revocation does **not** stop applying when its `expires_at` passes. Spec 07 §8 defines that
+field as *the original token's* expiry, carried so the row can be pruned once the token could
+not have authorized anything anyway — it is not a lease on the revocation. Enforcement is
+permanent for the life of the token, which is the only safe reading: honouring an expiry there
+would silently un-revoke a token someone revoked on purpose. Recovery is re-seeding, which
+mints fresh blocks that no revocation names.
