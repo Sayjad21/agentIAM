@@ -12,6 +12,7 @@ verify(...)` was meant, and the failure of that typo is accepting every bundle.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -37,6 +38,7 @@ def a_bundle(**over: object) -> PolicyBundle:
         "serial": 1,
         "entity_schema": None,
         "created_at": NOW,
+        "tools": None,
     }
     return PolicyBundle(**(base | over))  # type: ignore[arg-type]
 
@@ -74,7 +76,7 @@ class TestWhatIsSigned:
 
     @pytest.mark.parametrize(
         "field",
-        ["version", "cedar_source", "serial", "entity_schema", "created_at"],
+        ["version", "cedar_source", "serial", "entity_schema", "created_at", "tools"],
     )
     def test_every_field_is_covered(self, field: str, key: Ed25519PrivateKey) -> None:
         """A field outside the signature is a field an attacker can edit freely.
@@ -88,11 +90,68 @@ class TestWhatIsSigned:
             "serial": 99,
             "entity_schema": '{"x": 1}',
             "created_at": datetime(2020, 1, 1, tzinfo=UTC),
+            "tools": {"payment_api": {"sensitivity": "critical"}},
         }[field]
         original = a_bundle()
         signature = sign_bundle(original, key)
         with pytest.raises(BundleSignatureError):
             verify_bundle(a_bundle(**{field: altered}), signature, key.public_key())
+
+
+class TestTheCatalogueIsSigned:
+    """The resource catalogue travels inside the bundle — TODO item 29.
+
+    `resource.sensitivity` is an authorization input, not metadata: the shipped corpus reads
+    `forbid ... when { resource.sensitivity == "critical" && principal.role != "senior" }`.
+    A catalogue mounted beside the bundle rather than signed with it is an authorization
+    layer anyone with disk access can rewrite — downgrade `payment_api` to `"low"` and the
+    forbid is disarmed silently, because every request still returns a decision. That is the
+    exact threat this module already closes for `cedar_source`.
+
+    Shipping them together also means one serial names both, so a policy and the attributes
+    it reads cannot arrive out of step.
+    """
+
+    CATALOGUE: ClassVar[dict[str, dict[str, object]]] = {
+        "payment_api": {"tool_id": "payment_api", "sensitivity": "critical", "is_external": True}
+    }
+
+    def test_a_bundle_with_a_catalogue_round_trips(self, key: Ed25519PrivateKey) -> None:
+        bundle = a_bundle(tools=self.CATALOGUE)
+        verify_bundle(bundle, sign_bundle(bundle, key), key.public_key())
+
+    def test_downgrading_a_sensitivity_breaks_the_signature(self, key: Ed25519PrivateKey) -> None:
+        """The attack, spelled out: one word changed disarms a forbid in the shipped bundle."""
+        original = a_bundle(tools=self.CATALOGUE)
+        signature = sign_bundle(original, key)
+        downgraded = a_bundle(
+            tools={
+                "payment_api": {"tool_id": "payment_api", "sensitivity": "low", "is_external": True}
+            }
+        )
+
+        with pytest.raises(BundleSignatureError):
+            verify_bundle(downgraded, signature, key.public_key())
+
+    def test_removing_the_catalogue_entirely_breaks_the_signature(
+        self, key: Ed25519PrivateKey
+    ) -> None:
+        """Deleting the catalogue is as good as editing it.
+
+        Absent means `_UNKNOWN_TOOL` for everything, which is the safe end of every axis —
+        and therefore the end where a forbid keyed on `sensitivity` never fires.
+        """
+        original = a_bundle(tools=self.CATALOGUE)
+        signature = sign_bundle(original, key)
+
+        with pytest.raises(BundleSignatureError):
+            verify_bundle(a_bundle(tools=None), signature, key.public_key())
+
+    def test_an_absent_catalogue_is_distinguishable_from_an_empty_one(
+        self, key: Ed25519PrivateKey
+    ) -> None:
+        """`None` is "this bundle carries none"; `{}` asserts that no tool has attributes."""
+        assert signing_payload(a_bundle(tools=None)) != signing_payload(a_bundle(tools={}))
 
 
 class TestVerifyRaises:

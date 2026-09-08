@@ -23,6 +23,7 @@ the hot path.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -37,7 +38,7 @@ from agentiam_pep.errors import PepError
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from agentiam_core.models import RequestContext
 
@@ -52,6 +53,7 @@ __all__ = [
     "PolicyBundle",
     "PolicyBundleError",
     "ToolFacts",
+    "tool_catalogue",
 ]
 
 
@@ -119,6 +121,69 @@ def _as_cedar_decimal(value: Decimal) -> dict[str, dict[str, str]]:
 #: `is_external=False` is the value that lets a permit apply rather than a forbid.
 _UNKNOWN_TOOL = ToolFacts(tool_id="", server="", sensitivity="low", is_external=False)
 
+#: Every attribute a catalogue entry may carry, which is every field of `ToolFacts` bar the
+#: id the entry is keyed by. Checked as a closed set rather than splatted into the
+#: constructor: `ToolFacts(**entry)` would turn a bundle that misspells `sensitivty` into a
+#: `TypeError` at boot, which is the right outcome by accident, but one that spells
+#: `is_extrenal` into a *silently ignored* attribute — and an ignored `is_external` is the
+#: difference between a permit that fires and one that does not.
+_TOOL_ATTRIBUTES: frozenset[str] = frozenset({"tool_id", "server", "sensitivity", "is_external"})
+
+
+def tool_catalogue(raw: Mapping[str, Mapping[str, Any]] | None) -> dict[str, ToolFacts]:
+    """Parse a bundle's resource catalogue into `ToolFacts`, refusing anything malformed.
+
+    A missing catalogue is `{}` — every resource then falls back to `_UNKNOWN_TOOL`, which
+    is the safe end of every axis. A *malformed* one raises instead, because the alternative
+    is a PEP that starts, looks like it is enforcing resource attributes, and is not. That is
+    the failure this whole function exists to make impossible: for as long as the deployed
+    service passed no catalogue at all, both resource-attribute rules in the shipped bundle
+    were inert and nothing said so.
+
+    Raises:
+        PolicyBundleError: An entry is not a mapping, names an attribute `ToolFacts` does not
+            have, or gives one the wrong type. Load-time, never request-time.
+    """
+    if raw is None:
+        return {}
+
+    catalogue: dict[str, ToolFacts] = {}
+    for tool_id, entry in raw.items():
+        if not isinstance(entry, Mapping):
+            raise PolicyBundleError(
+                f"tool catalogue entry {tool_id!r} is {type(entry).__name__}, not an object"
+            )
+        unknown = sorted(set(entry) - _TOOL_ATTRIBUTES)
+        if unknown:
+            raise PolicyBundleError(
+                f"tool catalogue entry {tool_id!r} names unknown attribute(s) "
+                f"{', '.join(repr(name) for name in unknown)}; known attributes are "
+                f"{', '.join(sorted(_TOOL_ATTRIBUTES))}"
+            )
+        server = entry.get("server", "")
+        sensitivity = entry.get("sensitivity", "low")
+        is_external = entry.get("is_external", False)
+        # `is_external` first: `bool` is a subclass of `int`, and a JSON `0` reaching a Cedar
+        # boolean attribute is a request-parse failure at the far end of the hot path.
+        if not isinstance(is_external, bool):
+            raise PolicyBundleError(
+                f"tool catalogue entry {tool_id!r} has is_external="
+                f"{is_external!r}, which is not a boolean"
+            )
+        if not isinstance(server, str) or not isinstance(sensitivity, str):
+            raise PolicyBundleError(
+                f"tool catalogue entry {tool_id!r} has a non-string server or sensitivity"
+            )
+        # The key wins over a disagreeing `tool_id`: the key is what `_facts_for` looks up, so
+        # trusting the field would leave an entry nothing can ever reach.
+        catalogue[tool_id] = ToolFacts(
+            tool_id=str(entry.get("tool_id", tool_id)) or tool_id,
+            server=server,
+            sensitivity=sensitivity,
+            is_external=is_external,
+        )
+    return catalogue
+
 
 class CedarEngine:
     """A loaded, parsed bundle plus a tool catalogue. Bind a principal to evaluate.
@@ -141,7 +206,11 @@ class CedarEngine:
             PolicyBundleError: The source is not valid Cedar.
         """
         self.bundle = bundle
-        self.tools = dict(tools or {})
+        # `is None`, not `or {}`: an explicit empty catalogue is a caller saying "no resource
+        # attributes", and must not be silently replaced by the bundle's. Defaulting to the
+        # bundle's own is what stops a deployment from having to remember to pass one — the
+        # deployed PEP forgot for as long as this argument was the only route in.
+        self.tools = dict(tools) if tools is not None else tool_catalogue(bundle.tools)
         self.stale = stale
         self._unavailable = unavailable
         self.policy_set: cedarpy.PolicySet | None = None

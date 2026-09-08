@@ -33,6 +33,7 @@ from agentiam_core.errors import AgentIAMError, ReasonCode
 from agentiam_core.hashing import canonical_json
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from datetime import datetime
 
 __all__ = [
@@ -72,6 +73,19 @@ class PolicyBundle:
     serial: int = 0
     entity_schema: str | None = None
     created_at: datetime | None = None
+    #: The resource catalogue the `cedar_source` is written against — `{tool_id: {attribute:
+    #: value}}`, left opaque here because the entity model belongs to the PEP and this
+    #: package may not import it. `None` means the bundle carries none, which is not the same
+    #: as carrying an empty one: an empty catalogue is an assertion that no tool has
+    #: attributes, and `_UNKNOWN_TOOL`'s safe defaults then apply to every resource.
+    #:
+    #: **Inside the signature on purpose.** `resource.sensitivity` is an authorization input
+    #: — the shipped corpus forbids critical resources to non-seniors on exactly that
+    #: attribute — so a catalogue mounted beside the bundle rather than inside it is an
+    #: authorization layer anyone with disk access can rewrite, which is the threat
+    #: `verify_bundle` exists to close. Shipping the two together also means a policy and the
+    #: attributes it reads cannot drift apart: one serial names both.
+    tools: Mapping[str, Mapping[str, Any]] | None = None
 
 
 def signing_payload(bundle: PolicyBundle) -> bytes:
@@ -86,6 +100,7 @@ def signing_payload(bundle: PolicyBundle) -> bytes:
         "cedar_source": bundle.cedar_source,
         "entity_schema": bundle.entity_schema,
         "created_at": bundle.created_at,
+        "tools": None if bundle.tools is None else dict(bundle.tools),
     }
     return canonical_json(body)
 

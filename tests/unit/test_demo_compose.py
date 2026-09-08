@@ -187,6 +187,41 @@ class TestDockerfile:
             assert pattern in ignore, pattern
 
 
+class TestRoleAssignments:
+    """The organization's per-agent roles have to reach the container — TODO item 29.
+
+    Unset, every agent gets `AGENTIAM_PEP_DEFAULT_ROLE` and the bundle's
+    `principal.role != "senior"` forbid is always-on or always-off, never discriminating —
+    which, with the catalogue now wired, would refuse every payment in the demo. So the
+    variable and the file the bootstrap writes have to agree, and neither can be checked at
+    runtime without the stack already being broken.
+    """
+
+    def test_the_pep_is_given_the_role_map(self) -> None:
+        configured = _compose()["services"]["pep"]["environment"][
+            "AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH"
+        ]
+        assert configured == "/secrets/role_assignments.json"
+
+    def test_the_bootstrap_writes_the_file_the_pep_is_pointed_at(self) -> None:
+        """A drifting filename fails closed but late: the PEP refuses to start, in CI."""
+        from scripts.bootstrap_demo_secrets import _FILES
+
+        configured = _compose()["services"]["pep"]["environment"][
+            "AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH"
+        ]
+        assert configured.rsplit("/", 1)[-1] in _FILES
+
+    def test_the_demo_does_not_simply_make_everyone_senior(self) -> None:
+        """The shortcut this deliberately does not take.
+
+        `AGENTIAM_PEP_DEFAULT_ROLE=senior` would wire the catalogue and leave the forbid just
+        as dead, only for a different reason. The map is what keeps it discriminating.
+        """
+        environment = _compose()["services"]["pep"]["environment"]
+        assert environment.get("AGENTIAM_PEP_DEFAULT_ROLE") in (None, "agent")
+
+
 class TestSeedService:
     """T-057's one-shot seeder, and the constant it has to share with the PEP."""
 

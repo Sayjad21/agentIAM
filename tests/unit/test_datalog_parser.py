@@ -30,6 +30,7 @@ from agentiam_core.datalog import (
     _DENEGATED,
     MAX_STATEMENTS_PER_BLOCK,
     BlockIdentity,
+    chain_identity,
     effective_authority,
     parse_block_source,
     parse_token,
@@ -309,6 +310,58 @@ def test_identity_comes_from_the_terminal_block_not_an_ancestor() -> None:
     )
     assert token_identity(grandchild).agent_id == "agt-grandchild"
     assert token_identity(grandchild).declared_depth == 2
+
+
+def test_the_chain_identity_carries_the_path_that_reached_this_token() -> None:
+    """One segment per attenuation block, root-first — `chain_identity`, TODO item 29.
+
+    The terminal `agent_id` alone is the delegating parent's word about its child, so nothing
+    an organization decides may key on it: an agent that can attenuate can name its child
+    anything. The *path* is what the deployed PEP keys role assignments on, because a block
+    can only be appended below the chain that already exists.
+    """
+    parent = _child(agent_id="agt-payer", role="payer")
+    grandchild = verify(
+        attenuate(parent, [], agent_id="agt-settlement", role="payer"), _KEY_SET, now=_NOW
+    )
+
+    chain = chain_identity(grandchild)
+    assert chain.path == ("agt-payer", "agt-settlement")
+    assert chain.terminal.agent_id == "agt-settlement"
+
+
+def test_a_root_token_has_an_empty_path() -> None:
+    """No attenuation block, so nothing delegated — not a one-segment path naming itself."""
+    chain = chain_identity(_root())
+    assert chain.path == ()
+    assert chain.terminal == BlockIdentity()
+
+
+def test_the_path_falls_back_to_the_slot_when_a_block_names_no_agent() -> None:
+    """A positional name, which no block can choose: it is the block's own index.
+
+    A block whose `agent` fact is absent or ambiguous (TM-24) supplies no name that can be
+    believed. Inventing one from the block's own content would hand the crafted block the
+    key an organization keys authority on.
+    """
+    from biscuit_auth import BlockBuilder
+
+    forged = _root().biscuit.append(BlockBuilder('agent("real");\nagent("forged");\n')).to_base64()
+    chain = chain_identity(verify(forged, _KEY_SET, now=_NOW))
+
+    assert chain.path == ("agt-depth-1",)
+    assert "real" not in chain.path
+    assert "forged" not in chain.path
+
+
+def test_token_identity_is_the_chain_s_terminal_block() -> None:
+    """The two must not drift; `token_identity` is defined as this.
+
+    Its callers rely on the older name, and one parse answers both, which is why they are one
+    function — a parse costs ~227 µs at depth 3 and the request path already pays for two.
+    """
+    token = _child(agent_id="agt-payer", role="payer")
+    assert token_identity(token) == chain_identity(token).terminal
 
 
 def test_a_non_ascii_role_survives_intact() -> None:

@@ -97,6 +97,11 @@ DEFAULT_LEASE_TTL_S: Final = 60.0
 #: outside [0, 1). Measured against the real constructor rather than assumed.
 DEFAULT_LOW_WATER: Final = Decimal("0.25")
 
+#: The Cedar role an agent gets when the deployment's role map does not name it. The *least*
+#: privileged thing the shipped corpus recognises, deliberately: an agent the organization
+#: has said nothing about must not land on the side of a `role == "senior"` guard that grants.
+DEFAULT_ROLE: Final = "agent"
+
 
 class ServiceConfigError(RuntimeError):
     """The service cannot be assembled from the configuration it was given."""
@@ -128,6 +133,16 @@ def _decimal_env(name: str, default: Decimal) -> Decimal:
     if value <= 0:
         raise ValueError(f"{name} must be greater than zero, got {raw!r}")
     return value
+
+
+def _optional_path(name: str) -> Path | None:
+    """Read an optional path setting. Unset or empty means the feature is not configured.
+
+    Deliberately *not* validated here: a path that does not exist is caught by the loader
+    that reads it, which can say what the file was for.
+    """
+    raw = os.environ.get(name, "").strip()
+    return Path(raw) if raw else None
 
 
 def _mandate_id() -> uuid.UUID:
@@ -179,7 +194,33 @@ class ServiceSettings:
     #: and a delegating agent is not the organization. ADR-057; `principal_for` has the
     #: attack this closes. The parent's claim still reaches the console, as
     #: `AgentPrincipal.declared_role` and `DecisionRecord.role`.
-    default_role: str = "agent"
+    default_role: str = DEFAULT_ROLE
+    #: Per-agent overrides of `default_role`, read from
+    #: `AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH`. `None` when the deployment mounts no file, in
+    #: which case every agent gets `default_role` — the behaviour this setting replaced.
+    #:
+    #: **Keyed by delegation path, not by agent id**, `"agt-payer/agt-settlement"`, root-first
+    #: and `/`-separated, with `""` for the root token itself. A bare id would be worthless:
+    #: ids are written by the delegating parent, so any agent could name a child `agt-payer`
+    #: and collect its role. A path can only be forged by an agent already on it — see
+    #: `agentiam_core.datalog.chain_identity` for the argument and its one residual.
+    #:
+    #: **Still organization-asserted, which is the whole of ADR-057's requirement.** The ADR
+    #: rules out the `role` fact in the token's attenuation block because a delegating parent
+    #: is not the organization; it does not require any particular organization-side
+    #: mechanism, and configuration mounted by the operator has always been the one this
+    #: deployment has. What it could not do until now is say *different things about
+    #: different agents*: one process-wide constant makes a policy that discriminates on
+    #: `principal.role` always-on or always-off, never discriminating, so the shipped
+    #: corpus's own intent — a worker paying through a critical tool refused, a senior
+    #: allowed — was inexpressible. A file keyed by agent is the smallest change that lets
+    #: configuration state the truth it already owns.
+    #:
+    #: It is not the issuance service (`STATUS.md` gap 7, ADR-039). Roles here are static
+    #: until an operator edits the file and restarts; nothing rotates, expires, or attests
+    #: them. That service is still the answer for a deployment whose agent population
+    #: changes without a redeploy.
+    role_assignments_path: Path | None = None
     #: Where `RuleBasedDriftOracle` reaches an embedding model. `None` disables drift
     #: entirely — a legitimate configuration, not a degraded one (spec 06 §2.1).
     ollama_url: str | None = None
@@ -217,6 +258,12 @@ class ServiceSettings:
             policy_bundle_sig_path=Path(_require(f"{ENV_PREFIX}POLICY_BUNDLE_SIG_PATH")),
             policy_public_key_hex=_require(f"{ENV_PREFIX}POLICY_PUBLIC_KEY"),
             routes_path=Path(_require(f"{ENV_PREFIX}ROUTES_PATH")),
+            role_assignments_path=_optional_path(f"{ENV_PREFIX}ROLE_ASSIGNMENTS_PATH"),
+            # Read here for the first time. `default_role`'s own docstring called it
+            # configuration and `serve_pep.py` names the variable in a comment, but nothing
+            # ever looked it up — so the one role the deployed PEP could assert was the
+            # dataclass default, and no deployment could change it.
+            default_role=os.environ.get(f"{ENV_PREFIX}DEFAULT_ROLE", "").strip() or DEFAULT_ROLE,
             ollama_url=os.environ.get(f"{ENV_PREFIX}OLLAMA_URL", "").strip() or None,
             # Every other setting here reads an override and this one did not, so the
             # 5,000 default was the hard ceiling on any single payment a deployed PEP
@@ -258,6 +305,9 @@ def load_policy(settings: ServiceSettings) -> CedarEngine:
         cedar_source=payload["cedar_source"],
         serial=int(payload.get("serial", 0)),
         entity_schema=payload.get("entity_schema"),
+        # Inside the signature, so this is covered by `verify_bundle` below and a tampered
+        # `sensitivity` is a boot failure rather than a silently disarmed forbid.
+        tools=payload.get("tools"),
     )
 
     try:
@@ -268,9 +318,85 @@ def load_policy(settings: ServiceSettings) -> CedarEngine:
         raise ServiceConfigError(f"policy bundle signature did not verify: {exc}") from exc
 
     try:
+        # No `tools=`: the engine takes the catalogue from the bundle it was just handed, so
+        # the deployed PEP cannot be running a policy about `resource.sensitivity` against a
+        # catalogue that never arrived. It was, for as long as this call passed neither — and
+        # both resource-attribute rules in the shipped bundle were inert with nothing saying
+        # so, because `_UNKNOWN_TOOL` answers every lookup with the safe end of every axis.
         return CedarEngine(bundle)
     except PolicyBundleError as exc:
         raise ServiceConfigError(f"policy bundle does not parse: {exc}") from exc
+
+
+def load_role_assignments(settings: ServiceSettings) -> dict[str, str]:
+    """Read the organization's per-agent role assignments. `{}` when none are configured.
+
+    Raises:
+        ServiceConfigError: The file is unreadable, is not a JSON object, or maps an agent to
+            something that is not a string. Fail-closed at boot, like every other loader
+            here: a role map that half-loaded would grant or withhold authority by accident,
+            and the accident is invisible from the outside — every request still returns a
+            decision.
+    """
+    import json
+
+    path = settings.role_assignments_path
+    if path is None:
+        return {}
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ServiceConfigError(f"cannot read the role assignments: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ServiceConfigError(f"role assignments are not valid JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise ServiceConfigError(
+            f"role assignments must be a JSON object of delegation path to role, not "
+            f"{type(payload).__name__}"
+        )
+    for path, role in payload.items():
+        if not isinstance(role, str) or not role:
+            raise ServiceConfigError(
+                f"role assignment for {path!r} is {role!r}; a role is a non-empty string"
+            )
+
+    _refuse_widening_roles(payload)
+    return dict(payload)
+
+
+def _refuse_widening_roles(assignments: dict[str, str]) -> None:
+    """Refuse a map where a descendant holds a role its ancestor does not.
+
+    The one residual in `chain_identity`'s argument, made unreachable. An agent can forge any
+    path that *extends* its own, so if `agt-payer` is `agent` while `agt-payer/agt-settlement`
+    is `senior`, `agt-payer` reaches `senior` by minting a child it names `agt-settlement`.
+    Refusing the shape at boot is the only place this can be caught: at request time the
+    forged chain is indistinguishable from the real one, because it *is* a real one.
+
+    Roles are unordered here — this module knows nothing about what a Cedar bundle grants to
+    which — so "wider" is read as "different from the ancestor's". That over-refuses a map
+    that moves an agent sideways into an equally-privileged role, and the cost of that is an
+    operator writing one more line. Under-refusing costs an escalation nobody can see.
+
+    Raises:
+        ServiceConfigError: A path's role differs from that of a configured ancestor.
+    """
+    for path, role in assignments.items():
+        if not path:
+            continue
+        segments = path.split("/")
+        for cut in range(1, len(segments)):
+            ancestor = "/".join(segments[:cut])
+            ancestor_role = assignments.get(ancestor)
+            if ancestor_role is not None and ancestor_role != role:
+                raise ServiceConfigError(
+                    f"role assignment {path!r} is {role!r} but its ancestor {ancestor!r} is "
+                    f"{ancestor_role!r}; an ancestor can mint any descendant path, so it "
+                    f"would reach {role!r} regardless. Give the ancestor the same role, or "
+                    f"leave the descendant unassigned."
+                )
 
 
 def _root_keys(settings: ServiceSettings) -> list[PublicKey]:
@@ -350,7 +476,7 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_controlplane.db.base import make_engine, make_session_factory
     from agentiam_controlplane.db.ledger import acquire, release
     from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
-    from agentiam_core.datalog import token_caveats, token_identity
+    from agentiam_core.datalog import chain_identity, token_caveats
     from agentiam_core.models import BudgetDimension
     from agentiam_core.tokens import RootKeySet
     from agentiam_pep.app import create_app
@@ -366,6 +492,7 @@ def build_service(settings: ServiceSettings) -> Service:
     engine = make_engine(settings.database_url)
     factory = make_session_factory(engine)
     policy = load_policy(settings)
+    role_assignments = load_role_assignments(settings)
 
     class Ledger:
         """The real `ACQUIRE`/`RELEASE` over the configured DSN — spec 04 §4.1, §4.5."""
@@ -429,7 +556,7 @@ def build_service(settings: ServiceSettings) -> Service:
 
         `agent_id` and `role` are not on `VerifiedToken` — they live in attenuation block
         facts (spec 01 §6.1), and block facts are invisible to the authorizer (spec 02 §9
-        finding 13), so `block_source()` is the only route to them. `datalog.token_identity`
+        finding 13), so `block_source()` is the only route to them. `datalog.chain_identity`
         is that route, and until it existed this returned `agt-depth-{N}`: every sibling at a
         depth shared one name, and the identity tree drew them as one node.
 
@@ -442,15 +569,26 @@ def build_service(settings: ServiceSettings) -> Service:
         mistake (ADR-005) one field over. The parent's claim travels as `declared_role`, onto
         the decision record and from there to the identity tree, where it belongs.
 
+        What changed is *how much* configuration can say, not who says it. A single
+        process-wide `default_role` made every policy that discriminates on `principal.role`
+        always-on or always-off — the shipped corpus asserts both that a worker paying
+        through a critical tool is refused and that a senior is allowed, and one constant can
+        satisfy exactly one of those at a time. `role_assignments` is the same organization
+        speaking per agent instead of per process. It is keyed on the *delegation path*
+        rather than the terminal `agent_id`, because the id is the parent's word and the path
+        is not (`chain_identity`); a bare id would have let the parent pick its child's role
+        after all, by picking its name.
+
         `agent_id` falls back to the depth-derived name when the token declares none — a root
         token has no attenuation block, and a block whose `agent` fact was rendered
         ambiguously (TM-24) has none that can be believed. That fallback is not cosmetic: the
         alternative is letting a crafted block choose the Cedar entity uid.
         """
-        identity = token_identity(token)
+        chain = chain_identity(token)
+        identity = chain.terminal
         return AgentPrincipal(
             agent_id=identity.agent_id or f"agt-depth-{token.depth}",
-            role=settings.default_role,
+            role=role_assignments.get("/".join(chain.path), settings.default_role),
             principal_id=token.principal_id,
             task_id=token.task_id,
             declared_role=identity.role or "",

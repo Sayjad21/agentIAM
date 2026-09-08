@@ -529,3 +529,114 @@ class TestDeclaredRoleIsNotAnAuthorityAttribute:
     def test_declared_role_defaults_to_empty_so_existing_callers_are_unchanged(self) -> None:
         """Every `AgentPrincipal` built before ADR-057 still means exactly what it meant."""
         assert a_principal().declared_role == ""
+
+
+class TestTheCatalogueTravelsInTheBundle:
+    """`tool_catalogue` and the bundle-sourced default — TODO item 29.
+
+    The catalogue used to reach an engine only as a constructor argument, and the deployed
+    PEP never passed one: `scripts/pep_service.load_policy` built `CedarEngine(bundle)` full
+    stop, so `_facts_for` answered every lookup with `_UNKNOWN_TOOL` and both
+    resource-attribute rules in the shipped corpus were inert. Every test in this file passed
+    throughout, because every one of them passes `tools=TOOLS` by hand.
+
+    So the catalogue now rides inside the bundle, signed with it, and the engine reads it
+    from there unless a caller says otherwise. There is no second artifact to forget.
+    """
+
+    CATALOGUE: ClassVar[dict[str, dict[str, object]]] = {
+        "payment_api": {
+            "tool_id": "payment_api",
+            "server": "bank",
+            "sensitivity": "critical",
+            "is_external": True,
+        },
+        "invoice_api": {"server": "erp"},
+    }
+
+    def test_an_engine_reads_the_catalogue_off_its_own_bundle(self) -> None:
+        engine = CedarEngine(PolicyBundle(version="v", cedar_source=SOURCE, tools=self.CATALOGUE))
+        assert engine.tools["payment_api"].sensitivity == "critical"
+        assert engine.tools["payment_api"].is_external is True
+
+    def test_an_entry_omitting_attributes_takes_the_safe_defaults(self) -> None:
+        """`ToolFacts`' defaults are the safe end of every axis, and stay that way here."""
+        engine = CedarEngine(PolicyBundle(version="v", cedar_source=SOURCE, tools=self.CATALOGUE))
+        assert engine.tools["invoice_api"] == ToolFacts(
+            tool_id="invoice_api", server="erp", sensitivity="low", is_external=False
+        )
+
+    def test_the_key_wins_over_a_disagreeing_tool_id(self) -> None:
+        """Trusting the field would leave an entry `_facts_for` can never reach."""
+        engine = CedarEngine(
+            PolicyBundle(
+                version="v", cedar_source=SOURCE, tools={"payment_api": {"tool_id": "other"}}
+            )
+        )
+        assert set(engine.tools) == {"payment_api"}
+
+    def test_an_explicit_catalogue_still_wins(self) -> None:
+        """Harnesses and this file's own fixtures pass `tools=`, and must keep overriding."""
+        engine = CedarEngine(
+            PolicyBundle(version="v", cedar_source=SOURCE, tools=self.CATALOGUE), tools=TOOLS
+        )
+        assert engine.tools == TOOLS
+
+    def test_an_explicit_empty_catalogue_is_not_the_bundle_s(self) -> None:
+        """`{}` is a caller asserting no resource attributes; it is not "unspecified"."""
+        engine = CedarEngine(
+            PolicyBundle(version="v", cedar_source=SOURCE, tools=self.CATALOGUE), tools={}
+        )
+        assert engine.tools == {}
+
+    def test_a_bundle_with_no_catalogue_gives_an_empty_one(self) -> None:
+        assert CedarEngine(PolicyBundle(version="v", cedar_source=SOURCE)).tools == {}
+
+    @pytest.mark.parametrize(
+        ("entry", "match"),
+        [
+            ({"sensitivty": "critical"}, "sensitivty"),
+            ({"is_external": "yes"}, "not a boolean"),
+            ({"is_external": 1}, "not a boolean"),
+            ({"sensitivity": 3}, "non-string"),
+            ({"server": []}, "non-string"),
+        ],
+    )
+    def test_a_malformed_entry_raises_at_construction(
+        self, entry: dict[str, object], match: str
+    ) -> None:
+        """Load-time, never request-time.
+
+        The alternative is a PEP that starts, looks like it is enforcing resource attributes,
+        and is not — which is the whole defect. A misspelled attribute is the sharp case:
+        `ToolFacts(**entry)` would raise on `sensitivty` by luck and *silently drop*
+        `is_extrenal`, and a dropped `is_external` is the difference between a permit that
+        fires and one that does not.
+        """
+        with pytest.raises(PolicyBundleError, match=match):
+            CedarEngine(PolicyBundle(version="v", cedar_source=SOURCE, tools={"t": entry}))
+
+    def test_an_entry_that_is_not_an_object_raises(self) -> None:
+        with pytest.raises(PolicyBundleError, match="not an object"):
+            CedarEngine(
+                PolicyBundle(version="v", cedar_source=SOURCE, tools={"t": "critical"})  # type: ignore[dict-item]
+            )
+
+    def test_the_forbid_the_deployment_was_missing_now_discriminates(self) -> None:
+        """The corpus's own intent, evaluated through a bundle-carried catalogue.
+
+        `forbid_critical_tool_payment_worker` (beat 3) and its senior twin (beat 8) both live
+        in `CORPUS`. A deployment with no catalogue satisfies neither — it allows both,
+        because `payment_api` looks low-sensitivity.
+        """
+        from agentiam_core.corpus import CORPUS_SOURCE, CORPUS_TOOLS
+
+        wired = CedarEngine(
+            PolicyBundle(version="v", cedar_source=CORPUS_SOURCE, tools=CORPUS_TOOLS)
+        )
+        bare = CedarEngine(PolicyBundle(version="v", cedar_source=CORPUS_SOURCE))
+        request = ctx("payment:initiate", amount="1250", tool="payment_api", depth=1)
+
+        assert wired.bound(a_principal("worker")).evaluate(request).allowed is False
+        assert wired.bound(a_principal("senior")).evaluate(request).allowed is True
+        assert bare.bound(a_principal("worker")).evaluate(request).allowed is True

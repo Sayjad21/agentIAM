@@ -46,6 +46,7 @@ class TestGenerate:
             "policy_bundle.sig",
             "policy_public_key.hex",
             "routes.json",
+            "role_assignments.json",
         ):
             assert (tmp_path / name).exists(), f"missing {name}"
 
@@ -80,6 +81,10 @@ class TestGenerate:
             version=payload["version"],
             cedar_source=payload["cedar_source"],
             serial=payload["serial"],
+            # Inside the signature since TODO item 29, and reconstructed here for the same
+            # reason `pep_service.load_policy` reconstructs it: a reader that drops the
+            # catalogue is a reader that verifies a different bundle.
+            tools=payload["tools"],
         )
         # Raises on failure (T-025) — reaching the next line is the assertion.
         verify_bundle(bundle, signature, public_key_from_hex(public_hex))
@@ -99,6 +104,85 @@ class TestGenerate:
         bootstrap_demo_secrets.main(["--out", str(tmp_path)])
         written = json.loads((tmp_path / "routes.json").read_text(encoding="utf-8"))
         assert written == ROUTES
+
+    def test_the_bundle_carries_the_corpus_tool_catalogue(self, tmp_path: Path) -> None:
+        """The catalogue ships with the policy that reads it — TODO item 29.
+
+        Without it every resource is `_UNKNOWN_TOOL` and the bundle's two
+        resource-attribute rules are inert in the deployment.
+        """
+        from agentiam_core.corpus import CORPUS_TOOLS
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        payload = json.loads((tmp_path / "policy_bundle.json").read_text(encoding="utf-8"))
+
+        assert payload["tools"] == CORPUS_TOOLS
+
+    def test_the_catalogue_is_covered_by_the_signature(self, tmp_path: Path) -> None:
+        """`sensitivity` is an authorization input, so editing it on disk must not verify."""
+        from agentiam_core.bundles import (
+            BundleSignatureError,
+            PolicyBundle,
+            public_key_from_hex,
+            verify_bundle,
+        )
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        payload = json.loads((tmp_path / "policy_bundle.json").read_text(encoding="utf-8"))
+        signature = (tmp_path / "policy_bundle.sig").read_bytes()
+        public_key = public_key_from_hex(
+            (tmp_path / "policy_public_key.hex").read_text(encoding="utf-8")
+        )
+
+        payload["tools"]["payment_api"]["sensitivity"] = "low"
+        with pytest.raises(BundleSignatureError):
+            verify_bundle(
+                PolicyBundle(
+                    version=payload["version"],
+                    cedar_source=payload["cedar_source"],
+                    serial=payload["serial"],
+                    tools=payload["tools"],
+                ),
+                signature,
+                public_key,
+            )
+
+    def test_the_role_assignments_cover_every_agent_the_demo_lets_pay(self, tmp_path: Path) -> None:
+        """Whoever the demo lets pay must be senior, or the forbid refuses every payment.
+
+        `payment_api` is `critical` and the bundle forbids critical resources to non-seniors.
+        The payer lineage is exactly who `seed_demo` gives `payment:initiate` to.
+        """
+        from scripts.seed_demo import _CHILDREN, _DESCENDANTS
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        roles = json.loads((tmp_path / "role_assignments.json").read_text(encoding="utf-8"))
+
+        payers = {name for name, _, scopes, _ in _CHILDREN if "payment:initiate" in scopes}
+        payers |= {name for _, name, _, scopes, _ in _DESCENDANTS if "payment:initiate" in scopes}
+        assert {path.rsplit("/", 1)[-1] for path in roles} == payers
+        assert set(roles.values()) == {"senior"}
+
+    def test_no_agent_outside_the_payer_lineage_is_senior(self, tmp_path: Path) -> None:
+        """The difference between this and `AGENTIAM_PEP_DEFAULT_ROLE=senior`.
+
+        Making everyone senior would wire the catalogue and leave the forbid just as dead —
+        `agt-doc-reader` would be "senior" too, which is a claim nobody would write down.
+        """
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        roles = json.loads((tmp_path / "role_assignments.json").read_text(encoding="utf-8"))
+
+        assert not any("doc-reader" in path or "negotiator" in path for path in roles)
+
+    def test_the_role_map_loads_under_the_pep_s_own_rules(self, tmp_path: Path) -> None:
+        """It must survive `_refuse_widening_roles`, or the demo stack refuses to start."""
+        from scripts import pep_service
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        settings = object.__new__(pep_service.ServiceSettings)
+        object.__setattr__(settings, "role_assignments_path", tmp_path / "role_assignments.json")
+
+        assert set(pep_service.load_role_assignments(settings).values()) == {"senior"}
 
     def test_it_creates_the_output_directory_if_absent(self, tmp_path: Path) -> None:
         target = tmp_path / "nested" / "dir"
@@ -158,6 +242,7 @@ class TestIdempotency:
             "policy_bundle.sig",
             "policy_public_key.hex",
             "routes.json",
+            "role_assignments.json",
         ):
             assert (tmp_path / name).exists(), f"missing {name} after completing a partial run"
 
