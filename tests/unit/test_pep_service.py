@@ -456,6 +456,33 @@ class TestLeasePriming:
     tests either way — because nothing here could see the pool. That is what these cover.
     """
 
+    async def test_the_lifespan_starts_the_lease_renewer(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Priming alone is not enough: the boot lease has a 60 s TTL and nothing renewed it.
+
+        Every top-up was request-triggered and scheduled asynchronously, so the request that
+        noticed an aged-out lease was refused anyway. On a stack left idle past the first TTL
+        — which is every stack a human demos — the first payment returned 429
+        LEASE_UNAVAILABLE and the next one succeeded. Measured on the demo stack 80 s after
+        `up --wait`, both drives using the same tokens.
+
+        Nothing in this file could see it before, for the same reason nothing could see the
+        missing prime: the pool was unreachable from here.
+        """
+        started: list[str] = []
+
+        async def record_start(_self: object) -> None:
+            started.append("pool")
+
+        monkeypatch.setattr("agentiam_pep.pool.LeasePool.start", record_start)
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        await self._run_lifespan(service, monkeypatch)
+
+        assert started == ["pool"]
+
     @staticmethod
     async def _run_lifespan(service: pep_service.Service, monkeypatch: pytest.MonkeyPatch) -> None:
         """Enter and exit the app's lifespan with the I/O-bound workers stubbed out.

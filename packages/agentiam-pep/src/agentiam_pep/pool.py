@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
@@ -149,6 +150,7 @@ class LeasePool:
         self._before_release = before_release
         self._held: dict[BudgetDimension, _Held] = {}
         self._closed = False
+        self._renewer: asyncio.Task[None] | None = None
 
     async def _release(self, lease_id: uuid.UUID) -> None:
         """`RELEASE` one lease, after letting anything owed against it settle first.
@@ -317,6 +319,80 @@ class LeasePool:
         held = self._held.get(dimension)
         return held.lease.remaining_local if held is not None else Decimal(0)
 
+    # -- renewal ---------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Begin renewing held leases in the background. Idempotent.
+
+        **Why a timer and not just the request path.** Every top-up was request-triggered:
+        `reserve()` and `check()` call `_maybe_schedule_topup`, and the scheduling is
+        asynchronous, so the request that *notices* an aged-out lease is still refused —
+        `check()` has already decided by the time the replacement lands. On a PEP that is
+        spending steadily that is invisible, because the low-water mark fires long before
+        anything expires. On an idle one it is the whole experience: the deployed PEP primes a
+        single lease at boot with a 60 s TTL, and the first payment after that minute gets
+        `LEASE_UNAVAILABLE`, with the one after it succeeding.
+
+        Measured on the demo stack, 80 s after `up --wait`, same tokens both times:
+
+            payer settles a small invoice           429 LEASE_UNAVAILABLE
+            settlement agent pays within its slice  429 LEASE_UNAVAILABLE
+            -- immediately again --
+            payer settles a small invoice           200 OK
+            settlement agent pays within its slice  200 OK
+
+        ADR-049's item 24 fix is what makes the second attempt work — before it the pool
+        never scheduled anything for a lease that expired *unspent*, and the PEP stayed dead.
+        This closes the remaining half: nothing should have to be refused to trigger the
+        renewal that would have prevented it.
+
+        Renewal replaces the lease through `_acquire`, the same path a top-up already takes,
+        so ADR-049's settle-before-release ordering is unchanged — `_release` still awaits
+        `before_release` first. Nothing here is a new route to the ledger.
+        """
+        if self._renewer is None and not self._closed:
+            self._renewer = asyncio.create_task(self._renew_forever())
+
+    @property
+    def _renew_margin(self) -> timedelta:
+        """How long before expiry a lease is replaced.
+
+        Half the TTL, which is strictly greater than `skew` because `PoolSettings` refuses a
+        `ttl <= 2 * skew`. That matters: renewing *inside* the skew margin would replace the
+        lease only after `check()` had already begun refusing against it, which is the
+        behaviour this exists to remove.
+        """
+        return self._settings.ttl / 2
+
+    async def _renew_forever(self) -> None:
+        """Sweep every `ttl / 4` — spec 04 §4.6's cadence for `REAP`, for the same reason.
+
+        A period shorter than the margin guarantees at least one sweep sees a lease past its
+        half-life while it is still usable. The sweep schedules and never awaits, so a top-up
+        that cannot reach the ledger cannot stop it: an unreachable ledger is the fail-closed
+        case the request path already handles per request, and a renewer that died on one
+        outage would leave the PEP unable to renew until a restart.
+
+        Cancellation is how this ends; `_closed` is re-checked after the sleep because
+        `aclose()` can set it while the sweep is waiting.
+        """
+        interval = self._settings.ttl.total_seconds() / 4
+        while True:
+            await asyncio.sleep(interval)
+            if self._closed:
+                return
+            for dimension, held in list(self._held.items()):
+                if self._renew_due(held):
+                    self._schedule_topup(dimension, held)
+
+    def _renew_due(self, held: _Held) -> bool:
+        """Whether `held`'s lease is past its half-life, or is no longer active at all."""
+        lease = held.lease
+        return (
+            lease.state is not LeaseState.ACTIVE
+            or self._now() >= lease.expires_at - self._renew_margin
+        )
+
     # -- top-up ---------------------------------------------------------------------
 
     def _maybe_schedule_topup(self, dimension: BudgetDimension, held: _Held) -> None:
@@ -355,6 +431,17 @@ class LeasePool:
         )
         if not (drained or stale):
             return
+        self._schedule_topup(dimension, held)
+
+    def _schedule_topup(self, dimension: BudgetDimension, held: _Held) -> None:
+        """Start one ACQUIRE, unless one is already running. The predicate is the caller's.
+
+        Split out so the renewal sweep and the request path share one piece of task
+        bookkeeping — `topping_up` is what keeps them from racing each other into two
+        concurrent ACQUIREs for one dimension, and two copies of it would not.
+        """
+        if held.topping_up or self._closed:
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -380,6 +467,20 @@ class LeasePool:
 
     # -- shutdown -------------------------------------------------------------------
 
+    async def _stop_renewer(self) -> None:
+        """Cancel the renewal sweep and wait for it to finish.
+
+        Before `drain()`, not after: a sweep that fires mid-shutdown would schedule an
+        ACQUIRE for a lease `aclose()` is about to RELEASE, stranding the new one for the
+        full TTL — the same failure `aclose()`'s own docstring gives for not draining.
+        """
+        renewer, self._renewer = self._renewer, None
+        if renewer is None:
+            return
+        renewer.cancel()
+        with suppress(asyncio.CancelledError):
+            await renewer
+
     async def aclose(self) -> None:
         """Release every held lease — spec 04 §4.5's graceful shutdown.
 
@@ -391,6 +492,7 @@ class LeasePool:
         In-flight top-ups are awaited first: releasing while an `ACQUIRE` is outstanding
         would strand the lease it is about to grant for the full TTL.
         """
+        await self._stop_renewer()
         await self.drain()
         self._closed = True
         for held in self._held.values():
