@@ -955,3 +955,42 @@ role does not permit a critical tool, and `DEMO.md` beat 3 or 8 points at it.
 
 **Weigh first:** it is a fourth sibling in a tree the docs describe as three, so `DEMO.md`
 beat 2's "root spawns 3 sub-agents" and the identity-tree screenshots move with it.
+
+### ~~31. The first payment on an idle stack is refused~~ — **FIXED**
+
+**Item 24's remaining half**, found while verifying item 29 live. Item 24 fixed the case where
+an aged-out lease scheduled *nothing* and the PEP refused budgeted requests permanently. What
+was left: the scheduling is asynchronous and `check()` has already decided by the time the
+replacement lands, so **the request that notices the expired lease is still refused**. Every
+top-up was request-triggered, so something has to be refused to trigger the renewal that would
+have prevented it.
+
+Invisible on a PEP that spends steadily — the low-water mark fires long before anything
+expires. On an idle one it is the whole demo: the deployed PEP primes one lease at boot with a
+60 s TTL, and a presenter is idle for far longer than a minute between bring-up and the first
+payment. Measured on the demo stack, 80 s after `up --wait`, same tokens both times:
+
+```
+payer settles a small invoice           429 LEASE_UNAVAILABLE
+settlement agent pays within its slice  429 LEASE_UNAVAILABLE
+-- immediately again --
+payer settles a small invoice           200 OK
+settlement agent pays within its slice  200 OK
+```
+
+Both automated paths miss it for the same reason item 24 was missed: `make demo-seed` runs
+seconds after `up --wait`, inside the first TTL, and every load run spends promptly.
+
+**Fixed by ADR-070.** `LeasePool.start()` sweeps every `ttl / 4` — spec 04 §4.6's `REAP`
+cadence — and replaces any lease past **half** its TTL. Half, not "once stale", because the
+margin has to be wider than the skew or the replacement lands after `check()` has already
+begun refusing; `PoolSettings` refusing `ttl <= 2 * skew` is what guarantees that. Renewal goes
+through `_acquire`, the same call a top-up makes, so ADR-049's settle-before-release ordering
+is not a second code path — a test pins that ordering for the renewal specifically.
+
+Wired into the PEP's lifespan next to the emitter, the settlement queue and the revocation
+consumer, and into `serve_pep.py` because ADR-062 requires the load harness to compose the PEP
+the way the deployment does.
+
+Verified live: after the fix, a stack left idle well past the TTL authorizes the first payment
+it is asked for.

@@ -4212,3 +4212,84 @@ T-057's call, not this ticket's.
   terminal identity and the path. `token_identity` is defined in terms of it. A parse costs
   ~227 µs at depth 3 (`performance.md` tier 4) and the request path already budgets for
   exactly two, so NFR-1 and NFR-2 are untouched.
+
+---
+
+## ADR-070 — A lease is renewed on a timer, because something had to be refused to trigger the renewal
+
+**Status:** accepted · **Closes:** TODO item 31 · **Relates to:** ADR-049 and its item 24
+addendum, spec 04 §4.6, `STATUS.md` §3 gap 27
+
+### The remaining half of item 24
+
+Item 24 found that `_maybe_schedule_topup` asked only *"has this lease drained?"*, so a lease
+that expired **unspent** scheduled nothing and the PEP refused every budgeted request
+permanently. The fix added the staleness half of the test, and the PEP recovers.
+
+It recovers on the *next* request. The scheduling is asynchronous and `check()` has already
+decided by the time the replacement lands, so the request that notices the aged-out lease is
+still refused. Every top-up was request-triggered, which means **something has to be refused
+to trigger the renewal that would have prevented it.**
+
+On a PEP that spends steadily this is invisible: the low-water mark fires long before anything
+expires, so the drained branch always wins. On an idle one it is the whole experience. The
+deployed PEP primes one lease at boot with a 60 s TTL, and a demo stack is idle far longer than
+a minute between `up --wait` and the first payment a human makes.
+
+Measured on the demo stack, 80 s after bring-up, same tokens both times:
+
+```
+payer settles a small invoice           429 LEASE_UNAVAILABLE
+settlement agent pays within its slice  429 LEASE_UNAVAILABLE
+-- immediately again --
+payer settles a small invoice           200 OK
+settlement agent pays within its slice  200 OK
+```
+
+Both automated paths miss it for the same reason item 24 was missed: `make demo-seed` runs
+within seconds of `up --wait`, inside the first TTL, and every load run spends promptly.
+
+### The fix, and the two shapes rejected
+
+`LeasePool.start()` runs a sweep every `ttl / 4` — spec 04 §4.6's cadence for `REAP`, for the
+same reason — and replaces any lease past **half its TTL**. The PEP's lifespan starts it
+alongside the emitter, the settlement queue and the revocation consumer.
+
+Half the TTL, not "once it is stale": the margin has to be **wider than the skew**, or the
+replacement lands after `check()` has already started refusing against the lease, which is the
+behaviour being removed. `PoolSettings` already refuses `ttl <= 2 * skew` (spec 04 §9.2,
+TM-22), so half the TTL is guaranteed to be wider. The sweep period being shorter than the
+margin is what guarantees at least one sweep sees a lease past its half-life while it is still
+usable.
+
+Rejected: **awaiting the top-up on the refusing request.** It would fix the symptom by putting
+a ledger round-trip on the hot path, which is the network dependency the whole lease mechanism
+exists to remove.
+
+Rejected: **a longer TTL.** It moves the window rather than closing it, and the TTL is bounded
+above by how long a crashed PEP may strand budget (spec 04 §9, CH-3).
+
+### What this deliberately does not change
+
+Renewal replaces the lease through `_acquire` — the same call a top-up already makes. So:
+
+- **ADR-049's settle-before-release ordering is untouched.** `_acquire` releases the old lease
+  through `_release`, which awaits `before_release` first. CH-10's 6,678 declined settlements
+  are what that hook exists for, and renewal is not a route around it. A test pins the
+  ordering specifically for the renewal path.
+- **There is no second definition of "worth replacing".** `_maybe_schedule_topup` keeps its
+  own predicate (drained *or* stale) and the sweep has its own (past half-life); both go
+  through one `_schedule_topup`, whose `topping_up` flag is what stops the request path and
+  the sweep racing into two concurrent ACQUIREs for one dimension.
+- **The sweep schedules and never awaits**, so a top-up that cannot reach the ledger cannot
+  kill it. An unreachable ledger is the fail-closed case the request path already handles per
+  request; a renewer that died on one outage would leave the PEP unable to renew until a
+  restart, which is the failure this ADR is about.
+
+`aclose()` cancels the sweep **before** draining, not after: a sweep firing mid-shutdown would
+schedule an ACQUIRE for a lease `aclose()` is about to RELEASE, stranding the new one for the
+full TTL — the same failure `aclose()`'s own docstring gives for not draining.
+
+`scripts/serve_pep.py` starts it too. ADR-062 is why: `performance.md`'s NFR-2 figure is a
+claim about the PEP we deploy, measured through that harness, and a run longer than one TTL
+would otherwise measure a pool that only replaces its lease when a request is refused.

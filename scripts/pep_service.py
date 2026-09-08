@@ -626,6 +626,10 @@ def build_service(settings: ServiceSettings) -> Service:
         await emitter.start()
         await settlement.start()
         await revocation.start()
+        # Keeps the held lease fresh on a timer rather than waiting for a request to notice
+        # it aged out. Started before `prime()` so the first lease is under renewal from the
+        # moment it exists; the sweep does nothing until there is something to renew.
+        await pool.start()
 
         # Draw the first lease. Without this the pool holds no `_Held` for the dimension,
         # and `LeasePool.covers()` refuses *every* budgeted request with

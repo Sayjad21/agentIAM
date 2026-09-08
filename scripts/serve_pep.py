@@ -400,6 +400,11 @@ def build_app(
             return
         await emitter.start()
         await settlement.start()
+        # The deployed composition renews its lease on a timer (ADR-070), and ADR-062 is why
+        # this harness copies it: `performance.md`'s NFR-2 figure is a claim about the PEP we
+        # deploy, measured through this file. A run longer than one TTL would otherwise
+        # measure a pool that only replaces its lease when a request is refused.
+        await pool.start()
         await pool.prime(BudgetDimension.SPEND_BDT)
 
     @app.on_event("shutdown")

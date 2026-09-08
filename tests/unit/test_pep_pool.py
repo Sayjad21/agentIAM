@@ -356,6 +356,166 @@ class TestExpiry:
         assert not pool.check({SPEND: Decimal(1)}).ok
 
 
+class TestBackgroundRenewal:
+    """A lease is replaced on a timer, not only when a request notices it aged out.
+
+    Every top-up used to be request-triggered, and the scheduling is asynchronous — so the
+    request that *notices* an expired lease is refused anyway, because `check()` has already
+    decided by the time the replacement lands. Item 24 (ADR-049's addendum) fixed the case
+    where nothing was ever scheduled at all; what was left is that something has to be
+    refused to trigger the renewal that would have prevented it.
+
+    Invisible on a PEP that spends steadily — the low-water mark fires long before anything
+    expires. On an idle one it is the whole experience: the deployed PEP primes one lease at
+    boot with a 60 s TTL, so the first payment after that minute is `LEASE_UNAVAILABLE` and
+    the next one succeeds. Measured on the demo stack, 80 s after `up --wait`.
+    """
+
+    @staticmethod
+    def _clocked(
+        ledger: FakeLedger, ttl: timedelta = timedelta(seconds=60)
+    ) -> tuple[LeasePool, dict[str, datetime]]:
+        # Skew scales with the TTL: `PoolSettings` refuses `ttl <= 2 * skew`, and these tests
+        # run on a 4 s TTL so a sweep at `ttl / 4` completes inside a test. At ttl/8 the
+        # half-life margin (2 s) is comfortably wider than the skew (0.5 s), which is the
+        # relationship the renewal depends on and the production defaults also have.
+        settings = PoolSettings(
+            pep_id="pep-1",
+            lease_size=Decimal(100),
+            ttl=ttl,
+            skew=ttl / 8,
+            low_water=Decimal("0.25"),
+        )
+        clock = {"t": NOW}
+        return LeasePool(ledger, settings, mandate_id=MANDATE, now=lambda: clock["t"]), clock
+
+    async def test_a_lease_past_its_half_life_is_replaced_without_a_request(self) -> None:
+        """The defect itself: no `reserve()`, no `check()`, and the lease still renews."""
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger, ttl=timedelta(seconds=4))
+        await pool.prime(SPEND)
+        assert ledger.acquired == [Decimal(100)]
+
+        # Past the 2 s half-life, and still 0.5 s clear of the skew margin at 3.5 s — so the
+        # lease being replaced is one `check()` would still have accepted.
+        clock["t"] = NOW + timedelta(seconds=3)
+        await pool.start()
+        await asyncio.sleep(1.5)  # one sweep at ttl/4 = 1 s
+        await pool.drain()
+
+        assert len(ledger.acquired) == 2
+        # The replacement releases the lease it replaced, rather than holding both.
+        assert len(ledger.released) == 1
+        await pool.aclose()
+
+    async def test_the_renewed_lease_is_usable_where_the_old_one_would_not_be(self) -> None:
+        """The point of renewing at the half-life rather than at expiry.
+
+        Replacing a lease only once it is stale would put the replacement *after* `check()`
+        had already begun refusing against it — the margin has to be wider than the skew, and
+        `PoolSettings` refusing `ttl <= 2 * skew` is what guarantees half the TTL is.
+        """
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger, ttl=timedelta(seconds=4))
+        await pool.prime(SPEND)
+
+        clock["t"] = NOW + timedelta(seconds=3)
+        await pool.start()
+        await asyncio.sleep(1.5)
+        await pool.drain()
+
+        # Now step past where the *original* lease would have died. It expired at NOW+4 and
+        # `check()` refuses from NOW+3.5 (the skew); the replacement was taken at NOW+3 and
+        # runs to NOW+7. Asserting at NOW+3 would have passed with renewal switched off
+        # entirely, which is the whole reason the clock moves here.
+        clock["t"] = NOW + timedelta(seconds=5)
+        assert pool.check({SPEND: Decimal(1)}).ok
+        await pool.aclose()
+
+    async def test_a_fresh_lease_is_left_alone(self) -> None:
+        """Renewing early wastes an ACQUIRE/RELEASE pair; the sweep must be a no-op."""
+        ledger = FakeLedger()
+        pool, _clock = self._clocked(ledger, ttl=timedelta(seconds=4))
+        await pool.prime(SPEND)
+
+        await pool.start()
+        await asyncio.sleep(1.5)
+        await pool.drain()
+
+        assert ledger.acquired == [Decimal(100)]
+        await pool.aclose()
+
+    async def test_start_is_idempotent(self) -> None:
+        """Two sweeps for one pool would race each other into duplicate ACQUIREs."""
+        ledger = FakeLedger()
+        pool, _clock = self._clocked(ledger)
+        await pool.start()
+        await pool.start()
+
+        assert pool._renewer is not None
+        await pool.aclose()
+
+    async def test_a_pool_with_nothing_held_sweeps_harmlessly(self) -> None:
+        """`start()` runs before `prime()` in the deployed lifespan, deliberately."""
+        ledger = FakeLedger()
+        pool, _clock = self._clocked(ledger, ttl=timedelta(seconds=4))
+        await pool.start()
+        await asyncio.sleep(1.5)
+
+        assert ledger.acquired == []
+        await pool.aclose()
+
+    async def test_aclose_stops_the_sweep(self) -> None:
+        """A sweep firing mid-shutdown would strand a fresh lease for the full TTL.
+
+        The same failure `aclose()`'s own docstring gives for not draining first.
+        """
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger, ttl=timedelta(seconds=4))
+        await pool.prime(SPEND)
+        await pool.start()
+        await pool.aclose()
+
+        clock["t"] = NOW + timedelta(seconds=3)
+        acquired_at_close = len(ledger.acquired)
+        await asyncio.sleep(1.5)
+
+        assert len(ledger.acquired) == acquired_at_close
+        assert pool._renewer is None
+
+    async def test_renewal_settles_before_it_releases(self) -> None:
+        """Renewal goes through `_acquire`, so ADR-049's ordering is not a second code path.
+
+        A lease released while settlements against it are still queued declines every one of
+        them (CH-10: 6,678 of 6,992). `_release` awaits `before_release` first, and renewal
+        must not be a route around that.
+        """
+        ledger = FakeLedger()
+        pool, clock = self._clocked(ledger, ttl=timedelta(seconds=4))
+        order: list[str] = []
+
+        async def drain_first() -> None:
+            order.append("settled")
+
+        pool._before_release = drain_first
+        original_release = ledger.release
+
+        async def record_release(*, lease_id: uuid.UUID) -> None:
+            order.append("released")
+            await original_release(lease_id=lease_id)
+
+        ledger.release = record_release  # type: ignore[method-assign]
+
+        await pool.prime(SPEND)
+        clock["t"] = NOW + timedelta(seconds=3)
+        await pool.start()
+        await asyncio.sleep(1.5)
+        await pool.drain()
+
+        assert order == ["settled", "released"]
+        await pool.aclose()
+
+
 class TestGracefulShutdown:
     async def test_aclose_releases_every_held_lease(self) -> None:
         ledger = FakeLedger()
