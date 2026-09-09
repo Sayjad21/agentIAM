@@ -59,6 +59,18 @@ Specs `05`–`09` (policy, drift, revocation, audit, decision record) are writte
 
 ---
 
+## Learning the project
+
+New to AgentIAM? [`learn/`](learn/) is a 22-file guided tour, written to be read in order by
+someone who has never seen the project. Part 1 builds the vocabulary and the request path,
+Part 2 covers one feature per file, Part 3 covers testing, the bugs worth remembering, and
+every known gap. Start at [`learn/00-start-here.md`](learn/00-start-here.md).
+
+It is deliberately separate from the documents above: those are written for someone who
+already knows the system, `learn/` is written for someone who does not.
+
+---
+
 ## Demo and submission
 
 | Document | What it holds |
