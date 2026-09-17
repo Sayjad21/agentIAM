@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -206,13 +206,59 @@ async def test_pending_escalation_sets_flag(migrated_engine: AsyncEngine) -> Non
                 requested_amount=Decimal("100"),
                 reason="need more",
                 created_at=now,
-                expires_at=now,
+                # Strictly in the future: an escalation whose TTL runs out exactly now is
+                # already past being actionable, which `test_an_expired_escalation_*` pins.
+                expires_at=now + timedelta(minutes=15),
                 state=EscalationState.PENDING.value,
             )
         )
         await session.commit()
         nodes = await build_tree(session, task_id=task_id, now=now)
         assert nodes[0].has_pending_escalation is True
+
+
+async def test_an_expired_escalation_does_not_flag_the_node(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """Nothing sweeps `state` when a TTL lapses, so the column alone says `'pending'` forever.
+
+    `escalations.list_by_state` already excludes those from the queue. The tree did not, so
+    the console showed an `ESCALATING` badge on agents whose request had expired days
+    earlier while `/v1/escalations` reported an empty queue — two screens disagreeing.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        now = datetime.now(UTC)
+        session.add(
+            AuditRecordRow(
+                seq=1,
+                decision_id=uuid.uuid4(),
+                record={"task_id": str(task_id), "agent_id": "agent1", "token_chain_ids": ["b1"]},
+                record_hash="a" * 64,
+                created_at=now,
+            )
+        )
+        session.add(
+            EscalationRow(
+                id=uuid.uuid4(),
+                decision_id=uuid.uuid4(),
+                task_id=task_id,
+                agent_id="agent1",
+                principal_id="alice",
+                intent_hash="a" * 64,
+                requested_scopes=["read"],
+                requested_amount=Decimal("100"),
+                reason="expired an hour ago, never swept",
+                created_at=now - timedelta(hours=2),
+                expires_at=now - timedelta(hours=1),
+                # The point of the test: still literally 'pending' in the column.
+                state=EscalationState.PENDING.value,
+            )
+        )
+        await session.commit()
+        nodes = await build_tree(session, task_id=task_id, now=now)
+        assert nodes[0].has_pending_escalation is False
 
 
 async def test_budget_available_is_total_minus_consumed() -> None:
@@ -667,3 +713,98 @@ async def test_is_principal_reaches_the_console_over_the_wire() -> None:
         last_seen=datetime(2026, 9, 7, tzinfo=UTC),
     )
     assert node.model_dump(mode="json")["is_principal"] is True
+
+
+async def _seed_generation(
+    session: object, *, task_id: uuid.UUID, root: str, seq_base: int, when: datetime
+) -> None:
+    """One mandate minting: a root and two children, all sharing `root` as block 0."""
+    for offset, (agent, depth, chain) in enumerate(
+        [
+            ("agt-depth-0", 0, [root]),
+            ("agt-doc-reader", 1, [root, f"{root}-reader"]),
+            ("agt-payer", 1, [root, f"{root}-payer"]),
+        ]
+    ):
+        seq = seq_base + offset
+        session.add(  # type: ignore[attr-defined]
+            AuditRecordRow(
+                seq=seq,
+                decision_id=uuid.uuid4(),
+                record={
+                    "task_id": str(task_id),
+                    "agent_id": agent,
+                    "depth": depth,
+                    "principal_id": "kc:alice",
+                    "token_chain_ids": chain,
+                    "scope": "invoice:read",
+                    "outcome": "allow",
+                    "reason_code": "OK",
+                },
+                # `ck_audit_records_genesis_only_seq_one`: only seq 1 may have no predecessor.
+                prev_hash=None if seq == 1 else f"{seq - 1:064d}",
+                record_hash=f"{seq:064d}",
+                created_at=when,
+            )
+        )
+
+
+async def test_re_minting_a_mandate_does_not_duplicate_the_tree(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """Six seed runs rendered six copies of all six agents on the demo stack.
+
+    The audit chain is append-only, so every superseded chain stays queryable forever; the
+    tree is a view of what is current and must not accumulate them.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        old = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
+        new = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+        await _seed_generation(session, task_id=task_id, root="root-old", seq_base=1, when=old)
+        await _seed_generation(session, task_id=task_id, root="root-new", seq_base=10, when=new)
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=new)
+        assert [n.agent_id for n in nodes] == ["agt-depth-0", "agt-doc-reader", "agt-payer"]
+        assert {n.block_ids[0] for n in nodes} == {"root-new"}
+
+
+async def test_superseded_generations_are_served_on_request(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """The old chains are hidden by default, never deleted — an audit store may not forget."""
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        old = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
+        new = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+        await _seed_generation(session, task_id=task_id, root="root-old", seq_base=1, when=old)
+        await _seed_generation(session, task_id=task_id, root="root-new", seq_base=10, when=new)
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=new, include_superseded=True)
+        assert len(nodes) == 6
+        assert {n.block_ids[0] for n in nodes} == {"root-old", "root-new"}
+
+
+async def test_the_newest_generation_wins_regardless_of_insertion_order(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """`last_seen`, not `seq`, decides which chain is current.
+
+    Inserting the superseded generation at the higher sequence numbers is what a replayed
+    or backfilled record looks like; picking by `seq` would show the wrong tree.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        old = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
+        new = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+        await _seed_generation(session, task_id=task_id, root="root-new", seq_base=1, when=new)
+        await _seed_generation(session, task_id=task_id, root="root-old", seq_base=10, when=old)
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=new)
+        assert {n.block_ids[0] for n in nodes} == {"root-new"}

@@ -51,7 +51,7 @@ Where things listen on the host:
 |---|---|---|
 | Control plane + console | http://localhost:8000 | Every screen, and the `/v1` API |
 | PEP | http://localhost:8082 | The enforcement proxy — `/proxy/...` |
-| Keycloak | http://localhost:8085 | OIDC, for approver login |
+| Keycloak | http://localhost:8085 | OIDC. Runs, but the console is **not** wired to it — see §10 |
 | Postgres | localhost:5433 | `agentiam` / `agentiam` |
 | Redis | localhost:6379 | Revocation push channel |
 
@@ -212,6 +212,62 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN_SUBCONTRACTOR" \
 `decision_id` is the handle for everything else: it appears on `/decisions`, it is what an
 escalation is opened against, and it is in the audit chain.
 
+### The organization's policy refusing a perfectly valid token
+
+Worth showing, because it is the one refusal that has nothing to do with the token's own
+authority. The **root** token — the widest one in the demo, with the whole mandate behind it —
+cannot pay at all:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN_ROOT" \
+  -H 'Content-Type: application/json' \
+  -d '{"amount": "400000.0000", "recipient": {"account_id": "acct_9001"}}' \
+  http://localhost:8082/proxy/payments
+```
+
+```json
+{"reason_code": "POLICY_DENIED", "detail": "denied by policy statement policy5", ...}
+```
+
+৳400,000 is inside the mandate and inside Cedar's own `amount <= 500000` permit, and the root
+is at depth 0, so no ceiling and no depth rule is doing this. `policy5` is
+`forbid(...) when { resource.sensitivity == "critical" && principal.role != "senior" }`:
+`payment_api` is `critical` in the signed catalogue, and a root token carries no attenuation
+block, so it asserts no role at all. **Having a valid token is not the same as the
+organization currently allowing the action** — which is the whole argument for the second
+layer, in one call.
+
+Push the same token to ৳900,000 and the refusal changes to `429 BUDGET_EXHAUSTED_MANDATE`,
+naming *block 0 of the token*: the mandate's own ceiling is evaluated before policy is ever
+consulted, so the two layers are visibly distinct rather than interchangeable.
+
+### Revoking, and the credential it needs
+
+Revocation is an *operator* action on the control plane, not an agent action on the PEP, and
+it authenticates differently from everything above: no biscuit, no `revoked_by` field. Present
+either a console session or the operator token.
+
+```bash
+OPERATOR_TOKEN=dev-change-me-operator-token   # AGENTIAM_CONTROLPLANE_OPERATOR_TOKENS
+TASK=d0d0d0d0-0000-4000-8000-000000000002
+ROOT_BLOCK=$(curl -s http://localhost:8000/v1/tree/$TASK \
+  | python -c "import json,sys; print(json.load(sys.stdin)['nodes'][0]['block_ids'][0])")
+
+curl -s -X POST -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"block_id\": \"$ROOT_BLOCK\", \"scope\": \"token\", \"reason\": \"demo\",
+       \"expires_at\": \"2030-01-01T00:00:00Z\"}" \
+  http://localhost:8000/v1/revocations
+```
+
+`201`, and within NFR-4's two seconds every agent in the subtree answers `401
+ANCESTOR_REVOKED`. Drop the header and it is `401` — the same call that used to be `201`
+purely because the body said so. Recovery is a re-seed; fresh block ids are named by no
+revocation.
+
+The default above is a known dev value, exactly like the session key beside it. Set a real
+secret for anything reachable beyond localhost.
+
 ### Every route the PEP maps
 
 | Method | Path | Scope | Tool | Notes |
@@ -271,9 +327,9 @@ looks empty, check the API under it before suspecting the page.
 | `/` | Overview and current posture | — |
 | `/decisions` | Every call, newest first, with its reason code | `GET /v1/decisions` |
 | `/budgets` | The pool: total, committed, leased | `GET /v1/budgets/dashboard` |
-| `/identity-tree?task_id=<task>` | The delegation tree, one node per agent | `GET /v1/tree/{task_id}` |
+| `/identity-tree?task_id=<task>` | The delegation tree, one node per agent, current minting only | `GET /v1/tree/{task_id}` |
 | `/audit` | The hash-chained ledger | `POST /v1/audit/verify`, `GET /v1/audit/search` |
-| `/escalations` | Pending requests, with approve/deny | `GET /v1/escalations` |
+| `/escalations` | Pending requests. The approve/deny buttons need a login this stack does not wire — §10 | `GET /v1/escalations` |
 | `/policy` | Cedar authoring, compile and activate | `POST /policy/compile`, `/test`, `/activate` |
 
 The task id is fixed for the demo and printed by the seed script:
@@ -362,8 +418,9 @@ consistent about a number that had stopped describing reality (ADR-049 is the st
 | A payment is `429 LEASE_UNAVAILABLE` | The PEP holds no usable budget lease | Should not happen: the pool renews on a timer (ADR-070). If it does, the ledger was unreachable — check `postgres`. It self-heals on the next sweep, within `ttl/4` |
 | Every agent is `401 ANCESTOR_REVOKED` | Something revoked the root authority block, so the whole subtree cascades | Re-seed. Fresh tokens carry fresh block ids that no revocation names |
 | A revocation you set does not stop applying | Working as specified. `expires_at` is *the original token's* expiry, kept so the row can be pruned — not a lease on the revocation (spec 07 §8). Honouring it would silently un-revoke a token | Re-seed |
-| A revocation seems to do nothing | You revoked a stale generation's block id. The tree accumulates a node per seed run | Take the block id from the node with the newest `last_seen` |
-| The identity tree has duplicate `agt-depth-0` nodes | Re-seeding in place; the audit chain is append-only, so old generations remain (TODO item 34) | For a pristine tree, start from a clean volume — §9 |
+| A revocation seems to do nothing | You revoked a stale generation's block id — most likely one read off `?generations=all`, or copied from before a re-seed | Take the block id from the plain `/v1/tree/{task}`, which serves the current minting only |
+| Revoking answers `401` | No credential. `revoked_by` in the body is not one — the acting identity comes from a session or an operator token | Send `Authorization: Bearer $OPERATOR_TOKEN` — §5 |
+| The identity tree looks short of agents | It shows the **current** minting only. Re-seeding mints a fresh chain, and the tree follows it | Add `?generations=all` to see every superseded chain the audit record still holds |
 | Beat 5's NL compiler shows an error | Ollama is not running. It is opt-in via a compose profile | Expected. The page degrades cleanly: `Ollama network error: All connection attempts failed`, no hang, no 500. `DEMO.md`'s F-2 drill scripts this |
 | The stack froze and resumed | The host machine slept. Every container stops together | Nothing to do; the lease renews within `ttl/4` of resume. Re-seed if you were asleep more than 8 h |
 | A page is blank but its API returns data | The console is client-rendered | Check the browser console; the API is fine |
@@ -386,8 +443,7 @@ variable, because the first reader of it is a container log.
 make demo-down          # stop, keep the volumes (and so the mandate, tokens and audit chain)
 ```
 
-For a genuinely clean slate — a fresh root keypair, a fresh bundle, an empty audit chain and
-an identity tree with no ghost nodes:
+For a genuinely clean slate — a fresh root keypair, a fresh bundle and an empty audit chain:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v
@@ -408,5 +464,15 @@ Stated so a judge asking finds an answer rather than a gap (`STATUS.md` §3 has 
   configuration (gap 28); `budgets.mandate_id` has no foreign key (gap 7).
 - **Drift detection needs Ollama**, and is off unless you enable the profile. `None` is a
   legitimate configuration, not a degraded one (spec 06 §2.1).
-- **No demo beat shows the role forbid firing.** It is enforced and corpus-tested; every agent
-  that can reach `payment_api` is one the organization made senior (TODO item 30).
+- **OIDC login is not wired, so nobody can approve or deny an escalation on this stack.**
+  Keycloak runs and is healthy, but the console has no `AGENTIAM_CONTROLPLANE_OIDC_*`
+  configured, `/auth/login` is therefore not mounted (404), and `/readyz` reports
+  `auth: false` — derived from the wiring, like the PEP's `enforcing`. Escalations can be
+  opened, listed and left to expire, which is the honest demo; approve/deny answers
+  `401 login required` until you set the three OIDC variables. **Do not script a live human
+  approval against this stack.** Revocation is unaffected: it takes an operator token, for
+  exactly the reason that incident response cannot depend on a browser login.
+- **No demo beat shows the role forbid firing** *in the scripted thirteen*. It is enforced,
+  corpus-tested, and reachable by hand — `root` paying ৳400,000 answers
+  `403 POLICY_DENIED / policy5`, because `payment_api` is `critical` and the root token
+  carries no role, let alone `senior` (TODO item 30). §5 has the call.

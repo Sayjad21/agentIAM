@@ -18,13 +18,51 @@ ADR-046.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Final
 
 from biscuit_auth import Algorithm, PrivateKey
 
 #: Prefix for every environment variable this reads.
 ENV_PREFIX: Final = "AGENTIAM_CONTROLPLANE_"
+
+
+def _parse_operator_tokens(raw: str, *, approvers: frozenset[str]) -> dict[str, str]:
+    """Parse `kc:<sub>=<secret>,...` into `{secret: principal}`.
+
+    Keyed on the secret because that is what the lookup has: the caller presents a bearer
+    credential and the route needs the identity it stands for. Deriving the identity from
+    the credential — rather than reading it off the request — is the whole point.
+
+    Raises:
+        ValueError: an entry is malformed, names an id outside `approvers` (a token that
+            could never authorize anything, so almost certainly a typo), or reuses a secret
+            already bound to a different id (which would make the acting identity depend on
+            dict ordering).
+    """
+    tokens: dict[str, str] = {}
+    for entry in (e.strip() for e in raw.split(",")):
+        if not entry:
+            continue
+        principal, separator, secret = entry.partition("=")
+        principal, secret = principal.strip(), secret.strip()
+        if not separator or not principal or not secret:
+            raise ValueError(
+                f"{ENV_PREFIX}OPERATOR_TOKENS entries must be '<principal>=<secret>', got {entry!r}"
+            )
+        if principal not in approvers:
+            raise ValueError(
+                f"{ENV_PREFIX}OPERATOR_TOKENS names {principal!r}, which is not in "
+                f"{ENV_PREFIX}APPROVERS"
+            )
+        if secret in tokens and tokens[secret] != principal:
+            raise ValueError(
+                f"{ENV_PREFIX}OPERATOR_TOKENS reuses one secret for {tokens[secret]!r} "
+                f"and {principal!r}"
+            )
+        tokens[secret] = principal
+    return tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +80,16 @@ class ControlPlaneSettings:
     #: agent's direct use on this one task, not for building a new chain from (`PLAN.md`
     #: never fixes a number here, so this is the ticket's own least-privilege choice).
     elevation_max_depth: int = 1
+    #: Shared secret -> the `kc:<sub>` it authenticates, for callers that revoke without a
+    #: browser session (incident response, scripts, the demo stack — which deliberately
+    #: leaves OIDC unwired). Presented as `Authorization: Bearer <secret>`.
+    #:
+    #: This exists because ADR-046 removed "the caller names itself in the request body"
+    #: from approve/deny and the revoke route kept it, so `revoked_by` was an unverified
+    #: claim: any unauthenticated caller reaching the control plane could revoke the root
+    #: block and take every agent down. A secret the caller must possess is evidence; a
+    #: field naming yourself is not. Empty means only a session can revoke.
+    operator_tokens: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> ControlPlaneSettings:
@@ -85,6 +133,9 @@ class ControlPlaneSettings:
             root_private_key=root_private_key,
             approvers=approvers,
             session_secret_key=session_secret_key,
+            operator_tokens=_parse_operator_tokens(
+                os.environ.get(f"{ENV_PREFIX}OPERATOR_TOKENS", ""), approvers=approvers
+            ),
         )
 
 
