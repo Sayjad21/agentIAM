@@ -66,13 +66,19 @@
 </table>
 
 <h3>Corpus Evaluation (T-026)</h3>
-{% if summary.failures == 0 %}
+{# `summary.failures` holds the failing PolicyTestResults, not a count — `app.py` reads it
+   as `len(summary.failures)` and iterates `r.case.name` over it. Comparing it to 0 was
+   always false, so this rendered the error branch even on a clean 51/51, and printing it
+   dumped the whole tuple's Python repr into the page. Names are capped at five, matching
+   what `/policy/activate` puts in its 409. #}
+{% if summary.failures | length == 0 %}
 <div class="alert success">
     All {{ summary.total }} corpus tests passed against the generated policy.
 </div>
 {% else %}
 <div class="alert error">
-    {{ summary.failures }} / {{ summary.total }} corpus tests failed against the generated policy!
+    {{ summary.failures | length }} / {{ summary.total }} corpus tests failed against the
+    generated policy — {{ summary.failures[:5] | map(attribute='case.name') | join(', ') }}{% if summary.failures | length > 5 %} (and {{ summary.failures | length - 5 }} more){% endif %}.
 </div>
 {% endif %}
 

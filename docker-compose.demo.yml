@@ -106,11 +106,28 @@ services:
       AGENTIAM_CONTROLPLANE_REDIS_URL: redis://redis:6379/0
       AGENTIAM_CONTROLPLANE_APPROVERS: ${AGENTIAM_CONTROLPLANE_APPROVERS:-kc:11111111-1111-1111-1111-111111111111,kc:22222222-2222-2222-2222-222222222222}
       AGENTIAM_CONTROLPLANE_SESSION_SECRET_KEY: ${AGENTIAM_CONTROLPLANE_SESSION_SECRET_KEY:-dev-change-me-session-secret}
+      # Authenticates `POST /v1/revocations` as the named approver, presented as
+      # `Authorization: Bearer <secret>`. Revocation is incident response and has to work
+      # from a script, so it cannot depend on the browser login that the next comment
+      # explains is unwired here. The value below is a known dev default, exactly like the
+      # session key above: set a real secret for anything reachable beyond localhost.
+      AGENTIAM_CONTROLPLANE_OPERATOR_TOKENS: ${AGENTIAM_CONTROLPLANE_OPERATOR_TOKENS:-kc:11111111-1111-1111-1111-111111111111=dev-change-me-operator-token}
+      # The NL->Cedar compiler's backend, forwarded from the host `.env` that `llm.py`'s
+      # `load_dotenv()` already reads outside Docker. Without these three the container
+      # cannot see the key, `client_from_env()` falls through its whole selection chain to
+      # the local Ollama fallback, and `POST /policy/compile` answers "Ollama network
+      # error" on a machine where Gemini works perfectly from the shell — measured, and
+      # mistaken for the documented opt-in behaviour until someone asked why.
+      # Empty is still a legitimate configuration: the chain then ends at Ollama on purpose.
+      AGENTIAM_LLM_BACKEND: ${AGENTIAM_LLM_BACKEND:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       # OIDC is deliberately not wired here: it needs the console's redirect URI reachable
       # from a browser on the host, which depends on how the demo is being viewed. Set
       # AGENTIAM_CONTROLPLANE_OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET to enable login; without
-      # them /readyz reports auth:false and the escalation queue still works via a
-      # hand-signed session cookie, same as every integration test does.
+      # them /readyz reports auth:false, the console's approve/deny buttons cannot be used,
+      # and the escalation queue is reachable only via a hand-signed session cookie, which
+      # is what every integration test does.
     command: >
       sh -c "export AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY=$$(cat /secrets/root_private_key.hex) &&
              uvicorn agentiam_controlplane.app:create_app_from_env --factory --host 0.0.0.0 --port 8000"

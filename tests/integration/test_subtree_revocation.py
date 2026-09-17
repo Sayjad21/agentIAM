@@ -52,6 +52,12 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 
+#: Authenticates the revoke calls below as `kc:manager`. Since ADR-046 was extended to
+#: `POST /v1/revocations`, the acting identity comes from this credential and a
+#: `revoked_by` body field is ignored, so the header is not optional.
+_OPERATOR_TOKEN = "test-operator-token"  # noqa: S105 — throwaway test credential
+_OPERATOR_AUTH = {"Authorization": f"Bearer {_OPERATOR_TOKEN}"}
+
 _KEY = generate_keypair()
 _KEY_SET = RootKeySet([_KEY.public_key])
 _OPERATION = "invoice:read"
@@ -131,9 +137,9 @@ async def _revoke(client: httpx.AsyncClient, block_id: str) -> None:
             "block_id": block_id,
             "scope": "subtree",
             "reason": "T-040 subtree revocation e2e",
-            "revoked_by": "kc:manager",
             "expires_at": EXPIRES_AT.isoformat(),
         },
+        headers=_OPERATOR_AUTH,
     )
     assert response.status_code == 201
 
@@ -179,6 +185,7 @@ class _Harness:
             root_private_key=_KEY.private_key,
             approvers=frozenset({"kc:manager"}),
             session_secret_key="test-session-secret",  # noqa: S106 — throwaway test signing key
+            operator_tokens={_OPERATOR_TOKEN: "kc:manager"},
         )
         app = create_app(
             session_factory=factory,

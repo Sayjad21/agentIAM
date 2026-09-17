@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, computed_field
@@ -25,6 +25,9 @@ from agentiam_controlplane.db.models import (
 from agentiam_core.escalation import EscalationState
 
 logger = logging.getLogger(__name__)
+
+#: Older than any `created_at`, so the first generation seen always wins the comparison.
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 
 
 class TreeBudget(BaseModel):
@@ -88,7 +91,11 @@ class TreeDiff(BaseModel):
 
 
 async def build_tree(
-    session: AsyncSession, *, task_id: uuid.UUID | str, now: datetime
+    session: AsyncSession,
+    *,
+    task_id: uuid.UUID | str,
+    now: datetime,
+    include_superseded: bool = False,
 ) -> list[TreeNode]:
     """Reconstruct the identity tree for a task from its audit records.
 
@@ -99,7 +106,13 @@ async def build_tree(
     Args:
         session: An active database session.
         task_id: The task to visualize.
-        now: Current time, for any state filtering (though this uses the DB state directly).
+        now: Current time. Decides which escalations still count as pending — a stored
+            `state` of `'pending'` outlives its own TTL, so the column alone is not the
+            answer.
+        include_superseded: Return every generation the audit chain remembers, not just the
+            current one. Off by default — see `_current_generation` for why re-minting a
+            mandate would otherwise leave the console rendering one copy of the tree per
+            seed run. Nothing is deleted either way; this only chooses what is served.
 
     Returns:
         A list of `TreeNode` objects sorted by `(depth, agent_id)`.
@@ -186,11 +199,21 @@ async def build_tree(
             revoked_blocks[r_row.block_id] = r_row.reason
 
     # 4. Escalations
+    #
+    # `expires_at > now` is not optional decoration: nothing sweeps the stored `state`
+    # column when a TTL runs out, so an expired request is still literally `'pending'` in
+    # the table. `escalations.list_by_state` spells out the rule this follows — "a queue
+    # that still showed an expired request as actionable would contradict" TTL expiry
+    # auto-denying — and matching on the column alone quietly opted out of it. Measured on
+    # the demo stack: two agents wore an `ESCALATING` badge from requests that had expired
+    # four hours and nine days earlier, while `/v1/escalations` correctly reported an empty
+    # queue. Two console screens, contradicting each other, on the flagship visual.
     pending_escalations: set[str] = set()
     if agent_ids:
         esc_stmt = select(EscalationRow.agent_id).where(
             EscalationRow.task_id == uuid.UUID(task_id_str),
             EscalationRow.state == EscalationState.PENDING.value,
+            EscalationRow.expires_at > now,
             EscalationRow.agent_id.in_(agent_ids),
         )
         esc_result = await session.execute(esc_stmt)
@@ -249,9 +272,41 @@ async def build_tree(
             )
         )
 
-    # 6. Sort by (depth, agent_id)
+    # 6. Drop superseded generations unless the caller asked for them.
+    if not include_superseded:
+        nodes = _current_generation(nodes)
+
+    # 7. Sort by (depth, agent_id)
     nodes.sort(key=lambda n: (n.depth, n.agent_id))
     return nodes
+
+
+def _current_generation(nodes: list[TreeNode]) -> list[TreeNode]:
+    """Keep only the nodes descending from the most recently active authority block.
+
+    Re-minting a mandate — every `seed_demo.py` run does — issues a fresh root authority
+    block and a fresh chain under it, while the audit chain these nodes are reconstructed
+    from is append-only. Every generation therefore stays visible forever, and the console
+    rendered six copies of all six agents after six seed runs (measured on the demo stack).
+
+    `block_ids[0]` is the authority block, shared by every agent in one chain and distinct
+    across mintings, so it is the generation key. Grouping on the *whole* chain is what
+    keeps genuine siblings apart (`build_tree_diff` documents why) and is left alone.
+
+    Nodes carrying no chain cannot be placed in a generation and are kept rather than
+    hidden: this filters what is superseded, and unclassifiable is not superseded.
+    """
+    latest: dict[str, datetime] = {}
+    for node in nodes:
+        if not node.block_ids:
+            continue
+        root = node.block_ids[0]
+        if node.last_seen > latest.get(root, _EPOCH):
+            latest[root] = node.last_seen
+    if not latest:
+        return nodes
+    current = max(latest, key=lambda root: latest[root])
+    return [n for n in nodes if not n.block_ids or n.block_ids[0] == current]
 
 
 def build_tree_diff(old: list[TreeNode], new: list[TreeNode]) -> TreeDiff:

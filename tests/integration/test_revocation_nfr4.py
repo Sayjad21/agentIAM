@@ -32,12 +32,19 @@ from agentiam_pep.revocation import RedisRevocationSet
 
 pytestmark = pytest.mark.integration
 
+#: Authenticates the revoke calls below as `kc:manager`. Since ADR-046 was extended to
+#: `POST /v1/revocations`, the acting identity comes from this credential and a
+#: `revoked_by` body field is ignored, so the header is not optional.
+_OPERATOR_TOKEN = "test-operator-token"  # noqa: S105 — throwaway test credential
+_OPERATOR_AUTH = {"Authorization": f"Bearer {_OPERATOR_TOKEN}"}
+
 _NOW = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
 _KEY_PAIR = generate_keypair()
 _SETTINGS = ControlPlaneSettings(
     root_private_key=_KEY_PAIR.private_key,
     approvers=frozenset({"kc:manager"}),
     session_secret_key="test-session-secret",  # noqa: S106 — throwaway test signing key
+    operator_tokens={_OPERATOR_TOKEN: "kc:manager"},
 )
 
 #: 20 revokes x 3 oracles = 60 real samples. `PLAN.md`'s own measurement method for NFR-4
@@ -53,9 +60,9 @@ async def _revoke(client: httpx.AsyncClient, block_id: str) -> None:
             "block_id": block_id,
             "scope": "token",
             "reason": "T-039 NFR-4 measurement",
-            "revoked_by": "kc:manager",
             "expires_at": (_NOW + timedelta(hours=1)).isoformat(),
         },
+        headers=_OPERATOR_AUTH,
     )
     assert response.status_code == 201
 

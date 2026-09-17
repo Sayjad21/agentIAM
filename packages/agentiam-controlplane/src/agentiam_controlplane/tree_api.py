@@ -13,7 +13,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,11 +73,21 @@ def build_router(
     @router.get("/{task_id}", response_model=TreeSnapshot)
     async def get_tree(
         task_id: uuid.UUID = Path(...),  # noqa: B008
+        generations: str = Query("current", pattern="^(current|all)$"),
         session: AsyncSession = Depends(get_session),  # noqa: B008
     ) -> TreeSnapshot:
-        """Fetch the full agent delegation tree for a task."""
+        """Fetch the agent delegation tree for a task.
+
+        `generations=all` also returns chains superseded by a later minting of the same
+        mandate, which the append-only audit chain still remembers.
+        """
         current_time = _now()
-        nodes = await build_tree(session, task_id=task_id, now=current_time)
+        nodes = await build_tree(
+            session,
+            task_id=task_id,
+            now=current_time,
+            include_superseded=generations == "all",
+        )
         return TreeSnapshot(task_id=task_id, generated_at=current_time, nodes=nodes)
 
     @router.get("/{task_id}/blocks/{agent_id}", response_model=BlockSourceResponse)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -169,6 +170,31 @@ def test_compile_valid_policy(mock_compile: MagicMock) -> None:
     assert "Success:</strong> Policy compiled successfully." in response.text
     assert "Auto-Generated Tests" in response.text
     assert "Corpus Evaluation" in response.text
+
+
+@patch("agentiam_controlplane.app.compile_nl_to_policy")
+def test_the_corpus_summary_reports_a_count_not_a_python_repr(mock_compile: MagicMock) -> None:
+    """`summary.failures` is the failing results, not how many there were.
+
+    The template compared it to `0` and printed it directly. A tuple never equals `0`, so
+    the error branch rendered even on a clean run, and printing it dumped every
+    `PolicyTestResult(case=PolicyTestCase(...))` into the page — thousands of characters of
+    Python repr in a red box, on the screen a judge watches their own sentence compile on.
+    """
+    from agentiam_controlplane.nl_compiler.compiler import CompilerOutput
+
+    # Narrow enough to fail most of the corpus, so the failure branch is what renders.
+    policy = 'permit(principal, action == Action::"payment:initiate", resource);'
+    mock_compile.side_effect = AsyncMock(return_value=CompilerOutput(cedar_source=policy, tests=[]))
+
+    response = client.post("/policy/compile", data={"nl_source": "Anyone may pay"})
+
+    assert response.status_code == 200
+    assert "PolicyTestResult" not in response.text
+    assert "PolicyTestCase" not in response.text
+    # A count and the named cases, the same shape `/policy/activate`'s 409 uses.
+    assert re.search(r"\d+ / \d+ corpus tests failed", response.text)
+    assert "beat1_worker_reads_invoices" in response.text
 
 
 class TestLeaseReaper:

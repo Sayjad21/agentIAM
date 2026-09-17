@@ -113,8 +113,19 @@ revocation names.
 
 Two practical notes that cost time to learn:
 
-- **Only an authorized revoker may revoke.** An unrecognised caller gets
-  `403 'kc:probe' is not an authorized revoker`. The approver set is configuration.
+- **Only an authorized revoker may revoke, and the caller has to prove who it is.** Present
+  either a console session or `Authorization: Bearer <operator-token>`; the acting identity is
+  derived from that credential and `revoked_by` is not a request field at all. No credential is
+  `401`, a credential belonging to someone outside the approver set is
+  `403 '<id>' is not an authorized revoker`. The approver set and the operator tokens are both
+  configuration.
+
+  This route shipped taking `revoked_by` in the body and checking that string against the
+  approver list — ADR-041's pre-OIDC stopgap, which ADR-046 retired for escalation approve/deny
+  and did not come back for this one. An unauthenticated `POST` naming a real approver was
+  measured returning `201` on the demo stack, so anyone who could reach the control plane could
+  revoke the root block and cascade every agent to `ANCESTOR_REVOKED`. Same principle as file
+  14's: a body field naming yourself is a claim, a credential is evidence.
 - **Revocation targets a block id, so it applies to one token generation.** Re-seed a demo and
   the old generation's block ids still exist in the audit history; revoking one of those appears
   to do nothing. Take the block id from the most recently seen node.
