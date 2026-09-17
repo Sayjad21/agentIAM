@@ -4,6 +4,25 @@
 {% block page_title %}Budgets &amp; leases{% endblock %}
 {% block page_sub %}Spend against each mandate&#39;s pool, how much of it is out on lease, and whether the ledger&#39;s invariants still hold.{% endblock %}
 
+{% block head_extra %}
+<style>
+    /* The invariant, written out under each pool with its own numbers substituted in.
+       The bar above it is the same statement drawn; having both means a judge can check
+       the picture against the arithmetic without being asked to trust either. */
+    .equation {
+        margin-top: 0.7rem;
+        padding-top: 0.6rem;
+        border-top: 1px solid var(--line-soft);
+        font-family: var(--font-mono);
+        font-size: 0.74rem;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+    }
+    .equation b { color: var(--text-2); font-weight: 500; }
+    .equation .eq { color: var(--text-4); }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="invariant" id="banner">
     <span class="lamp"></span>
@@ -18,8 +37,14 @@
     <div class="stat"><div class="label">Lease utilization</div><div class="value" id="util">–</div></div>
 </div>
 
-<div id="pools-list"></div>
-<div class="empty" id="empty">No budget pools yet.</div>
+<section>
+    <div class="section-head">
+        <h2>Pools</h2>
+        <span class="aside">committed + leased + allocated + available = total</span>
+    </div>
+    <div id="pools-list"></div>
+    <div class="empty" id="empty">No budget pools yet.</div>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -42,6 +67,15 @@ function seg(cls, amount, total, title) {
     return d;
 }
 
+function legendKey(varName, text) {
+    const span = document.createElement("span");
+    const key = document.createElement("span");
+    key.className = "key";
+    key.style.background = varName;
+    span.append(key, document.createTextNode(text));
+    return span;
+}
+
 function renderPool(g) {
     const card = document.createElement("div");
     card.className = "pool";
@@ -58,6 +92,9 @@ function renderPool(g) {
     head.append(who, dim);
     card.appendChild(head);
 
+    // The four segments are drawn in the neutral ramp, never in the outcome colours: a
+    // red slice here would be read as "denied" by anyone who has just watched the
+    // decision feed, when it only ever meant "already spent".
     const bar = document.createElement("div");
     bar.className = "bar";
     for (const s of [
@@ -69,13 +106,26 @@ function renderPool(g) {
 
     const legend = document.createElement("div");
     legend.className = "legend";
-    legend.innerHTML =
-        '<span><span class="key" style="background:var(--danger)"></span>committed ' + fmt(g.committed) + '</span>'
-      + '<span><span class="key" style="background:var(--warning)"></span>leased ' + fmt(g.leased) + '</span>'
-      + '<span><span class="key" style="background:var(--accent)"></span>allocated ' + fmt(g.allocated) + '</span>'
-      + '<span><span class="key" style="background:rgba(255,255,255,.15)"></span>available ' + fmt(g.available) + '</span>'
-      + '<span>' + g.active_leases + ' active lease(s), ' + pct(g.lease_utilization) + ' of held spent</span>';
+    legend.append(
+        legendKey("var(--level-1)", "committed " + fmt(g.committed)),
+        legendKey("var(--level-2)", "leased " + fmt(g.leased)),
+        legendKey("var(--level-3)", "allocated " + fmt(g.allocated)),
+        legendKey("var(--level-track)", "available " + fmt(g.available)),
+    );
+    const leases = document.createElement("span");
+    leases.textContent = g.active_leases + " active lease(s), " + pct(g.lease_utilization) + " of held spent";
+    legend.appendChild(leases);
     card.appendChild(legend);
+
+    const eq = document.createElement("div");
+    eq.className = "equation";
+    eq.innerHTML =
+        "<b>" + fmt(g.committed) + "</b> <span class='eq'>+</span> <b>" + fmt(g.leased) + "</b>"
+      + " <span class='eq'>+</span> <b>" + fmt(g.allocated) + "</b>"
+      + " <span class='eq'>+</span> <b>" + fmt(g.available) + "</b>"
+      + " <span class='eq'>=</span> <b>" + fmt(g.total) + "</b>";
+    card.appendChild(eq);
+
     return card;
 }
 
@@ -104,17 +154,23 @@ async function refresh() {
     document.getElementById("checkmeta").textContent =
         data.budgets_checked + " budgets swept in " + data.check_duration_ms + " ms";
 
-    document.getElementById("pools").textContent = data.gauges.length;
-    const totalLeases = data.gauges.reduce((n, g) => n + g.active_leases, 0);
-    document.getElementById("leases").textContent = totalLeases;
-    document.getElementById("topups").textContent = data.topups_per_minute;
+    AgentIAM.tick(document.getElementById("pools"), data.gauges.length);
+    AgentIAM.tick(
+        document.getElementById("leases"),
+        data.gauges.reduce((n, g) => n + g.active_leases, 0));
+    AgentIAM.tick(document.getElementById("topups"), data.topups_per_minute);
 
     // Utilization across everything held, not the mean of per-pool ratios: a pool holding
     // 1 unit and one holding 10,000 must not count equally.
     const granted = data.gauges.reduce((n, g) => n + Number(g.lease_granted), 0);
     const settled = data.gauges.reduce((n, g) => n + Number(g.lease_settled), 0);
-    document.getElementById("util").textContent =
-        granted > 0 ? ((settled / granted) * 100).toFixed(1) + "%" : "–";
+    const util = document.getElementById("util");
+    if (granted > 0) {
+        util.textContent = ((settled / granted) * 100).toFixed(1) + "%";
+    } else {
+        util.textContent = "–";
+        util._tickValue = 0;
+    }
 
     const list = document.getElementById("pools-list");
     list.textContent = "";

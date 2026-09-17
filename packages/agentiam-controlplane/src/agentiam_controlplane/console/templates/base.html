@@ -23,12 +23,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# Without this the browser paints its own canvas — white — in the gap between one
+       document and the next, which is the flash you see on every tab switch no matter
+       what `body { background }` says. Declaring the scheme makes that canvas dark. #}
+    <meta name="color-scheme" content="dark">
     <title>{% block title %}Console{% endblock %} · AgentIAM</title>
     <link rel="stylesheet" href="/static/style.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%236366f1'/><text x='16' y='23' font-family='sans-serif' font-size='18' font-weight='bold' fill='white' text-anchor='middle'>A</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2318181b'/><rect width='32' height='32' rx='8' fill='none' stroke='white' stroke-opacity='0.14'/><text x='16' y='23' font-family='sans-serif' font-size='18' font-weight='bold' fill='white' text-anchor='middle'>A</text></svg>">
+    {# Shared, framework-free UI primitives (number ticker, record drawer, key/value
+       grid). Loaded for every page so a page script can assume `AgentIAM` exists; it is
+       a static file from this same origin, so there is no network dependency. #}
+    <script src="/static/ui.js"></script>
     {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body data-page="{{ active | default('') }}">
+{# The aurora every glass pane refracts. A real element rather than a `body` pseudo so
+   it can hold its own `view-transition-name`: that keeps it OUT of the page snapshot,
+   so on a tab switch the background cross-fades its hue in place instead of sliding
+   around with the content. #}
+<div class="ambient" aria-hidden="true"></div>
 <header class="topbar">
     <a class="brand" href="/"><span class="mark">AI</span><span>AgentIAM</span></a>
 
