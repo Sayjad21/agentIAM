@@ -2,7 +2,7 @@
 
 {% block title %}Live decisions{% endblock %}
 {% block page_title %}Live decisions{% endblock %}
-{% block page_sub %}Every authorization decision as it happens. A refusal names the caveat that caused it.{% endblock %}
+{% block page_sub %}Every authorization decision as it happens. A refusal names the caveat that caused it — click any row to open the full record.{% endblock %}
 
 {% block content %}
 <form class="filters" method="get" action="/decisions">
@@ -29,6 +29,7 @@
 <div class="status">
     <span class="dot" id="dot"></span><span id="state">connecting…</span>
     <span id="count"></span>
+    <span style="margin-left:auto">click a row to inspect · <span class="kbd">Esc</span> to close</span>
 </div>
 
 <div class="table-wrap">
@@ -43,6 +44,43 @@
     </table>
 </div>
 <div class="empty" id="empty">Waiting for the first decision…</div>
+
+{# The record inspector. A decision has ~16 fields and the table shows seven of them;
+   the rest are what an operator actually needs when a refusal is disputed, so they open
+   beside the feed rather than replacing it. #}
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="false" aria-label="Decision record">
+    <div class="drawer-head">
+        <span class="title">Decision</span>
+        <span id="d-outcome"></span>
+        <button type="button" class="close" aria-label="Close">&times;</button>
+    </div>
+    <div class="drawer-body">
+        <div class="drawer-section">
+            <h3>Why</h3>
+            <div id="d-why" class="small" style="color:var(--text-2); line-height:1.6"></div>
+        </div>
+        <div class="drawer-section">
+            <h3>Subject</h3>
+            <dl class="kv" id="d-subject"></dl>
+        </div>
+        <div class="drawer-section">
+            <h3>Request</h3>
+            <dl class="kv" id="d-request"></dl>
+        </div>
+        <div class="drawer-section">
+            <h3>Evaluation</h3>
+            <dl class="kv" id="d-eval"></dl>
+        </div>
+        <div class="drawer-section">
+            <h3>Record</h3>
+            <dl class="kv" id="d-record"></dl>
+            <div style="margin-top:0.9rem">
+                <a class="btn" id="d-trace" href="/audit">Trace in audit &rarr;</a>
+            </div>
+        </div>
+    </div>
+</aside>
 {% endblock %}
 
 {% block scripts %}
@@ -61,6 +99,10 @@ const state = document.getElementById("state");
 const count = document.getElementById("count");
 let total = 0;
 
+const inspector = AgentIAM.drawer(
+    document.getElementById("drawer"),
+    document.getElementById("drawer-backdrop"));
+
 // Newest on top, and capped: a long-running demo would otherwise grow the DOM until the
 // page stutters, which on stage reads as the product being slow.
 const MAX_ROWS = 200;
@@ -71,9 +113,67 @@ function cell(text) {
     return td;
 }
 
+function inspect(d, tr) {
+    for (const marked of document.querySelectorAll("tr.selected")) marked.classList.remove("selected");
+    if (tr) tr.classList.add("selected");
+
+    const head = document.getElementById("d-outcome");
+    head.textContent = "";
+    head.appendChild(AgentIAM.pill(d.outcome));
+
+    // The caveat tag reads the same here as it does in the feed and in the custody
+    // chain — one refusal, one sentence, three places.
+    const why = document.getElementById("d-why");
+    why.textContent = "";
+    if (d.failing_caveat_kind) {
+        const tag = document.createElement("span");
+        tag.className = "caveat";
+        tag.textContent = d.failing_caveat_kind
+            + (d.failing_caveat_block !== null && d.failing_caveat_block !== undefined
+                ? " @block " + d.failing_caveat_block : "");
+        why.appendChild(tag);
+    }
+    why.appendChild(document.createTextNode(d.explanation || d.reason_code || "—"));
+
+    AgentIAM.kv(document.getElementById("d-subject"), [
+        ["Principal", d.principal_id],
+        ["Agent", d.agent_id],
+        ["Delegation depth", d.depth],
+    ]);
+    AgentIAM.kv(document.getElementById("d-request"), [
+        ["Scope", d.scope],
+        ["Tool", d.tool_id],
+        ["Drift score", d.drift_score],
+    ]);
+    AgentIAM.kv(document.getElementById("d-eval"), [
+        ["Outcome", d.outcome],
+        ["Reason code", d.reason_code],
+        ["Latency", d.latency_us !== undefined && d.latency_us !== null
+            ? (d.latency_us / 1000).toFixed(3) + " ms  (" + d.latency_us + " µs)" : null],
+        ["Caveat kind", d.failing_caveat_kind],
+        ["Caveat block", d.failing_caveat_block],
+        ["Timestamp", (d.timestamp || "").replace("T", " ")],
+    ]);
+    AgentIAM.kv(document.getElementById("d-record"), [
+        ["Decision id", d.decision_id],
+        ["Task id", d.task_id],
+        ["Chain seq", d.seq],
+    ]);
+
+    // The audit explorer prefills itself from the query string, so this hop lands on the
+    // custody chain for the same task rather than on an empty search form.
+    const trace = document.getElementById("d-trace");
+    trace.href = d.task_id
+        ? "/audit?task_id=" + encodeURIComponent(d.task_id)
+        : (d.decision_id ? "/audit?decision_id=" + encodeURIComponent(d.decision_id) : "/audit");
+
+    inspector.open();
+}
+
 function render(d, isNew) {
     const tr = document.createElement("tr");
-    if (isNew) tr.className = "new";
+    tr.className = "hit" + (isNew ? " new" : "");
+    tr.title = "Open the full decision record";
 
     const time = document.createElement("td");
     time.className = "mono";
@@ -81,10 +181,7 @@ function render(d, isNew) {
     tr.appendChild(time);
 
     const out = document.createElement("td");
-    const pill = document.createElement("span");
-    pill.className = "pill " + (d.outcome || "");
-    pill.textContent = d.outcome || "?";
-    out.appendChild(pill);
+    out.appendChild(AgentIAM.pill(d.outcome));
     tr.appendChild(out);
 
     tr.appendChild(cell(d.agent_id));
@@ -108,6 +205,8 @@ function render(d, isNew) {
     const lat = cell(d.latency_us ? (d.latency_us / 1000).toFixed(2) + " ms" : "");
     lat.className = "mono";
     tr.appendChild(lat);
+
+    tr.addEventListener("click", () => inspect(d, tr));
 
     rows.prepend(tr);
     while (rows.children.length > MAX_ROWS) rows.lastChild.remove();

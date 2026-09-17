@@ -2,7 +2,7 @@
 
 {% block title %}Audit explorer{% endblock %}
 {% block page_title %}Audit explorer{% endblock %}
-{% block page_sub %}Search the chain of custody. Click a record to see the full principal&rarr;caveat narrative for its task.{% endblock %}
+{% block page_sub %}Search the chain of custody. Click a record to open it, with the full principal&rarr;caveat narrative for its task.{% endblock %}
 
 {% block content %}
 <form class="filters" id="search-form">
@@ -54,13 +54,11 @@
 <div class="empty" id="empty">Search above, or leave every field blank and submit to browse everything.</div>
 <div class="pager" id="pager"></div>
 
-<section id="custody-section" style="display:none">
-    <h2>Custody chain — task <span class="mono" id="custody-task"></span></h2>
-    <div class="chain" id="custody-chain"></div>
-</section>
-
 <section>
-    <h2>Chain integrity</h2>
+    <div class="section-head">
+        <h2>Chain integrity</h2>
+        <span class="aside">hash-chained, verified server-side</span>
+    </div>
     <button class="secondary" id="verify-btn" type="button">Verify chain</button>
     <div class="invariant" id="verify-banner" style="display:none; margin-top:1rem;">
         <span class="lamp"></span>
@@ -68,6 +66,32 @@
         <span class="meta" id="verify-meta"></span>
     </div>
 </section>
+
+{# One drawer carrying both halves of the answer to "who authorized this?": the record
+   itself, and the custody chain of the task it belongs to. They were two separate places
+   before, which meant scrolling away from the hit to read its own provenance. #}
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="false" aria-label="Audit record">
+    <div class="drawer-head">
+        <span class="title">Record</span>
+        <span id="d-outcome"></span>
+        <button type="button" class="close" aria-label="Close">&times;</button>
+    </div>
+    <div class="drawer-body">
+        <div class="drawer-section">
+            <h3>Why</h3>
+            <div id="d-why" class="small" style="color:var(--text-2); line-height:1.6"></div>
+        </div>
+        <div class="drawer-section">
+            <h3>Record</h3>
+            <dl class="kv" id="d-record"></dl>
+        </div>
+        <div class="drawer-section">
+            <h3>Custody chain — task <span class="mono" id="custody-task"></span></h3>
+            <div class="chain" id="custody-chain"></div>
+        </div>
+    </div>
+</aside>
 {% endblock %}
 
 {% block scripts %}
@@ -77,35 +101,77 @@ const PAGE_SIZE = 25;
 let offset = 0;
 let lastParams = new URLSearchParams();
 
+const inspector = AgentIAM.drawer(
+    document.getElementById("drawer"),
+    document.getElementById("drawer-backdrop"));
+
 function cell(text) {
     const td = document.createElement("td");
     td.textContent = text ?? "";
     return td;
 }
 
+function inspect(d, tr) {
+    for (const marked of document.querySelectorAll("tr.selected")) marked.classList.remove("selected");
+    if (tr) tr.classList.add("selected");
+
+    const head = document.getElementById("d-outcome");
+    head.textContent = "";
+    head.appendChild(AgentIAM.pill(d.outcome));
+
+    const why = document.getElementById("d-why");
+    why.textContent = "";
+    if (d.failing_caveat_kind) {
+        const tag = document.createElement("span");
+        tag.className = "caveat";
+        tag.textContent = d.failing_caveat_kind
+            + (d.failing_caveat_block !== null && d.failing_caveat_block !== undefined
+                ? " @block " + d.failing_caveat_block : "");
+        why.appendChild(tag);
+    }
+    why.appendChild(document.createTextNode(d.explanation || d.reason_code || "—"));
+
+    AgentIAM.kv(document.getElementById("d-record"), [
+        ["Principal", d.principal_id],
+        ["Agent", d.agent_id],
+        ["Delegation depth", d.depth],
+        ["Scope", d.scope],
+        ["Tool", d.tool_id],
+        ["Reason code", d.reason_code],
+        ["Latency", d.latency_us !== undefined && d.latency_us !== null
+            ? (d.latency_us / 1000).toFixed(3) + " ms" : null],
+        ["Timestamp", (d.timestamp || "").replace("T", " ")],
+        ["Decision id", d.decision_id],
+        ["Task id", d.task_id],
+        ["Chain seq", d.seq],
+    ]);
+
+    loadCustody(d.task_id);
+    inspector.open();
+}
+
 function renderRow(d) {
     const tr = document.createElement("tr");
     tr.className = "hit";
-    tr.title = "Click for this task's custody chain";
+    tr.title = "Open this record and its task's custody chain";
 
     const time = cell((d.timestamp || "").replace("T", " ").slice(0, 19));
     time.className = "mono";
     tr.appendChild(time);
 
     const out = document.createElement("td");
-    const pill = document.createElement("span");
-    pill.className = "pill " + (d.outcome || "");
-    pill.textContent = d.outcome || "?";
-    out.appendChild(pill);
+    out.appendChild(AgentIAM.pill(d.outcome));
     tr.appendChild(out);
 
     tr.appendChild(cell(d.agent_id));
     tr.appendChild(cell(d.principal_id));
     const scope = cell(d.scope); scope.className = "mono"; tr.appendChild(scope);
     const tool = cell(d.tool_id); tool.className = "mono"; tr.appendChild(tool);
-    tr.appendChild(cell(d.explanation));
+    const why = cell(d.explanation);
+    why.className = "why" + (d.outcome === "allow" ? "" : " refused");
+    tr.appendChild(why);
 
-    tr.addEventListener("click", () => loadCustody(d.task_id));
+    tr.addEventListener("click", () => inspect(d, tr));
     return tr;
 }
 
@@ -153,13 +219,22 @@ document.getElementById("search-form").addEventListener("submit", (e) => {
 });
 
 async function loadCustody(taskId) {
-    if (!taskId) return;
+    const chain = document.getElementById("custody-chain");
+    chain.textContent = "";
+    document.getElementById("custody-task").textContent = taskId || "—";
+
+    if (!taskId) {
+        const d = document.createElement("div");
+        d.className = "empty";
+        d.textContent = "This record carries no task id, so it has no chain to walk.";
+        chain.appendChild(d);
+        return;
+    }
+
     const resp = await fetch("/v1/audit/custody/" + encodeURIComponent(taskId));
     const data = await resp.json();
 
     document.getElementById("custody-task").textContent = data.task_id;
-    const chain = document.getElementById("custody-chain");
-    chain.textContent = "";
 
     if (!data.entries.length) {
         const d = document.createElement("div");
@@ -179,12 +254,14 @@ async function loadCustody(taskId) {
         who.textContent = entry.agent_id;
         const depth = document.createElement("span");
         depth.className = "depth";
-        depth.textContent = "depth " + entry.depth + " · " + entry.scope + " · " + entry.tool_id;
-        const pill = document.createElement("span");
-        pill.className = "pill " + (entry.outcome || "");
-        pill.textContent = entry.outcome || "?";
-        head.append(who, pill, depth);
+        depth.textContent = "depth " + entry.depth;
+        head.append(who, AgentIAM.pill(entry.outcome), depth);
         link.appendChild(head);
+
+        const what = document.createElement("div");
+        what.className = "dim mono";
+        what.textContent = entry.scope + " · " + entry.tool_id;
+        link.appendChild(what);
 
         const why = document.createElement("div");
         why.className = "why" + (entry.outcome === "allow" ? "" : " refused");
@@ -193,9 +270,6 @@ async function loadCustody(taskId) {
 
         chain.appendChild(link);
     }
-
-    document.getElementById("custody-section").style.display = "block";
-    document.getElementById("custody-section").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 document.getElementById("verify-btn").addEventListener("click", async () => {
@@ -224,7 +298,19 @@ document.getElementById("verify-btn").addEventListener("click", async () => {
     }
 });
 
-runSearch(new URLSearchParams(), 0);
+// Prefill from the query string so "trace in audit" on a live decision lands on that
+// task's records rather than on an empty form the operator has to retype into.
+const incoming = new URLSearchParams(location.search);
+const prefill = new URLSearchParams();
+for (const key of ["decision_id", "task_id", "agent_id", "principal_id", "scope", "outcome"]) {
+    const value = incoming.get(key);
+    if (value) {
+        const field = document.getElementById(key);
+        if (field) field.value = value;
+        prefill.set(key, value);
+    }
+}
+runSearch(prefill, 0);
 {% else %}
 document.getElementById("empty").textContent =
     "The control plane was started without a database, so there is nothing to search.";

@@ -17,13 +17,18 @@
         /* Fill what the top bar leaves, minus the page head. */
         height: calc(100vh - var(--nav-height) - 112px);
         min-height: 420px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--hairline);
         border-radius: var(--radius);
+        box-shadow: var(--specular);
         overflow: hidden;
+        /* The canvas is a glass pane too — the aurora runs behind the delegation graph,
+           with a dot grid etched into the surface so pan and zoom have a reference. */
+        -webkit-backdrop-filter: var(--blur-regular);
+        backdrop-filter: var(--blur-regular);
         background:
-            radial-gradient(circle at 1px 1px, rgba(255,255,255,0.045) 1px, transparent 0)
-            0 0 / 22px 22px,
-            var(--bg-surface);
+            radial-gradient(circle at 1px 1px, rgba(255,255,255,0.07) 1px, transparent 0)
+            0 0 / 26px 26px,
+            var(--mat-thin);
     }
 
     #tree-container { flex: 1 1 auto; min-width: 0; }
@@ -41,9 +46,13 @@
         max-width: 92%;
         padding: 1.25rem;
         overflow-y: auto;
-        background: var(--bg-elevated);
-        border-left: 1px solid var(--border);
-        box-shadow: var(--shadow);
+        /* Thick material, not thin: the panel sits over a live canvas, and caveats read
+           through a lightly-blurred tree are caveats nobody can check. */
+        background: rgba(20, 20, 26, 0.72);
+        -webkit-backdrop-filter: var(--blur-thick);
+        backdrop-filter: var(--blur-thick);
+        border-left: 1px solid var(--hairline);
+        box-shadow: var(--specular-raised);
         transform: translateX(100%);
         transition: transform 0.24s ease;
     }
@@ -60,7 +69,7 @@
         border-color: transparent;
         color: var(--text-muted);
     }
-    .close-btn:hover { background: var(--bg-surface); color: var(--text-primary); }
+    .close-btn:hover { background: var(--surface-3); color: var(--text); border-color: var(--line); }
 
     .status-badge {
         display: inline-block;
@@ -127,8 +136,10 @@
     .node.revoked .pulse-ring { stroke: var(--danger); }
     .node.escalated .pulse-ring { stroke: var(--warning); }
 
-    .budget-bar-bg { fill: rgba(255,255,255,0.1); rx: 2; }
-    .budget-bar-fg { fill: var(--success); rx: 2; }
+    /* Remaining budget is a level, not a verdict — neutral ramp, so green on this canvas
+       only ever means an allowed token. */
+    .budget-bar-bg { fill: rgba(255,255,255,0.09); rx: 2; }
+    .budget-bar-fg { fill: var(--level-1); rx: 2; }
 
     /* The "which task?" prompt, shown centred over the empty canvas. */
     .task-prompt {
@@ -136,7 +147,7 @@
         inset: 0;
         display: grid;
         place-items: center;
-        background: rgba(11, 15, 26, 0.72);
+        background: rgba(9, 9, 11, 0.72);
         backdrop-filter: blur(3px);
     }
     .task-prompt .card { width: min(440px, 90%); box-shadow: var(--shadow); }

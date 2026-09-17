@@ -1,52 +1,186 @@
-/* AgentIAM console — the single stylesheet for every page.
+/* AgentIAM console — Liquid Glass.
  *
- * Before this, each template carried its own `<style>` block and its own `:root`, so the
- * six pages disagreed about the background colour, the surface colour and the font stack
- * while claiming to be one product. The palette below is the only one now; a page that
- * needs something genuinely local puts it in its own `{% block head_extra %}`.
+ * One stylesheet for every page. A page that needs something genuinely local puts it in
+ * its own `{% block head_extra %}`.
  *
  * Fonts are a system stack rather than a Google Fonts link. The console is meant to run
  * on an air-gapped demo machine (DEMO.md drill F-1), and a webfont fetched over the
- * network is a page that renders differently the moment the wifi drops.
+ * network is a page that renders differently the moment the wifi drops. On macOS that
+ * stack resolves to SF Pro; on the Windows demo box, to Segoe UI Variable.
+ *
+ * ── THE MATERIAL ──────────────────────────────────────────────────────────────
+ *   1. Glass needs something behind it. `body::before` paints a saturated aurora field;
+ *      every surface blurs *that*. Over flat black, backdrop-filter yields flat grey.
+ *   2. The edge sells it, not the blur — each pane carries a specular ring, bright where
+ *      light enters and dark where it leaves.
+ *   3. The glass is TINTED, not clear: `--mat-*` are cool-white, so panes read as
+ *      coloured material rather than grey scrim.
+ *
+ * ── THE THREE PALETTES ────────────────────────────────────────────────────────
+ * A dashboard palette is three palettes that have to coexist, and a console that ships
+ * only the first two is the one everybody calls monochrome:
+ *
+ *   NEUTRAL      text and glass. Carries most of the screen.
+ *   SEMANTIC     ALLOW / DENY / ESCALATE, plus the invariant lamp. Apple's dark-mode
+ *                systemGreen / systemRed / systemOrange, which stay legible on
+ *                translucent surfaces where plain sRGB primaries go muddy.
+ *   CATEGORICAL  identity and quantity — section hues, budget segments, brand. Drawn
+ *                ONLY from indigo / blue / cyan / mint / purple / violet.
+ *
+ * The categorical set deliberately excludes green, red and amber. A decorative red
+ * destroys a meaningful one: a budget segment that only ever meant "already spent"
+ * reads as "denied" to anyone who has just watched the decision feed.
  */
 
 /* ---------------------------------------------------------------- tokens -- */
 
 :root {
-    --bg-base: #0b0f1a;
-    --bg-surface: #141a29;
-    --bg-elevated: #1c2334;
-    --bg-inset: #0d121e;
+    /* Tells the browser (and every form control, scrollbar and inter-document canvas)
+       that this document is dark. Without it the gap between two navigations is painted
+       white. */
+    color-scheme: dark;
 
-    --text-primary: #e8edf7;
-    --text-secondary: #b6c2d9;
-    --text-muted: #8494ae;
+    /* Canvas. Near-black with a blue cast, so the aurora sits in the same family as the
+       interface rather than glowing out of a neutral hole. */
+    --bg: #05050a;
+    --bg-2: #0a0a12;
 
-    --accent: #6366f1;
-    --accent-hover: #818cf8;
-    --accent-soft: rgba(99, 102, 241, 0.14);
+    /* ---- categorical / brand: Apple dark-mode system hues ---- */
+    --c-indigo: #5e5ce6;
+    --c-blue: #0a84ff;
+    --c-cyan: #64d2ff;
+    --c-mint: #63e6e2;
+    --c-purple: #bf5af2;
+    --c-violet: #af52de;
 
-    --success: #10b981;
-    --success-soft: rgba(16, 185, 129, 0.13);
-    --danger: #f43f5e;
-    --danger-soft: rgba(244, 63, 94, 0.13);
-    --warning: #f59e0b;
-    --warning-soft: rgba(245, 158, 11, 0.13);
-    --info: #38bdf8;
-    --info-soft: rgba(56, 189, 248, 0.13);
+    --brand: var(--c-indigo);
+    --brand-2: var(--c-blue);
+    --brand-soft: rgba(94, 92, 230, 0.18);
+    --brand-line: rgba(94, 92, 230, 0.45);
+    --brand-glow: rgba(94, 92, 230, 0.55);
 
-    --border: #263149;
-    --border-soft: rgba(255, 255, 255, 0.07);
+    /* Per-section identity. `base.html` sets `data-page`, and every page tints its own
+       accents from here — the same idea as Apple giving each first-party app its own
+       hue while the chrome stays shared. */
+    --accent: var(--c-indigo);
+    --accent-2: var(--c-blue);
 
-    --radius: 10px;
-    --radius-sm: 6px;
-    --shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.7);
+    /* ---- glass materials, thin → thick (Apple's own naming) ----
+       Cool-white rather than pure white: the tint is what separates "glass" from
+       "grey overlay". */
+    --mat-ultrathin: rgba(198, 208, 255, 0.045);
+    --mat-thin: rgba(198, 208, 255, 0.07);
+    --mat-regular: rgba(198, 208, 255, 0.1);
+    --mat-thick: rgba(202, 212, 255, 0.15);
 
-    --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-    --font-mono: ui-monospace, 'JetBrains Mono', 'Cascadia Mono', SFMono-Regular, Menlo, monospace;
+    --blur-thin: saturate(190%) blur(20px);
+    --blur-regular: saturate(190%) blur(32px);
+    --blur-thick: saturate(210%) blur(48px);
 
-    --nav-height: 56px;
+    --specular:
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.24),
+        inset 1px 0 0 0 rgba(255, 255, 255, 0.08),
+        inset 0 -1px 0 0 rgba(0, 0, 0, 0.35),
+        0 12px 40px -12px rgba(0, 0, 0, 0.7);
+    --specular-raised:
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.32),
+        inset 1px 0 0 0 rgba(255, 255, 255, 0.11),
+        inset 0 -1px 0 0 rgba(0, 0, 0, 0.4),
+        0 24px 60px -16px rgba(0, 0, 0, 0.8);
+
+    --hairline: rgba(190, 200, 255, 0.14);
+    --hairline-strong: rgba(190, 200, 255, 0.26);
+
+    /* ---- neutral: text ----
+       Apple's dark-mode label ramp — white at opacity steps, so labels tint with
+       whatever glass they sit on. Contrast over the regular material:
+         --text 18:1 · --text-2 11:1 · --text-3 6.9:1 · --text-4 4.3:1 */
+    --text: rgba(255, 255, 255, 0.98);
+    --text-2: rgba(255, 255, 255, 0.72);
+    --text-3: rgba(215, 220, 255, 0.58);
+    --text-4: rgba(205, 212, 255, 0.36);
+
+    /* ---- categorical: quantities. Sequential indigo → cyan ramp. ---- */
+    --level-1: var(--c-indigo);
+    --level-2: var(--c-blue);
+    --level-3: var(--c-cyan);
+    --level-track: rgba(190, 200, 255, 0.08);
+
+    /* ---- semantic: outcomes only ---- */
+    --allow: #30d158;          /* systemGreen (dark) */
+    --allow-soft: rgba(48, 209, 88, 0.18);
+    --allow-line: rgba(48, 209, 88, 0.45);
+    --allow-glow: rgba(48, 209, 88, 0.55);
+    --deny: #ff453a;           /* systemRed (dark) */
+    --deny-soft: rgba(255, 69, 58, 0.18);
+    --deny-line: rgba(255, 69, 58, 0.45);
+    --deny-glow: rgba(255, 69, 58, 0.55);
+    --escalate: #ff9f0a;       /* systemOrange (dark) */
+    --escalate-soft: rgba(255, 159, 10, 0.18);
+    --escalate-line: rgba(255, 159, 10, 0.45);
+    --escalate-glow: rgba(255, 159, 10, 0.55);
+
+    /* Legacy aliases. Templates and their scripts still name these; they resolve into
+       the palettes above rather than holding a second opinion of them. */
+    --bg-base: var(--bg);
+    --bg-surface: var(--mat-regular);
+    --bg-elevated: var(--mat-thick);
+    --bg-inset: rgba(0, 0, 0, 0.32);
+    --surface: var(--mat-regular);
+    --surface-2: var(--mat-thick);
+    --surface-3: rgba(202, 212, 255, 0.2);
+    --inset: rgba(0, 0, 0, 0.32);
+    --line: var(--hairline);
+    --line-soft: rgba(190, 200, 255, 0.09);
+    --line-strong: var(--hairline-strong);
+    --text-primary: var(--text);
+    --text-secondary: var(--text-2);
+    --text-muted: var(--text-3);
+    --accent-hover: #ffffff;
+    --accent-soft: var(--brand-soft);
+    --border: var(--hairline);
+    --border-soft: rgba(190, 200, 255, 0.09);
+    --success: var(--allow);
+    --success-soft: var(--allow-soft);
+    --danger: var(--deny);
+    --danger-soft: var(--deny-soft);
+    --warning: var(--escalate);
+    --warning-soft: var(--escalate-soft);
+    --info: var(--c-cyan);
+    --info-soft: rgba(100, 210, 255, 0.16);
+    --shadow: var(--specular);
+
+    --radius-xl: 28px;
+    --radius: 20px;
+    --radius-sm: 12px;
+    --radius-xs: 9px;
+
+    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+                 'Segoe UI Variable Display', 'Segoe UI', 'Inter', system-ui, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Mono',
+                 SFMono-Regular, Menlo, monospace;
+
+    --on-accent: #fff;
+
+    --nav-height: 54px;
+    --ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+
+/* Each page carries its own hue. The chrome stays shared, so the console still reads as
+   one product — but Decisions is cyan, Budgets is mint, Audit is indigo, and an operator
+   knows which room they are in before reading the heading. */
+/* `--on-accent` is the text colour for anything filled with `--accent`. Cyan and mint
+   are light enough that white on them fails contrast outright, so those two pages get
+   dark ink instead. Picked per hue rather than globally, because a single answer is
+   wrong for half the console. */
+body[data-page="overview"]      { --accent: var(--c-indigo); --accent-2: var(--c-blue);   --on-accent: #fff; }
+body[data-page="identity-tree"] { --accent: var(--c-purple); --accent-2: var(--c-violet); --on-accent: #fff; }
+body[data-page="decisions"]     { --accent: var(--c-cyan);   --accent-2: var(--c-blue);   --on-accent: #04202e; }
+body[data-page="budgets"]       { --accent: var(--c-mint);   --accent-2: var(--c-cyan);   --on-accent: #032422; }
+body[data-page="policy"]        { --accent: var(--c-blue);   --accent-2: var(--c-indigo); --on-accent: #fff; }
+body[data-page="escalations"]   { --accent: var(--c-violet); --accent-2: var(--c-purple); --on-accent: #fff; }
+body[data-page="audit"]         { --accent: var(--c-indigo); --accent-2: var(--c-purple); --on-accent: #fff; }
 
 /* ----------------------------------------------------------------- base -- */
 
@@ -55,65 +189,270 @@
 html, body {
     margin: 0;
     padding: 0;
-    background: var(--bg-base);
-    color: var(--text-primary);
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
     font-family: var(--font-sans);
     font-size: 14px;
-    line-height: 1.55;
+    line-height: 1.5;
+    letter-spacing: -0.006em;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
-a { color: var(--accent-hover); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* ---- the aurora field every pane refracts ----
+   Two of the wells are tinted from `--accent`, so the light behind the glass shifts with
+   the section: walking Overview → Decisions warms the whole room from indigo to cyan.
+   Fixed, inert, behind everything.
 
-h1 { font-size: 1.4rem; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
-h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; letter-spacing: -0.01em; }
-h3 { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.5rem; }
+   It does NOT drift. A CSS animation restarts at 0% on every document load, so an
+   infinitely-drifting background jumps back to its start position on each navigation —
+   which reads as exactly the flash this was supposed to be too subtle to cause. */
+.ambient {
+    position: fixed;
+    inset: -20%;
+    z-index: -2;
+    /* The wells sit under the CONTENT, not in the corners. The first pass put them at the
+       page edges, where a 1440x900 screenshot showed colour only as a rim at the top and
+       bottom and flat black everywhere the panes actually are — the light has to be
+       behind the glass to come through it. */
+    background:
+        radial-gradient(52% 55% at 22% 18%, color-mix(in srgb, var(--accent) 95%, transparent), transparent 68%),
+        radial-gradient(50% 52% at 80% 26%, color-mix(in srgb, var(--accent-2) 85%, transparent), transparent 66%),
+        radial-gradient(54% 50% at 68% 78%, color-mix(in srgb, var(--c-purple) 62%, transparent), transparent 68%),
+        radial-gradient(48% 48% at 12% 68%, color-mix(in srgb, var(--c-cyan) 52%, transparent), transparent 66%);
+    filter: blur(60px);
+    pointer-events: none;
+}
+/* A dark wash over the field. It has to hold text contrast without erasing the colour —
+   the first pass was heavy enough (0.8 alpha) that the aurora was invisible in a
+   screenshot and the console read as monochrome again despite a full palette underneath.
+   Lighter at the top where the panes are, deeper toward the bottom of a long page. */
+body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+        radial-gradient(130% 95% at 50% 10%, rgba(3, 3, 8, 0.14), rgba(3, 3, 8, 0.56) 78%),
+        linear-gradient(180deg, rgba(3, 3, 8, 0.18), rgba(3, 3, 8, 0.5));
+    pointer-events: none;
+}
 
-.mono { font-family: var(--font-mono); font-size: 0.85em; }
-.muted { color: var(--text-muted); }
-.dim { color: var(--text-muted); font-size: 0.8rem; }
+/* Browsers without color-mix() still get a full aurora, just fixed in indigo/blue. */
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+    .ambient {
+        background:
+            radial-gradient(38% 42% at 16% 10%, rgba(94, 92, 230, 0.6), transparent 62%),
+            radial-gradient(36% 40% at 84% 6%, rgba(10, 132, 255, 0.5), transparent 60%),
+            radial-gradient(44% 42% at 74% 80%, rgba(191, 90, 242, 0.34), transparent 64%),
+            radial-gradient(38% 38% at 20% 86%, rgba(100, 210, 255, 0.3), transparent 62%);
+    }
+}
+
+body {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(190, 200, 255, 0.26) transparent;
+}
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: rgba(190, 200, 255, 0.2);
+    border-radius: 99px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(190, 200, 255, 0.36); background-clip: padding-box; }
+
+a { color: var(--text); text-decoration: none; }
+a:hover { color: #fff; text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+
+h1 { font-size: 1.6rem; font-weight: 600; margin: 0; letter-spacing: -0.028em; }
+h2 { font-size: 1.02rem; font-weight: 600; margin: 0 0 0.8rem; letter-spacing: -0.018em; }
+h3 { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.5rem; letter-spacing: -0.012em; }
+
+.mono {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.012em;
+}
+.muted { color: var(--text-3); }
+.dim { color: var(--text-3); font-size: 0.8rem; }
+.small { font-size: 0.79rem; }
+
+.label,
+.stat .label,
+.filters label,
+.kv dt {
+    font-size: 0.7rem;
+    font-weight: 590;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-3);
+}
+
+/* ---------------------------------------------------- the glass mixin --- */
+
+.card,
+.invariant,
+.filters,
+.pool,
+.editor-section,
+.activation-panel,
+.stats,
+.bento,
+.table-wrap,
+.approval,
+.summary-cards .card {
+    /* White tint over a light dark base. The base is what lets the aurora be bright
+       enough to see without dragging every label down with it: colour still reads
+       through at 0.38, but the text underneath sits on a stable floor instead of on
+       whatever hue happens to be behind that corner of the page. */
+    background:
+        linear-gradient(180deg, rgba(198, 208, 255, 0.13), rgba(198, 208, 255, 0.075)),
+        rgba(8, 8, 16, 0.38);
+    -webkit-backdrop-filter: var(--blur-regular);
+    backdrop-filter: var(--blur-regular);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    box-shadow: var(--specular);
+}
+
+.card { padding: 1.4rem 1.6rem; }
+
+/* There was an SVG displacement filter here — `backdrop-filter: url(#liquid-edge)` — to
+   give each pane a real refraction ripple. Chromium accepts the declaration, so
+   `@supports` reported it as available, but in practice it replaced the blur instead of
+   composing with it: driven in a real browser, the decision table was crisply legible
+   straight through the open drawer. A pane you can read the page through is not glass,
+   it is a tint. Removed rather than tuned; the plain blur above is the effect that
+   actually works. */
+
+/* ------------------------------------------- page & tab transitions ----- */
+
+/* Cross-document view transitions. Same-origin navigations cross-fade instead of
+   blanking to white, and any element sharing a `view-transition-name` across the two
+   pages MORPHS between its old and new position — which is how the nav pill slides
+   from Overview to Identity tree instead of blinking there.
+   Chromium runs this; every other browser navigates normally and loses only the
+   animation. No JS, no SPA router, no change to how the pages are served. */
+@view-transition { navigation: auto; }
+
+/* Everything that should hold still across a navigation gets its own name, which lifts
+   it OUT of the root snapshot. What remains in `root` is then almost nothing, so root
+   does a very short pure-opacity blend and never a transform.
+   The earlier version animated `root` itself: that dragged the chrome, the fixed aurora
+   and the whole page along in one sliding sheet — the "not smooth" part. */
+.ambient { view-transition-name: ambient; }
+.topbar { view-transition-name: topbar; }
+.brand { view-transition-name: brand; }
+.drawer { view-transition-name: drawer; }
+
+/* The lit pill is the shared element. Same name on both pages → the browser tweens its
+   position, width and corner radius from the old page to the new one. Nothing may move
+   it before the snapshot is taken, or there is nothing left to tween. */
+.nav a[aria-current="page"] { view-transition-name: nav-pill; }
+
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: 0.14s;
+    animation-timing-function: linear;
+}
+
+/* Only the content moves, and only a little. A long slide on a full page of glass is
+   what makes a transition feel slow rather than smooth. */
+main.page { view-transition-name: page-content; }
+::view-transition-old(page-content) { animation: vt-out 0.16s var(--ease) both; }
+::view-transition-new(page-content) { animation: vt-in 0.3s var(--ease) both; }
+@keyframes vt-out { to { opacity: 0; transform: translateY(-4px); } }
+@keyframes vt-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* The pill glides; the bar and mark underneath it do not move at all. */
+::view-transition-group(nav-pill) {
+    animation-duration: 0.42s;
+    animation-timing-function: var(--ease);
+}
+::view-transition-group(topbar),
+::view-transition-group(brand) { animation-duration: 0.01s; }
+
+/* The background holds its position and only cross-fades its hue, so the room changes
+   colour without anything appearing to move behind the glass. */
+::view-transition-old(ambient),
+::view-transition-new(ambient) {
+    animation-duration: 0.55s;
+    animation-timing-function: var(--ease);
+}
+
+/* Stack the captured layers explicitly. Left to default paint order this *mostly* works,
+   but `root` still holds the opaque body background, and a single frame of it landing
+   over the aurora is a dark flash in the middle of the transition. Named layers sit
+   above it, in the order they sit on the page. */
+::view-transition-group(ambient) { z-index: 1; }
+::view-transition-group(page-content) { z-index: 2; }
+::view-transition-group(topbar) { z-index: 3; }
+::view-transition-group(brand) { z-index: 4; }
+::view-transition-group(nav-pill) { z-index: 5; }
+::view-transition-group(drawer) { z-index: 6; }
 
 /* ------------------------------------------------------------ app shell -- */
 
-/* A top bar rather than a sidebar: DEMO.md requires the console to stay readable at
-   1024x768, where vertical space is the scarce axis and the identity tree wants the
-   full width it can get. */
+/* A floating capsule rather than a bar welded to the top edge: the aurora runs behind
+   and around it, which is what makes the glass legible as glass. DEMO.md requires the
+   console to stay readable at 1024x768, so it stays one row and scrolls horizontally
+   rather than wrapping. */
 .topbar {
     position: sticky;
-    top: 0;
+    top: 12px;
     z-index: 50;
+    margin: 12px auto 0;
+    max-width: 1320px;
+    width: calc(100% - 24px);
     height: var(--nav-height);
     display: flex;
     align-items: center;
-    gap: 1.5rem;
-    padding: 0 1.5rem;
-    background: rgba(13, 18, 30, 0.85);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
+    gap: 1.25rem;
+    padding: 0 0.85rem 0 1.1rem;
+    background: var(--mat-thin);
+    -webkit-backdrop-filter: var(--blur-thick);
+    backdrop-filter: var(--blur-thick);
+    border: 1px solid var(--hairline);
+    border-radius: 99px;
+    box-shadow: var(--specular);
 }
 
 .brand {
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    font-weight: 650;
+    font-weight: 600;
     font-size: 0.95rem;
-    color: var(--text-primary);
+    letter-spacing: -0.02em;
+    color: var(--text);
     white-space: nowrap;
 }
-.brand:hover { text-decoration: none; }
+.brand:hover { text-decoration: none; color: var(--text); }
+/* The mark stays neutral glass. It is the one element present on every page, so tying it
+   to any single hue makes it clash on the other six — and a fixed indigo/blue mark was
+   the thing that read as "blue product" while the room underneath was mint. It picks up
+   the room's light through the glass instead of being painted with it. */
 .brand .mark {
     width: 26px;
     height: 26px;
-    border-radius: 7px;
+    border-radius: 8px;
     display: grid;
     place-items: center;
-    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    background: rgba(255, 255, 255, 0.16);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
     color: #fff;
-    font-size: 0.72rem;
+    font-size: 0.66rem;
     font-weight: 700;
-    letter-spacing: -0.03em;
+    letter-spacing: -0.04em;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.5),
+        0 2px 10px rgba(0, 0, 0, 0.35);
 }
 
 .nav {
@@ -128,80 +467,101 @@ h3 { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.5rem; }
 
 .nav a {
     display: block;
-    padding: 0.4rem 0.75rem;
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
+    padding: 0.36rem 0.8rem;
+    border-radius: 99px;
+    color: var(--text-3);
     font-size: 0.85rem;
     font-weight: 500;
     white-space: nowrap;
-    transition: background 0.12s, color 0.12s;
+    transition: color 0.2s var(--ease), background 0.2s var(--ease);
 }
-.nav a:hover { background: var(--bg-elevated); color: var(--text-primary); text-decoration: none; }
+.nav a:hover { background: rgba(190, 200, 255, 0.1); color: var(--text); text-decoration: none; }
+.nav a:active { transform: scale(0.96); }
 
 /* The active page is marked with `aria-current="page"` in the markup, so the styling
-   hangs off the accessibility attribute rather than a second, redundant class. */
+   hangs off the accessibility attribute rather than a second, redundant class. The pill
+   is lit in the destination page's own hue. */
 .nav a[aria-current="page"] {
-    background: var(--accent-soft);
-    color: var(--accent-hover);
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--accent) 42%, transparent),
+        color-mix(in srgb, var(--accent-2) 30%, transparent));
+    color: #fff;
+    font-weight: 560;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.4),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+        0 2px 14px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+    .nav a[aria-current="page"] { background: var(--brand-soft); box-shadow: inset 0 1px 0 rgba(255,255,255,0.35); }
 }
 
 .topbar-right {
     display: flex;
     align-items: center;
-    gap: 0.9rem;
-    font-size: 0.8rem;
-    color: var(--text-muted);
+    gap: 0.85rem;
+    font-size: 0.79rem;
+    color: var(--text-3);
     white-space: nowrap;
 }
 
 .page {
-    max-width: 1280px;
+    max-width: 1320px;
     margin: 0 auto;
-    padding: 1.75rem 1.5rem 4rem;
+    padding: 2rem 1.5rem 5rem;
 }
 .page.wide { max-width: none; }
 
-.page-head { margin-bottom: 1.5rem; }
+.page-head { margin-bottom: 1.75rem; }
+/* A hairline of the page's own colour under the title — the smallest possible statement
+   of which room this is. */
+.page-head h1 {
+    display: inline-block;
+    padding-bottom: 0.3rem;
+    border-bottom: 2px solid var(--accent);
+}
 .page-head .sub {
-    color: var(--text-muted);
-    font-size: 0.875rem;
-    margin-top: 0.3rem;
-    max-width: 70ch;
+    color: var(--text-3);
+    font-size: 0.88rem;
+    margin-top: 0.5rem;
+    max-width: 76ch;
 }
 
-/* ------------------------------------------------------------- surfaces -- */
-
-.card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.1rem 1.25rem;
+.section-head {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin: 0 0 1rem;
 }
+.section-head h2 { margin: 0; white-space: nowrap; }
+.section-head::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, transparent), transparent);
+}
+.section-head .aside { font-size: 0.76rem; color: var(--text-3); white-space: nowrap; }
 
-section + section { margin-top: 1.75rem; }
+section + section { margin-top: 2.25rem; }
 
 /* ----------------------------------------------------------- stat tiles -- */
 
 .stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 0.9rem;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
     margin-bottom: 1.5rem;
+    overflow: hidden;
 }
-.stat {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.9rem 1.1rem;
+.stat { padding: 1.1rem 1.3rem; position: relative; }
+.stat + .stat { box-shadow: inset 1px 0 0 var(--line-soft); }
+.stat .label { display: block; margin-bottom: 0.4rem; }
+.stat .value {
+    font-size: 1.7rem;
+    font-weight: 600;
+    letter-spacing: -0.032em;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
 }
-.stat .label {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-    margin-bottom: 0.3rem;
-}
-.stat .value { font-size: 1.5rem; font-weight: 650; letter-spacing: -0.02em; }
 
 /* --------------------------------------------------- the verdict banner -- */
 
@@ -212,59 +572,84 @@ section + section { margin-top: 1.75rem; }
     display: flex;
     align-items: center;
     gap: 0.9rem;
-    padding: 1rem 1.2rem;
-    margin-bottom: 1.25rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    padding: 1rem 1.3rem;
+    margin-bottom: 1.4rem;
 }
 .invariant .lamp {
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     flex: 0 0 auto;
-    background: var(--text-muted);
+    background: var(--text-4);
+    transition: background 0.3s var(--ease), box-shadow 0.3s var(--ease);
 }
-.invariant.ok .lamp { background: var(--success); box-shadow: 0 0 14px var(--success); }
-.invariant.bad .lamp { background: var(--danger); box-shadow: 0 0 14px var(--danger); }
-.invariant .verdict { font-size: 1rem; font-weight: 600; }
-.invariant.ok { border-color: rgba(16, 185, 129, 0.35); }
-.invariant.ok .verdict { color: var(--success); }
-.invariant.bad { border-color: rgba(244, 63, 94, 0.35); }
-.invariant.bad .verdict { color: var(--danger); }
+.invariant.ok .lamp {
+    background: var(--allow);
+    box-shadow: 0 0 0 4px var(--allow-soft), 0 0 18px var(--allow-glow);
+}
+.invariant.bad .lamp {
+    background: var(--deny);
+    box-shadow: 0 0 0 4px var(--deny-soft), 0 0 18px var(--deny-glow);
+    animation: lamp-pulse 1.6s ease-in-out infinite;
+}
+@keyframes lamp-pulse {
+    50% { box-shadow: 0 0 0 7px rgba(255, 69, 58, 0.08), 0 0 26px var(--deny-glow); }
+}
+.invariant .verdict { font-size: 0.98rem; font-weight: 600; letter-spacing: -0.018em; }
+.invariant.ok { border-color: var(--allow-line); background: linear-gradient(90deg, var(--allow-soft), transparent 55%), var(--mat-regular); }
+.invariant.ok .verdict { color: var(--allow); }
+.invariant.bad { border-color: var(--deny-line); background: linear-gradient(90deg, var(--deny-soft), transparent 55%), var(--mat-regular); }
+.invariant.bad .verdict { color: var(--deny); }
 .invariant .meta {
     margin-left: auto;
     text-align: right;
-    font-size: 0.78rem;
-    color: var(--text-muted);
+    font-size: 0.76rem;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
 }
 
 /* --------------------------------------------------------------- pills -- */
 
 .pill {
     display: inline-block;
-    padding: 0.12rem 0.55rem;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    padding: 0.13rem 0.55rem;
+    border-radius: 99px;
+    font-size: 0.68rem;
+    font-weight: 650;
+    letter-spacing: 0.045em;
     text-transform: uppercase;
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
+    background: rgba(190, 200, 255, 0.14);
+    color: var(--text-2);
+    border: 1px solid var(--hairline);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    white-space: nowrap;
 }
-.pill.allow { background: var(--success-soft); color: var(--success); }
-.pill.deny { background: var(--danger-soft); color: var(--danger); }
-.pill.escalate { background: var(--warning-soft); color: var(--warning); }
+.pill.allow { background: var(--allow-soft); color: var(--allow); border-color: var(--allow-line); }
+.pill.deny { background: var(--deny-soft); color: var(--deny); border-color: var(--deny-line); }
+.pill.escalate { background: var(--escalate-soft); color: var(--escalate); border-color: var(--escalate-line); }
 
 .caveat {
     display: inline-block;
     margin-right: 0.4rem;
-    padding: 0.1rem 0.4rem;
-    border-radius: var(--radius-sm);
-    background: var(--danger-soft);
-    color: var(--danger);
+    padding: 0.06rem 0.4rem;
+    border-radius: var(--radius-xs);
+    background: var(--deny-soft);
+    color: var(--deny);
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.73rem;
+    border: 1px solid var(--deny-line);
+}
+
+.kbd {
+    display: inline-block;
+    padding: 0.06rem 0.38rem;
+    border-radius: 6px;
+    border: 1px solid var(--hairline);
+    background: rgba(190, 200, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 0 rgba(0, 0, 0, 0.3);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-2);
 }
 
 /* --------------------------------------------------------------- forms -- */
@@ -273,161 +658,229 @@ section + section { margin-top: 1.75rem; }
     display: flex;
     flex-wrap: wrap;
     align-items: flex-end;
-    gap: 0.75rem;
-    padding: 1rem 1.15rem;
-    margin-bottom: 1.25rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    gap: 0.8rem;
+    padding: 1.05rem 1.25rem;
+    margin-bottom: 1.4rem;
 }
 .filters > div { display: flex; flex-direction: column; gap: 0.3rem; }
-.filters label {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-}
 
+/* Controls are recessed: darker than the pane they sit in, with light entering from the
+   top edge. The inverse of a raised button, and the reason a field reads as a hole in
+   the glass rather than a sticker on it. */
 input[type="text"],
 input[type="number"],
 input:not([type]),
 select,
 textarea {
-    background: var(--bg-inset);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.3);
+    color: var(--text);
+    border: 1px solid var(--hairline);
     border-radius: var(--radius-sm);
-    padding: 0.4rem 0.6rem;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+    padding: 0.42rem 0.7rem;
     font-family: inherit;
-    font-size: 0.85rem;
+    font-size: 0.84rem;
     min-width: 160px;
+    transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease), background 0.2s var(--ease);
 }
+input[type="number"] { font-variant-numeric: tabular-nums; }
 
-/* A select's intrinsic height differs from a text input's by a couple of pixels, which
-   is enough to visibly break the baseline of a filter row. Pin all three to the same
-   box so the row lines up. */
 .filters input,
 .filters select,
-.filters button {
-    height: 34px;
-    line-height: 1.2;
-}
+.filters button { height: 34px; line-height: 1.2; }
 .filters select { padding-right: 0.4rem; }
+
+/* The focus ring is the page's hue — so "where am I typing" and "where am I" are the
+   same colour. */
 input:focus, select:focus, textarea:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
+    background: rgba(0, 0, 0, 0.22);
+    box-shadow:
+        inset 0 1px 2px rgba(0, 0, 0, 0.35),
+        0 0 0 4px color-mix(in srgb, var(--accent) 28%, transparent);
 }
-input::placeholder { color: #5b6880; }
+input::placeholder { color: var(--text-4); }
+input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; min-width: 0; }
 
 textarea {
     width: 100%;
     font-family: var(--font-mono);
-    line-height: 1.6;
+    font-size: 0.82rem;
+    line-height: 1.65;
     resize: vertical;
     min-height: 180px;
+    tab-size: 2;
 }
 
+/* Buttons are raised glass: lit along the top edge, shadowed beneath, pressing down on
+   :active rather than changing colour. */
 button, .btn {
-    display: inline-block;
-    padding: 0.42rem 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
-    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.42rem 0.95rem;
+    border: 1px solid var(--hairline);
+    border-radius: 99px;
+    background: rgba(190, 200, 255, 0.13);
+    -webkit-backdrop-filter: var(--blur-thin);
+    backdrop-filter: var(--blur-thin);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 2px 10px rgba(0, 0, 0, 0.3);
+    color: var(--text);
     font-family: inherit;
-    font-size: 0.85rem;
+    font-size: 0.84rem;
     font-weight: 550;
+    letter-spacing: -0.008em;
     cursor: pointer;
-    transition: background 0.12s, border-color 0.12s;
+    white-space: nowrap;
+    transition: background 0.2s var(--ease), transform 0.12s var(--ease), box-shadow 0.2s var(--ease);
 }
-button:hover, .btn:hover { background: #253048; text-decoration: none; }
+button:hover, .btn:hover {
+    background: rgba(190, 200, 255, 0.2);
+    text-decoration: none;
+    color: var(--text);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 4px 16px rgba(0, 0, 0, 0.36);
+}
+button:active, .btn:active { transform: scale(0.97); }
 
+/* The primary CTA wears the page's own hue rather than a fixed blue. A blue button on
+   a mint page is the odd one out in the room; the same button tinted to the room is
+   the brightest thing in it. `--on-accent` keeps the label readable on the light hues. */
 button.primary, .btn.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--accent) 88%, white),
+        var(--accent));
+    border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+    color: var(--on-accent);
+    font-weight: 640;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.45),
+        0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 button.primary:hover, .btn.primary:hover {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--accent) 70%, white),
+        color-mix(in srgb, var(--accent) 94%, white));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.55),
+        0 6px 28px color-mix(in srgb, var(--accent) 60%, transparent);
 }
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+    button.primary, .btn.primary { background: var(--accent); color: var(--on-accent); }
+}
+/* Deny keeps its colour — as tinted glass, not a solid fill: a filled red button reads
+   "danger, do not press", and denying is a routine, correct act. */
 button.danger, .btn.danger {
-    background: var(--danger-soft);
-    border-color: rgba(244, 63, 94, 0.4);
-    color: var(--danger);
+    background: var(--deny-soft);
+    border-color: var(--deny-line);
+    color: var(--deny);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 10px rgba(0, 0, 0, 0.3);
 }
-button:disabled, .btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
+button.danger:hover, .btn.danger:hover { background: rgba(255, 69, 58, 0.3); border-color: var(--deny); color: #fff; }
+
+button.success, .btn.success {
+    background: var(--allow-soft);
+    border-color: var(--allow-line);
+    color: var(--allow);
 }
-button.secondary, .btn.secondary { background: var(--bg-elevated); }
+button.success:hover:not(:disabled), .btn.success:hover:not(:disabled) {
+    background: rgba(48, 209, 88, 0.3);
+    border-color: var(--allow);
+    color: #fff;
+}
+
+button.ghost, .btn.ghost { background: transparent; box-shadow: none; }
+button.secondary, .btn.secondary { background: rgba(190, 200, 255, 0.13); }
+button:disabled, .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+button:disabled:hover, .btn:disabled:hover { background: rgba(190, 200, 255, 0.13); }
+button:focus-visible, .btn:focus-visible, a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
 
 /* -------------------------------------------------------------- tables -- */
 
-.table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+/* The table is one pane; rows are hairlines inside it. Thin material on purpose — a
+   dense grid of numbers over a heavy blur is where glass stops being readable. */
+.table-wrap {
+    overflow-x: auto;
+    background: var(--mat-thin);
+    -webkit-backdrop-filter: var(--blur-regular);
+    backdrop-filter: var(--blur-regular);
+}
 
 table, .results-table {
     width: 100%;
     border-collapse: collapse;
-    background: var(--bg-surface);
-    font-size: 0.85rem;
+    background: transparent;
+    font-size: 0.84rem;
 }
 th {
     position: sticky;
     top: 0;
+    z-index: 1;
     text-align: left;
-    padding: 0.6rem 0.85rem;
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-    font-size: 0.68rem;
-    font-weight: 600;
+    padding: 0.62rem 0.95rem;
+    background: color-mix(in srgb, var(--accent) 12%, rgba(12, 12, 24, 0.86));
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    color: var(--text-2);
+    font-size: 0.7rem;
+    font-weight: 590;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.07em;
     white-space: nowrap;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--hairline);
 }
 td {
-    padding: 0.55rem 0.85rem;
-    border-bottom: 1px solid var(--border-soft);
+    padding: 0.55rem 0.95rem;
+    border-bottom: 1px solid var(--line-soft);
     vertical-align: top;
+    font-variant-numeric: tabular-nums;
 }
 tbody tr:last-child td { border-bottom: none; }
-tbody tr:hover { background: rgba(255, 255, 255, 0.025); }
+tbody tr { transition: background 0.15s var(--ease); }
+tbody tr:hover { background: rgba(190, 200, 255, 0.09); }
 
 tr.hit { cursor: pointer; }
-tr.row-fail { background: var(--danger-soft); }
-tr.row-pass td:first-child { box-shadow: inset 2px 0 0 var(--success); }
+tr.selected { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+tr.row-fail { background: var(--deny-soft); }
+tr.row-pass td:first-child { box-shadow: inset 3px 0 0 var(--allow); }
 
-/* A row that just arrived over the stream flashes once, so the eye catches the change
-   without needing the whole table to animate. */
 @keyframes row-in {
-    from { background: var(--accent-soft); }
+    from { background: color-mix(in srgb, var(--accent) 35%, transparent); }
     to { background: transparent; }
 }
-tr.new { animation: row-in 1.2s ease-out; }
+tr.new { animation: row-in 1.2s var(--ease); }
 
-.why.refused { color: #fda4af; }
+.why.refused { color: #ff8a80; }
 
 /* --------------------------------------------------------------- alerts -- */
 
 .alert {
-    padding: 0.7rem 0.95rem;
+    padding: 0.8rem 1.05rem;
     border-radius: var(--radius-sm);
-    border: 1px solid transparent;
+    border: 1px solid var(--hairline);
+    background: var(--mat-regular);
+    -webkit-backdrop-filter: var(--blur-thin);
+    backdrop-filter: var(--blur-thin);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
     margin: 0 0 1rem;
-    font-size: 0.87rem;
+    font-size: 0.86rem;
 }
-.alert.success { background: var(--success-soft); border-color: rgba(16, 185, 129, 0.35); color: #6ee7b7; }
-.alert.danger { background: var(--danger-soft); border-color: rgba(244, 63, 94, 0.35); color: #fda4af; }
-.alert.warning { background: var(--warning-soft); border-color: rgba(245, 158, 11, 0.35); color: #fcd34d; }
-.alert.info { background: var(--info-soft); border-color: rgba(56, 189, 248, 0.35); color: #7dd3fc; }
+.alert.success { background: var(--allow-soft); border-color: var(--allow-line); color: #7ee89b; }
+.alert.danger, .alert.error { background: var(--deny-soft); border-color: var(--deny-line); color: #ff9c94; }
+.alert.warning { background: var(--escalate-soft); border-color: var(--escalate-line); color: #ffc66b; }
+.alert.info { background: var(--info-soft); border-color: rgba(100, 210, 255, 0.4); color: var(--c-cyan); }
+.alert pre { margin: 0.5rem 0 0; background: rgba(0, 0, 0, 0.36); }
 
 .empty {
-    padding: 2.5rem 1rem;
+    padding: 2.75rem 1rem;
     text-align: center;
-    color: var(--text-muted);
-    font-size: 0.87rem;
+    color: var(--text-3);
+    font-size: 0.86rem;
 }
 
 /* -------------------------------------------------------- status / dots -- */
@@ -437,257 +890,480 @@ tr.new { animation: row-in 1.2s ease-out; }
     align-items: center;
     gap: 0.5rem;
     margin-bottom: 0.9rem;
-    font-size: 0.8rem;
-    color: var(--text-muted);
+    font-size: 0.79rem;
+    color: var(--text-3);
 }
 .dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: var(--warning);
+    background: var(--escalate);
     flex: 0 0 auto;
 }
-.dot.live { background: var(--success); box-shadow: 0 0 8px var(--success); }
-.dot.down { background: var(--danger); }
+.dot.live { background: var(--allow); box-shadow: 0 0 0 3px var(--allow-soft), 0 0 12px var(--allow-glow); }
+.dot.down { background: var(--deny); box-shadow: 0 0 0 3px var(--deny-soft), 0 0 12px var(--deny-glow); }
 /* Deliberately-unconfigured, not broken — e.g. a deployment with no OIDC issuer. Red
    there would report a fault where there is only a choice. */
-.dot.off { background: var(--text-muted); }
+.dot.off { background: var(--text-4); box-shadow: none; }
 
-/* ------------------------------------------------------- budget bar/pool -- */
+/* ----------------------------------------------------- budget pool/meter -- */
 
-.pool {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1rem 1.15rem;
-    margin-bottom: 0.8rem;
-}
+.pool { padding: 1.15rem 1.35rem; margin-bottom: 0.9rem; }
 .pool-head {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
     gap: 0.75rem;
     flex-wrap: wrap;
-    margin-bottom: 0.8rem;
+    margin-bottom: 0.85rem;
 }
 .pool-head .who { font-weight: 600; }
 
 /* committed + leased + allocated + available == total: the pool invariant drawn rather
-   than asserted (spec 04 §2.1). */
-.bar {
+   than asserted (spec 04 §2.1). A sequential indigo → blue → cyan ramp: ordered, so the
+   segments read as stages of the same quantity, and categorical rather than semantic, so
+   nothing here can be mistaken for a verdict. */
+.bar, .meter {
     display: flex;
-    height: 20px;
-    border-radius: var(--radius-sm);
+    height: 10px;
+    border-radius: 99px;
     overflow: hidden;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--level-track);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
 }
-.bar > div { height: 100%; }
-.seg-committed { background: var(--danger); }
-.seg-leased { background: var(--warning); }
-.seg-allocated { background: var(--accent); }
+.bar > div, .meter > div {
+    height: 100%;
+    transition: width 0.5s var(--ease);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.bar > div + div, .meter > div + div { border-left: 1px solid rgba(0, 0, 0, 0.4); }
+.seg-committed { background: linear-gradient(180deg, #7b79ff, var(--c-indigo)); }
+.seg-leased { background: linear-gradient(180deg, #3fa0ff, var(--c-blue)); }
+.seg-allocated { background: linear-gradient(180deg, #8ee0ff, var(--c-cyan)); }
 
 .legend {
     display: flex;
-    gap: 1rem;
+    gap: 1.1rem;
     flex-wrap: wrap;
-    margin-top: 0.65rem;
-    font-size: 0.78rem;
-    color: var(--text-muted);
+    margin-top: 0.7rem;
+    font-size: 0.76rem;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
 }
 .legend .key {
     display: inline-block;
     width: 9px;
     height: 9px;
-    border-radius: 2px;
-    margin-right: 0.35rem;
+    border-radius: 3px;
+    margin-right: 0.4rem;
+    border: 1px solid rgba(255, 255, 255, 0.22);
 }
-.viol { margin-top: 0.7rem; font-size: 0.8rem; color: #fda4af; }
+.viol { margin-top: 0.75rem; font-size: 0.8rem; color: var(--deny); }
 .viol div { margin-top: 0.25rem; }
 
 /* ------------------------------------------------------- custody chain -- */
 
-.chain { display: flex; flex-direction: column; gap: 0.6rem; }
+.chain { display: flex; flex-direction: column; }
 .chain .link {
     position: relative;
-    padding: 0.8rem 1rem 0.8rem 1.35rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    padding: 0.8rem 0 0.8rem 1.2rem;
+    border-left: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--line-soft);
 }
+.chain .link:last-child { border-bottom: none; }
 .chain .link::before {
+    content: "";
+    position: absolute;
+    left: -4.5px;
+    top: 1.1rem;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-4);
+    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.5);
+}
+.chain .link.allow::before { background: var(--allow); box-shadow: 0 0 0 3px rgba(0,0,0,0.5), 0 0 12px var(--allow-glow); }
+.chain .link.deny::before { background: var(--deny); box-shadow: 0 0 0 3px rgba(0,0,0,0.5), 0 0 12px var(--deny-glow); }
+.chain .link.escalate::before { background: var(--escalate); box-shadow: 0 0 0 3px rgba(0,0,0,0.5), 0 0 12px var(--escalate-glow); }
+.chain .head {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.28rem;
+}
+.chain .head .who { font-weight: 600; font-family: var(--font-mono); font-size: 0.83rem; color: var(--accent); }
+.chain .head .depth { color: var(--text-3); font-size: 0.76rem; margin-left: auto; }
+.chain .why { font-size: 0.81rem; color: var(--text-2); }
+
+.count { color: var(--text-3); font-size: 0.79rem; margin-bottom: 0.6rem; font-variant-numeric: tabular-nums; }
+.pager { display: flex; gap: 0.5rem; margin-top: 1rem; }
+
+/* ------------------------------------------------- the inspector drawer -- */
+
+/* Clicking a record opens it here instead of navigating: the operator keeps the feed in
+   view while reading one row of it. The backdrop dims *and* blurs, so the drawer reads
+   as the front-most sheet rather than a panel pasted over a still page. */
+.drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(2, 2, 8, 0.5);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s var(--ease), visibility 0.3s var(--ease);
+}
+.drawer-backdrop.open { opacity: 1; visibility: visible; }
+
+.drawer {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 90;
+    width: min(480px, calc(100vw - 24px));
+    display: flex;
+    flex-direction: column;
+    /* A dark base *under* the white tint. Every other pane floats over the aurora, which
+       is diffuse and blurs away to nothing; this one floats over a dense table of
+       monospace numbers, and tint-over-blur alone is not enough to stop them reading
+       through. Still glass — the aurora's colour comes through the base — but a sheet
+       you cannot read the feed through. */
+    background:
+        linear-gradient(180deg, rgba(202, 212, 255, 0.14), rgba(202, 212, 255, 0.1)),
+        rgba(10, 10, 18, 0.82);
+    -webkit-backdrop-filter: var(--blur-thick);
+    backdrop-filter: var(--blur-thick);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--specular-raised);
+    transform: translateX(calc(100% + 24px));
+    transition: transform 0.42s var(--ease);
+    overflow: hidden;
+}
+.drawer.open { transform: translateX(0); }
+/* A bar of the page's hue down the leading edge, so an open drawer is visibly part of
+   the room it opened from. */
+.drawer::before {
     content: "";
     position: absolute;
     left: 0;
     top: 0;
     bottom: 0;
     width: 3px;
-    border-radius: var(--radius) 0 0 var(--radius);
-    background: var(--text-muted);
+    background: linear-gradient(180deg, var(--accent), var(--accent-2));
 }
-.chain .link.allow::before { background: var(--success); }
-.chain .link.deny::before { background: var(--danger); }
-.chain .link.escalate::before { background: var(--warning); }
-.chain .head {
+
+.drawer-head {
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    flex-wrap: wrap;
-    margin-bottom: 0.35rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--line-soft);
+    flex: 0 0 auto;
 }
-.chain .head .who { font-weight: 600; font-family: var(--font-mono); font-size: 0.85rem; }
-.chain .head .depth { color: var(--text-muted); font-size: 0.78rem; margin-left: auto; }
+.drawer-head .title { font-weight: 600; font-size: 0.95rem; letter-spacing: -0.02em; }
+.drawer-head .close {
+    margin-left: auto;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    background: rgba(190, 200, 255, 0.14);
+    color: var(--text-2);
+    font-size: 0.95rem;
+    line-height: 1;
+}
+.drawer-head .close:hover { background: rgba(190, 200, 255, 0.26); color: #fff; }
 
-.count { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.6rem; }
-.pager { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+.drawer-body { padding: 1.25rem; overflow-y: auto; flex: 1 1 auto; }
+.drawer-section { margin-bottom: 1.6rem; }
+.drawer-section:last-child { margin-bottom: 0; }
+.drawer-section > h3 {
+    font-size: 0.7rem;
+    font-weight: 590;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--accent);
+    margin: 0 0 0.7rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid var(--line-soft);
+}
 
-/* ----------------------------------------------------- policy authoring -- */
-
-.split-view {
+.kv {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1.25rem;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: 0.5rem 0.85rem;
+    margin: 0;
 }
-@media (max-width: 900px) {
-    .split-view { grid-template-columns: 1fr; }
+.kv dt { margin: 0; padding-top: 0.14rem; }
+.kv dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.79rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    word-break: break-all;
+    line-height: 1.5;
 }
-.editor-section {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.1rem 1.25rem;
+.kv dd.plain { font-family: var(--font-sans); font-size: 0.84rem; word-break: normal; color: var(--text-2); }
+.kv dd:empty::after { content: "—"; color: var(--text-4); }
+
+/* ------------------------------------------------ approval (escalations) -- */
+
+/* The human-in-the-loop card. A table row cannot carry a decision this consequential:
+   the approver has to see what was asked, what they are about to grant, and the delta
+   between the two, without reading across seven columns. */
+.approvals { display: flex; flex-direction: column; gap: 1rem; }
+
+.approval {
+    overflow: hidden;
+    border-left: 3px solid var(--escalate);
+    transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease), opacity 0.4s var(--ease);
 }
-.actions {
+.approval:hover { box-shadow: var(--specular-raised); }
+.approval.resolved { opacity: 0.4; border-left-color: var(--hairline); transform: scale(0.99); }
+
+.approval-head {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    margin-top: 0.75rem;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+    padding: 0.95rem 1.25rem;
+    border-bottom: 1px solid var(--line-soft);
+    background: linear-gradient(90deg, var(--escalate-soft), transparent 60%);
 }
-.results-section { margin-top: 1.75rem; }
+.approval-head .who { font-family: var(--font-mono); font-size: 0.88rem; font-weight: 600; }
+.approval-head .when { margin-left: auto; font-size: 0.75rem; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.approval-reason { padding: 0.85rem 1.25rem; font-size: 0.87rem; color: var(--text-2); }
 
-/* htmx toggles this by adding `.htmx-request`; without the base rule the indicator is
-   visible on a page that is not loading anything. */
-.htmx-indicator { opacity: 0; transition: opacity 0.2s; color: var(--text-muted); font-size: 0.82rem; }
-.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
-
-pre {
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.8rem 1rem;
-    overflow-x: auto;
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    line-height: 1.6;
+.approval-grant {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: 1.4rem;
+    padding: 1rem 1.25rem;
+    border-top: 1px solid var(--line-soft);
+    background: rgba(0, 0, 0, 0.24);
 }
-
-/* ------------------------------------------------------------ identity -- */
+@media (max-width: 720px) { .approval-grant { grid-template-columns: 1fr; } }
+.approval-grant > div > .label { display: block; margin-bottom: 0.55rem; }
 
 .narrow-scopes { display: flex; flex-direction: column; gap: 0.35rem; }
 .narrow-scopes label {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    font-size: 0.82rem;
+    gap: 0.55rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: var(--radius-xs);
+    font-size: 0.81rem;
     font-family: var(--font-mono);
     text-transform: none;
     letter-spacing: 0;
-    color: var(--text-secondary);
+    color: var(--text-3);
+    cursor: pointer;
+    transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
-.narrow-amount { width: 100%; min-width: 0; }
-.narrow-amount:invalid { border-color: var(--danger); }
+.narrow-scopes label:hover { background: rgba(190, 200, 255, 0.1); }
+.narrow-scopes label:has(input:checked) { color: var(--text); }
+.narrow-amount { width: 100%; min-width: 0; font-family: var(--font-mono); }
+.narrow-amount:invalid { border-color: var(--deny); box-shadow: inset 0 1px 2px rgba(0,0,0,0.4), 0 0 0 4px var(--deny-soft); }
+.narrow-cap { margin-top: 0.4rem; font-size: 0.74rem; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
-/* ------------------------------------------------------------ responsive -- */
-
-@media (max-width: 720px) {
-    .topbar { gap: 0.75rem; padding: 0 0.9rem; }
-    .brand span:not(.mark) { display: none; }
-    .topbar-right { display: none; }
-    .page { padding: 1.25rem 0.9rem 3rem; }
+/* The narrowing delta, live. EC-A09 says a grant can only ever shrink; this draws how
+   far it has shrunk, so the invariant is visible before the request is sent rather than
+   discovered in a 400. */
+.delta {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.7rem 1.25rem;
+    border-top: 1px solid var(--line-soft);
+    font-size: 0.78rem;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
 }
+.delta .meter { flex: 0 0 96px; height: 5px; }
+.delta .seg-granted { background: linear-gradient(90deg, var(--c-violet), var(--c-purple)); }
+.delta strong { color: var(--text); font-weight: 600; }
 
-/* ------------------------------------------- policy evaluation results -- */
+.approval-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.9rem 1.25rem;
+    border-top: 1px solid var(--line-soft);
+}
+.approval-actions .spacer { flex: 1 1 auto; }
+.approval-msg { font-size: 0.79rem; color: var(--text-3); }
+.approval-msg.ok { color: var(--allow); }
+.approval-msg.err { color: var(--deny); }
 
-/* These classes are used only by the two htmx result partials
-   (`authoring_results.html`, `nl_results.html`). They lived nowhere before — the
-   partials referenced `.badge`, `.summary-cards` and `.activation-panel` against a
-   stylesheet that never defined them, so the results table rendered unstyled. */
+.deny-box {
+    display: none;
+    gap: 0.55rem;
+    padding: 0.9rem 1.25rem;
+    border-top: 1px solid var(--line-soft);
+    background: rgba(0, 0, 0, 0.24);
+}
+.deny-box.open { display: flex; }
+.deny-box input { flex: 1 1 auto; }
+
+/* ----------------------------------------------------- policy authoring -- */
+
+.split-view { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+@media (max-width: 900px) { .split-view { grid-template-columns: 1fr; } }
+
+.editor-section { padding: 1.4rem 1.6rem; }
+.actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.9rem; }
+.results-section { margin-top: 2.25rem; }
+
+/* htmx toggles this by adding `.htmx-request`; without the base rule the indicator is
+   visible on a page that is not loading anything. */
+.htmx-indicator { opacity: 0; transition: opacity 0.2s; color: var(--accent); font-size: 0.81rem; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+
+pre {
+    background: rgba(0, 0, 0, 0.34);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.79rem;
+    line-height: 1.6;
+    color: var(--text-2);
+}
 
 #results-container { overflow-x: auto; }
 
-.small { font-size: 0.78rem; }
-
-.alert.error {
-    background: var(--danger-soft);
-    border-color: rgba(244, 63, 94, 0.35);
-    color: #fda4af;
-}
-.alert pre { margin: 0.5rem 0 0; background: rgba(0, 0, 0, 0.25); }
-
-.summary-cards {
-    display: flex;
-    gap: 0.9rem;
-    flex-wrap: wrap;
-    margin-bottom: 1.25rem;
-}
+.summary-cards { display: flex; gap: 0.9rem; flex-wrap: wrap; margin-bottom: 1.4rem; }
 .summary-cards .card {
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
     min-width: 150px;
-    padding: 0.85rem 1.1rem;
+    padding: 0.95rem 1.2rem;
+    border-radius: var(--radius-sm);
 }
-.summary-cards .card .value { font-size: 1.5rem; font-weight: 650; letter-spacing: -0.02em; }
-.summary-cards .card .label {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
+.summary-cards .card .value {
+    font-size: 1.55rem;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
 }
-.summary-cards .card.success { border-color: rgba(16, 185, 129, 0.4); background: var(--success-soft); }
-.summary-cards .card.success .value { color: var(--success); }
-.summary-cards .card.danger { border-color: rgba(244, 63, 94, 0.4); background: var(--danger-soft); }
-.summary-cards .card.danger .value { color: var(--danger); }
+.summary-cards .card.success { border-color: var(--allow-line); background: var(--allow-soft); }
+.summary-cards .card.success .value { color: var(--allow); }
+.summary-cards .card.danger { border-color: var(--deny-line); background: var(--deny-soft); }
+.summary-cards .card.danger .value { color: var(--deny); }
 
 .badge {
     display: inline-block;
     padding: 0.1rem 0.5rem;
-    border-radius: var(--radius-sm);
-    font-size: 0.7rem;
+    border-radius: 99px;
+    font-size: 0.69rem;
     font-weight: 650;
-    letter-spacing: 0.03em;
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
+    letter-spacing: 0.035em;
+    background: rgba(190, 200, 255, 0.14);
+    color: var(--text-2);
+    border: 1px solid var(--hairline);
 }
-.badge.allow { background: var(--success-soft); color: var(--success); }
-.badge.deny { background: var(--danger-soft); color: var(--danger); }
-.badge.neutral { background: var(--bg-elevated); color: var(--text-muted); }
+.badge.allow { background: var(--allow-soft); color: var(--allow); border-color: var(--allow-line); }
+.badge.deny { background: var(--deny-soft); color: var(--deny); border-color: var(--deny-line); }
+.badge.neutral { background: rgba(190, 200, 255, 0.1); color: var(--text-3); }
 
-.check-mark { color: var(--success); font-weight: 600; font-size: 0.8rem; }
-.x-mark { color: var(--danger); font-weight: 600; font-size: 0.8rem; }
+.check-mark { color: var(--allow); font-weight: 600; font-size: 0.8rem; }
+.x-mark { color: var(--deny); font-weight: 600; font-size: 0.8rem; }
 
 /* A changed-but-still-passing row is the interesting one in a diff: the candidate
-   decides it differently from the active bundle and both are legal. Marked, not
-   alarmed. */
-tr.row-changed { background: var(--info-soft); }
-tr.row-changed td:first-child { box-shadow: inset 2px 0 0 var(--info); }
-tr.row-fail td:first-child { box-shadow: inset 2px 0 0 var(--danger); }
+   decides it differently from the active bundle and both are legal. Marked in the
+   categorical palette, because "changed" is not a verdict. */
+tr.row-changed { background: rgba(100, 210, 255, 0.12); }
+tr.row-changed td:first-child { box-shadow: inset 3px 0 0 var(--c-cyan); }
+tr.row-fail td:first-child { box-shadow: inset 3px 0 0 var(--deny); }
 
-.activation-panel {
-    margin-top: 1.5rem;
-    padding: 1.1rem 1.25rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-}
+.activation-panel { margin-top: 1.6rem; padding: 1.3rem 1.5rem; }
 .activation-panel h3 { margin-top: 0; }
 .activation-panel p { margin-top: 0; }
 
-button.success, .btn.success {
-    background: var(--success);
-    border-color: var(--success);
-    color: #04231a;
+/* -------------------------------------------------------------- bento --- */
+
+.bento {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-bottom: 1.5rem;
+    overflow: hidden;
 }
-button.success:hover:not(:disabled), .btn.success:hover:not(:disabled) {
-    background: #34d399;
-    border-color: #34d399;
+.bento > * { position: relative; }
+.bento .b-wide { grid-column: span 2; }
+.bento .b-hero {
+    grid-column: span 4;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1.4rem;
+    padding: 1.9rem 2rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+.bento .b-hero .label { display: block; margin-bottom: 0.5rem; }
+.bento .b-hero .value {
+    font-size: 3.1rem;
+    font-weight: 600;
+    letter-spacing: -0.045em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    /* The headline figure catches the page's own light. */
+    background: linear-gradient(150deg, #ffffff 20%, var(--accent) 115%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.bento .b-hero .unit { font-size: 0.82rem; color: var(--text-3); margin-left: 0.6rem; letter-spacing: 0; font-weight: 500; }
+.bento .b-hero .breakdown { display: flex; gap: 2.2rem; flex-wrap: wrap; }
+.bento .b-hero .breakdown div { text-align: right; }
+.bento .b-hero .breakdown .k {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-3);
+    margin-bottom: 0.25rem;
+}
+.bento .b-hero .breakdown .v { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 760px) {
+    .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .bento .b-wide, .bento .b-hero { grid-column: span 2; }
+    .bento .b-hero { align-items: flex-start; flex-direction: column; }
+    .bento .b-hero .breakdown div { text-align: left; }
+}
+
+/* ------------------------------------------------------------ responsive -- */
+
+@media (max-width: 720px) {
+    .topbar { gap: 0.6rem; padding: 0 0.7rem; }
+    .brand span:not(.mark) { display: none; }
+    .topbar-right { display: none; }
+    .page { padding: 1.4rem 0.9rem 3rem; }
+    .kv { grid-template-columns: 1fr; gap: 0.15rem 0; }
+    .kv dd { margin-bottom: 0.55rem; }
+    .bento .b-hero .value { font-size: 2.4rem; }
+}
+
+/* Motion is decoration here — the aurora drift, the lamp pulse and the page transition
+   are the first things to go. Nothing below conveys state on its own. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+    }
+    @view-transition { navigation: none; }
 }

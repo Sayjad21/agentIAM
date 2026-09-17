@@ -25,57 +25,73 @@
 {% elif not pending %}
 <div class="empty">No {{ state }} escalations.</div>
 {% else %}
-<div class="table-wrap">
-    <table class="results-table">
-        <thead>
-            <tr>
-                <th>Agent</th>
-                <th>Principal</th>
-                <th>Grant scopes</th>
-                <th>Grant amount</th>
-                <th>Reason</th>
-                <th>Expires</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for e in pending %}
-            <tr id="row-{{ e.id }}">
-                <td class="mono">{{ e.agent_id }}</td>
-                <td class="mono">{{ e.principal_id }}</td>
-                <td>
-                    <div class="narrow-scopes" id="scopes-{{ e.id }}">
-                        {% for s in e.requested_scopes %}
-                        <label>
-                            <input type="checkbox" value="{{ s }}" checked onchange="validateRow('{{ e.id }}')">
-                            {{ s }}
-                        </label>
-                        {% endfor %}
-                    </div>
-                </td>
-                <td>
-                    <input
-                        type="number"
-                        class="narrow-amount"
-                        id="amount-{{ e.id }}"
-                        value="{{ e.requested_amount }}"
-                        max="{{ e.requested_amount }}"
-                        min="0"
-                        step="any"
-                        data-requested="{{ e.requested_amount }}"
-                        oninput="validateRow('{{ e.id }}')"
-                    >
-                </td>
-                <td>{{ e.reason }}</td>
-                <td class="mono">{{ e.expires_at }}</td>
-                <td style="white-space: nowrap;">
-                    <button class="btn primary" id="approve-{{ e.id }}" onclick="approve('{{ e.id }}')">Approve</button>
-                    <button class="btn danger" onclick="deny('{{ e.id }}')">Deny</button>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<div class="approvals">
+    {% for e in pending %}
+    {# One card per request. The approver has to see three things at once — what was
+       asked for, what they are about to grant, and the distance between them — and a
+       seven-column table row cannot carry that without being read sideways. #}
+    <article class="approval" id="row-{{ e.id }}">
+        <header class="approval-head">
+            <span class="pill escalate">escalate</span>
+            <span class="who">{{ e.agent_id }}</span>
+            <span class="dim">requested by <span class="mono">{{ e.principal_id }}</span></span>
+            <span class="when">expires {{ e.expires_at }}</span>
+        </header>
+
+        <div class="approval-reason">{{ e.reason }}</div>
+
+        <div class="approval-grant">
+            <div>
+                <span class="label">Grant scopes — uncheck to narrow</span>
+                <div class="narrow-scopes" id="scopes-{{ e.id }}">
+                    {% for s in e.requested_scopes %}
+                    <label>
+                        <input type="checkbox" value="{{ s }}" checked onchange="validateRow('{{ e.id }}')">
+                        <span>{{ s }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div>
+                <span class="label">Grant amount</span>
+                <input
+                    type="number"
+                    class="narrow-amount"
+                    id="amount-{{ e.id }}"
+                    value="{{ e.requested_amount }}"
+                    max="{{ e.requested_amount }}"
+                    min="0"
+                    step="any"
+                    data-requested="{{ e.requested_amount }}"
+                    data-scopes="{{ e.requested_scopes | length }}"
+                    oninput="validateRow('{{ e.id }}')"
+                >
+                <div class="narrow-cap">ceiling {{ e.requested_amount }} — above this the server returns 400</div>
+            </div>
+        </div>
+
+        {# The narrowing made visible before it is sent. EC-A09 is a server-side gate;
+           this is the same invariant drawn, so an approver sees the direction of travel
+           rather than discovering it in an error. #}
+        <div class="delta">
+            <div class="meter"><div class="seg-granted" id="delta-bar-{{ e.id }}" style="width:100%"></div></div>
+            <span id="delta-text-{{ e.id }}">granting everything requested</span>
+        </div>
+
+        <div class="approval-actions">
+            <button class="btn primary" id="approve-{{ e.id }}" onclick="approve('{{ e.id }}')">Approve narrowed grant</button>
+            <button class="btn danger" onclick="toggleDeny('{{ e.id }}')">Deny…</button>
+            <span class="spacer"></span>
+            <span class="approval-msg" id="msg-{{ e.id }}"></span>
+        </div>
+
+        <div class="deny-box" id="deny-{{ e.id }}">
+            <input type="text" id="deny-reason-{{ e.id }}" placeholder="Reason for denial — recorded in the ledger">
+            <button class="btn danger" onclick="deny('{{ e.id }}')">Confirm denial</button>
+            <button class="btn ghost" onclick="toggleDeny('{{ e.id }}')">Cancel</button>
+        </div>
+    </article>
+    {% endfor %}
 </div>
 {% endif %}
 {% endblock %}
@@ -85,27 +101,84 @@
     // T-043: the acting approver comes from the session cookie (already attached by
     // the browser to same-origin fetch calls) — never from anything typed here.
 
+    const fmt = (n) => Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 });
+
     // T-050: the approve button is disabled whenever a row's own inputs already
     // describe a widening — server-side `NarrowingWidensRequest` is still the real
     // gate (EC-A09), this only saves the approver a round trip for the obvious case.
     function validateRow(id) {
         const amountInput = document.getElementById(`amount-${id}`);
         const requested = Number(amountInput.dataset.requested);
+        const requestedScopes = Number(amountInput.dataset.scopes);
         const amount = Number(amountInput.value);
         const checked = document.querySelectorAll(`#scopes-${id} input:checked`).length;
         const invalid = !(amount >= 0) || amount > requested || checked === 0;
         amountInput.setCustomValidity(invalid ? "invalid" : "");
         document.getElementById(`approve-${id}`).disabled = invalid;
+
+        // The bar tracks BOTH axes of the narrowing. Tracking only the amount meant
+        // dropping a scope moved the sentence to "1 of 2 scopes" while the bar stayed
+        // pegged at 100% — the picture contradicting the caption underneath it.
+        const amountRatio = requested > 0 ? Math.max(0, Math.min(1, amount / requested)) : 1;
+        const scopeRatio = requestedScopes > 0 ? checked / requestedScopes : 1;
+        const ratio = amountRatio * scopeRatio;
+        const bar = document.getElementById(`delta-bar-${id}`);
+        const text = document.getElementById(`delta-text-${id}`);
+        bar.style.width = (ratio * 100).toFixed(1) + "%";
+
+        if (checked === 0) {
+            text.textContent = "no scopes selected — an approval must grant at least one";
+        } else if (amount > requested) {
+            text.textContent = "above the requested ceiling — the server will refuse this";
+        } else if (checked === requestedScopes && amount === requested) {
+            text.textContent = "granting everything requested";
+        } else {
+            const parts = [];
+            if (checked !== requestedScopes) parts.push(`${checked} of ${requestedScopes} scopes`);
+            if (amount !== requested) {
+                const cut = requested > 0 ? (100 - (amount / requested) * 100).toFixed(0) : 0;
+                parts.push(`${fmt(amount)} of ${fmt(requested)} (−${cut}%)`);
+            }
+            text.innerHTML = "narrowed to <strong>" + parts.join("</strong>, <strong>") + "</strong>";
+        }
     }
 
-    function narrowedScopes(id) {
-        return Array.from(document.querySelectorAll(`#scopes-${id} input:checked`))
-            .map((box) => box.value);
+    function toggleDeny(id) {
+        document.getElementById(`deny-${id}`).classList.toggle("open");
+        const field = document.getElementById(`deny-reason-${id}`);
+        if (field) field.focus();
+    }
+
+    // Inline, not `alert()`. A modal dialog mid-demo hides the thing it is describing,
+    // and the outcome of an approval belongs on the record it resolved.
+    function say(id, text, kind) {
+        const msg = document.getElementById(`msg-${id}`);
+        msg.textContent = text;
+        msg.className = "approval-msg" + (kind ? " " + kind : "");
+    }
+
+    function resolve(id, text) {
+        const card = document.getElementById(`row-${id}`);
+        if (!card) return;
+        card.classList.add("resolved");
+        for (const el of card.querySelectorAll("button, input")) el.disabled = true;
+        say(id, text, "ok");
+        setTimeout(() => card.remove(), 2200);
+    }
+
+    function failed(id, res, body, verb) {
+        if (res.status === 401) {
+            say(id, "Sign in first: " + (body.detail || "login required"), "err");
+        } else {
+            say(id, verb + " failed: " + (body.detail || res.status), "err");
+        }
     }
 
     async function approve(id) {
-        const scopes = narrowedScopes(id);
+        const scopes = Array.from(document.querySelectorAll(`#scopes-${id} input:checked`))
+            .map((box) => box.value);
         const amountInput = document.getElementById(`amount-${id}`);
+        say(id, "approving…");
         const res = await fetch(`/v1/escalations/${id}/approve`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -115,36 +188,23 @@
             }),
         });
         const body = await res.json();
-        if (!res.ok) {
-            if (res.status === 401) {
-                alert("Sign in first: " + (body.detail || "login required"));
-            } else {
-                alert("Approve failed: " + (body.detail || res.status));
-            }
-            return;
-        }
-        alert("Approved. Elevated token minted; see the network tab for the full response.");
-        document.getElementById(`row-${id}`)?.remove();
+        if (!res.ok) { failed(id, res, body, "Approve"); return; }
+        resolve(id, "approved — elevated token minted for " + scopes.length
+            + " scope" + (scopes.length === 1 ? "" : "s"));
     }
 
     async function deny(id) {
-        const reason = prompt("Reason for denial:");
-        if (!reason) return;
+        const reason = document.getElementById(`deny-reason-${id}`).value.trim();
+        if (!reason) { say(id, "a denial needs a reason", "err"); return; }
+        say(id, "denying…");
         const res = await fetch(`/v1/escalations/${id}/deny`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({reason}),
         });
         const body = await res.json();
-        if (!res.ok) {
-            if (res.status === 401) {
-                alert("Sign in first: " + (body.detail || "login required"));
-            } else {
-                alert("Deny failed: " + (body.detail || res.status));
-            }
-            return;
-        }
-        document.getElementById(`row-${id}`)?.remove();
+        if (!res.ok) { failed(id, res, body, "Deny"); return; }
+        resolve(id, "denied");
     }
 </script>
 {% endblock %}
