@@ -16,7 +16,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-down', 'logs', 'ps',
+    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-down', 'demo-reset',
+                 'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
                  'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'benchmarks', 'evidence',
                  'clean', 'nuke')]
@@ -64,6 +65,7 @@ switch ($Target) {
             'security'         = 'Run bandit, pip-audit, the SBOM check, and the secret-scan test'
             'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
             'demo-seed'        = 'Drive the demo scenario through a running stack (T-057)'
+            'demo-reset'       = 'Wipe all demo data and bring the stack back up empty'
             'benchmarks'       = 'Regenerate docs/benchmarks/performance.md from committed JSON'
             'evidence'         = 'Regenerate docs/evidence/evidence-pack.html (T-055)'
             'clean'            = 'Remove caches and build artifacts'
@@ -85,6 +87,14 @@ switch ($Target) {
     'demo-down' {
         Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
                       'docker-compose.demo.yml', 'down')
+    }
+    'demo-reset' {
+        # Append-only audit chain: a rehearsal's decisions, spend and escalations stay until
+        # the volumes go. Destroys all demo data. Run demo-seed after.
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'down', '-v')
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'up', '-d', '--wait', '--build')
     }
     'logs'      { Invoke-Step @('docker', 'compose', 'logs', '-f') }
     'ps'        { Invoke-Step @('docker', 'compose', 'ps') }
@@ -154,7 +164,8 @@ switch ($Target) {
                       'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
                       'python', 'scripts/seed_demo.py', '--drive',
                       '--tokens', '/secrets/demo-tokens.json',
-                      '--pep-url', 'http://pep:8080')
+                      '--pep-url', 'http://pep:8080',
+                      '--control-plane-api-url', 'http://controlplane:8000')
     }
     'benchmarks' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_benchmark_results.py') }
     'evidence' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_evidence_pack.py') }

@@ -46,6 +46,8 @@ if str(_REPO_ROOT) not in sys.path:
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    import httpx
+
     from agentiam_core.models import Mandate
 
 #: Named in `docker-compose.demo.yml` before this script runs, so it cannot be random.
@@ -59,9 +61,9 @@ DEMO_INTENT: Final = "Procure 500 units of packaging stock, budget BDT 500,000."
 DEFAULT_TOKENS_FILE: Final = "demo-tokens.json"
 
 #: The delegation tree. Each child is *strictly* narrower than the root, and they differ
-#: from one another — three agents that all held the same authority would demonstrate
-#: nothing. `DEMO.md` beat 2 is "root spawns 3 sub-agents, each node's scopes visibly
-#: smaller"; this is that, with the ceilings that make beat 3 and beat 4 land.
+#: from one another — agents that all held the same authority would demonstrate nothing.
+#: `DEMO.md` beat 2 is "root spawns sub-agents, each node's scopes visibly smaller"; this is
+#: that, with the ceilings that make beat 3 and beat 4 land.
 _CHILDREN: Final[tuple[tuple[str, str, frozenset[str], Decimal], ...]] = (
     # Reads documents, spends nothing. Beat 3's "the doc-reader attempts a payment".
     ("agt-doc-reader", "reader", frozenset({"invoice:read", "vendor:read"}), Decimal("0.0000")),
@@ -69,10 +71,20 @@ _CHILDREN: Final[tuple[tuple[str, str, frozenset[str], Decimal], ...]] = (
     ("agt-negotiator", "worker", frozenset({"vendor:read"}), Decimal("50000.0000")),
     # Pays, and cannot read anything.
     ("agt-payer", "payer", frozenset({"payment:initiate"}), Decimal("200000.0000")),
+    # Checks the books: invoices only, no vendors, no money.
+    ("agt-auditor", "reader", frozenset({"invoice:read"}), Decimal("0.0000")),
+    # Reads an invoice and pays it — the only agent holding both, and a smaller ceiling.
+    (
+        "agt-treasury",
+        "payer",
+        frozenset({"invoice:read", "payment:initiate"}),
+        Decimal("100000.0000"),
+    ),
 )
 
-#: Two more levels, to prove the tree is a tree and not a star. Each ceiling is a slice of
-#: its parent's, which is the attenuation invariant made visible.
+#: The levels below the root's children, to prove the tree is a tree and not a star. Each
+#: entry narrows its parent — fewer scopes, a smaller ceiling, or both — which is the
+#: attenuation invariant made visible. Parents are listed before their children.
 #:
 #: `agt-subcontractor` sits at **depth 3**, and that is the point of it: the signed corpus
 #: bundle permits `payment:initiate` only `when amount <= 500000 && principal.depth <= 2`,
@@ -80,12 +92,41 @@ _CHILDREN: Final[tuple[tuple[str, str, frozenset[str], Decimal], ...]] = (
 #: scenario has no POLICY_DENIED in it at all — the mandate's own ceiling and the policy's
 #: are both 500,000, so no amount can be refused by one and not the other.
 _DESCENDANTS: Final[tuple[tuple[str, str, str, frozenset[str], Decimal], ...]] = (
+    ("agt-doc-reader", "agt-ocr-scanner", "reader", frozenset({"invoice:read"}), Decimal("0.0000")),
+    (
+        "agt-doc-reader",
+        "agt-invoice-classifier",
+        "reader",
+        frozenset({"invoice:read"}),
+        Decimal("0.0000"),
+    ),
+    (
+        "agt-negotiator",
+        "agt-quote-collector",
+        "worker",
+        frozenset({"vendor:read"}),
+        Decimal("10000.0000"),
+    ),
+    (
+        "agt-negotiator",
+        "agt-price-checker",
+        "worker",
+        frozenset({"vendor:read"}),
+        Decimal("10000.0000"),
+    ),
     (
         "agt-payer",
         "agt-settlement",
         "payer",
         frozenset({"payment:initiate"}),
         Decimal("25000.0000"),
+    ),
+    (
+        "agt-treasury",
+        "agt-reconciler",
+        "payer",
+        frozenset({"payment:initiate"}),
+        Decimal("20000.0000"),
     ),
     (
         "agt-settlement",
@@ -239,95 +280,237 @@ def seed(out: Path, database_url: str) -> int:
     return 0
 
 
-#: The traffic. Each line is (label, token, method, path, body, why it is in the demo).
-#: Chosen so every console page has something to show and every distinct refusal is
-#: represented: allows, a scope refusal, a caveat-ceiling refusal, the **mandate's own**
-#: ceiling, and a policy refusal.
+_Call = tuple[str, str, str, str, dict[str, Any] | None]
+
+
+def _read_invoice(label: str, who: str, invoice: str) -> _Call:
+    return (label, who, "GET", f"/proxy/invoices/{invoice}", None)
+
+
+def _read_vendor(label: str, who: str, vendor: str) -> _Call:
+    return (label, who, "GET", f"/proxy/vendors/{vendor}", None)
+
+
+def _pay(label: str, who: str, amount: str, account: str) -> _Call:
+    return (
+        label,
+        who,
+        "POST",
+        "/proxy/payments",
+        {"amount": amount, "recipient": {"account_id": account}},
+    )
+
+
+def _build_traffic() -> tuple[_Call, ...]:
+    """The scenario's calls, in the order they are sent.
+
+    Three parts. **Spawn**: every agent's first call, root first and then down the tree, so
+    the identity tree grows one node at a time while `drive` pauses between them. **Work**:
+    rounds of ordinary, allowed traffic from every agent that can do something. **Refusals**:
+    a handful, one per distinct refusal layer, spread through the work rather than bunched.
+
+    Payments stay well under the PEP's 5,000 lease (`pep_service.DEFAULT_LEASE_SIZE`): a
+    request larger than the lease is refused with LEASE_UNAVAILABLE no matter how much the
+    pool holds, which is not a refusal this demo is trying to show.
+    """
+    invoices = ("inv_001", "inv_002", "inv_003")
+    vendors = ("ven_01", "ven_02")
+
+    spawn: list[_Call] = [
+        _read_invoice("root reads an invoice", "root", "inv_001"),
+        _read_invoice("doc-reader reads an invoice", "agt-doc-reader", "inv_001"),
+        _read_vendor("negotiator looks up a vendor", "agt-negotiator", "ven_01"),
+        _pay("payer settles a small invoice", "agt-payer", "1250.0000", "acct_9001"),
+        _read_invoice("auditor checks an invoice", "agt-auditor", "inv_003"),
+        _read_invoice("treasury reads an invoice", "agt-treasury", "inv_002"),
+        _read_invoice("ocr scanner reads an invoice", "agt-ocr-scanner", "inv_001"),
+        _read_invoice("classifier reads an invoice", "agt-invoice-classifier", "inv_002"),
+        _read_vendor("quote collector looks up a vendor", "agt-quote-collector", "ven_01"),
+        _read_vendor("price checker looks up a vendor", "agt-price-checker", "ven_02"),
+        _pay("settlement agent pays within its slice", "agt-settlement", "900.0000", "acct_9002"),
+        _pay("reconciler clears a balance", "agt-reconciler", "450.0000", "acct_9005"),
+    ]
+
+    work: list[_Call] = []
+    for n in range(8):
+        inv = invoices[n % len(invoices)]
+        inv_next = invoices[(n + 1) % len(invoices)]
+        ven = vendors[n % len(vendors)]
+        ven_next = vendors[(n + 1) % len(vendors)]
+        work += [
+            _read_invoice("root reviews an invoice", "root", inv),
+            _read_invoice("doc-reader reads an invoice", "agt-doc-reader", inv_next),
+            _read_invoice("ocr scanner reads an invoice", "agt-ocr-scanner", inv),
+            _read_vendor("quote collector looks up a vendor", "agt-quote-collector", ven),
+            _pay("payer settles an invoice", "agt-payer", f"{1100 + 75 * n}.0000", "acct_9001"),
+            _read_invoice("classifier reads an invoice", "agt-invoice-classifier", inv_next),
+            _read_vendor("price checker looks up a vendor", "agt-price-checker", ven_next),
+            _read_invoice("auditor checks an invoice", "agt-auditor", inv),
+            _pay(
+                "settlement agent pays a vendor",
+                "agt-settlement",
+                f"{600 + 40 * n}.0000",
+                "acct_9002",
+            ),
+            _read_vendor("negotiator looks up a vendor", "agt-negotiator", ven),
+            _read_invoice("treasury reads an invoice", "agt-treasury", inv),
+            _pay("treasury pays an invoice", "agt-treasury", f"{1400 + 50 * n}.0000", "acct_9003"),
+            _read_vendor("doc-reader checks a vendor", "agt-doc-reader", ven_next),
+            _pay(
+                "reconciler clears a balance", "agt-reconciler", f"{350 + 25 * n}.0000", "acct_9005"
+            ),
+        ]
+
+    # One line per refusal layer the system has, and no more — each is a different reason
+    # code in the console, and the point is that they are rare against the work around them.
+    refusals: list[tuple[int, _Call]] = [
+        # Beat 3: the read-only agent attempts a payment. Refused by its own scope subset.
+        (
+            20,
+            _pay("doc-reader attempts a payment", "agt-doc-reader", "1500.0000", "acct_9001"),
+        ),
+        # Beat 4's shape: over the child's own ceiling, well under the mandate's.
+        (
+            45,
+            _pay(
+                "settlement agent exceeds its ceiling", "agt-settlement", "30000.0000", "acct_9002"
+            ),
+        ),
+        # Over the *mandate's* own ceiling, so the token refuses it before Cedar is consulted.
+        (
+            70,
+            _pay("root attempts more than the mandate grants", "root", "600000.0000", "acct_9003"),
+        ),
+        # Depth 3, and the signed bundle permits payments only at `principal.depth <= 2`. The
+        # token is entirely valid; this is the *policy* layer refusing. It is also the
+        # sub-contractor's only call — it holds nothing else — so it is what spawns it.
+        (
+            95,
+            _pay(
+                "sub-contractor is too deep for the policy",
+                "agt-subcontractor",
+                "100.0000",
+                "acct_9004",
+            ),
+        ),
+    ]
+    for offset, (at, call) in enumerate(refusals):
+        work.insert(at + offset, call)
+
+    return (*spawn, *work)
+
+
+#: The traffic. Each line is (label, token, method, path, body). Chosen so every console page
+#: has something to show: mostly allows, and one of each distinct refusal — a scope
+#: refusal, a caveat-ceiling refusal, the **mandate's own** ceiling, and a policy refusal.
 #:
 #: The last two were one line in the console until TODO item 17 — the mandate's own
 #: per-request ceiling reported `BUDGET_EXHAUSTED_CAVEAT`, so "root attempts more than the
 #: mandate grants" and "settlement agent exceeds its ceiling" read as the same refusal. They
 #: are not: one is an agent narrowing itself, the other is the grant it never had.
-_TRAFFIC: Final[tuple[tuple[str, str, str, str, dict[str, Any] | None], ...]] = (
-    ("root reads an invoice", "root", "GET", "/proxy/invoices/inv_001", None),
-    ("root reads another", "root", "GET", "/proxy/invoices/inv_002", None),
-    ("doc-reader reads an invoice", "agt-doc-reader", "GET", "/proxy/invoices/inv_001", None),
-    ("doc-reader reads a third", "agt-doc-reader", "GET", "/proxy/invoices/inv_003", None),
-    # Beat 3: the read-only agent attempts a payment. Refused by its own scope subset.
+_TRAFFIC: Final[tuple[_Call, ...]] = _build_traffic()
+
+#: Requests for more authority than a token carries, opened in the escalation queue so the
+#: approve/deny screen has something to act on. Each is (agent, scopes, amount, reason).
+#:
+#: **Opened by this script through `POST /v1/escalations`, not raised by the PEP.** The
+#: deployed PEP has no escalation sink wired and no demo token carries a `RequiresApproval`
+#: caveat, so no live call is ever held for approval. What *is* real is everything after:
+#: the queue, narrowing-only approval, the approver allowlist, separation of duties, and the
+#: elevated token minted on approve.
+#:
+#: Both name the mandate's principal, so that person is refused approving them (their own
+#: agent's request) and a second approver has to. The negotiator's asks for two scopes so
+#: an approver can visibly drop one.
+_ESCALATIONS: Final[tuple[tuple[str, tuple[str, ...], Decimal, str], ...]] = (
     (
-        "doc-reader attempts a payment",
-        "agt-doc-reader",
-        "POST",
-        "/proxy/payments",
-        {"amount": "1500.0000", "recipient": {"account_id": "acct_9001"}},
+        "agt-treasury",
+        ("payment:initiate",),
+        Decimal("75000.0000"),
+        "Bulk packaging order from Padma Supplies, far above a normal payment.",
     ),
-    # The negotiator's own scope. Without a call of its own it has no decisions, and the
-    # identity tree — derived from the audit chain — would not show it at all.
-    ("negotiator looks up a vendor", "agt-negotiator", "GET", "/proxy/vendors/ven_01", None),
-    # And the boundary of that scope: it holds vendor:read and nothing else.
     (
-        "negotiator attempts to read an invoice",
         "agt-negotiator",
-        "GET",
-        "/proxy/invoices/inv_001",
-        None,
-    ),
-    # Refused by scope too, the other way round: the payer holds no read scope.
-    ("payer attempts to read an invoice", "agt-payer", "GET", "/proxy/invoices/inv_001", None),
-    (
-        "payer settles a small invoice",
-        "agt-payer",
-        "POST",
-        "/proxy/payments",
-        {"amount": "1250.0000", "recipient": {"account_id": "acct_9001"}},
-    ),
-    (
-        "settlement agent pays within its slice",
-        "agt-settlement",
-        "POST",
-        "/proxy/payments",
-        {"amount": "900.0000", "recipient": {"account_id": "acct_9002"}},
-    ),
-    # Beat 4's shape: over the child's own ceiling, well under the mandate's.
-    (
-        "settlement agent exceeds its ceiling",
-        "agt-settlement",
-        "POST",
-        "/proxy/payments",
-        {"amount": "30000.0000", "recipient": {"account_id": "acct_9002"}},
-    ),
-    # Over the *mandate's* own ceiling, so the token refuses it before Cedar is consulted.
-    (
-        "root attempts more than the mandate grants",
-        "root",
-        "POST",
-        "/proxy/payments",
-        {"amount": "600000.0000", "recipient": {"account_id": "acct_9003"}},
-    ),
-    # Depth 3, and the signed bundle permits payments only at `principal.depth <= 2`. The
-    # token is entirely valid; this is the *policy* layer refusing, which no other line
-    # here demonstrates.
-    (
-        "sub-contractor is too deep for the policy",
-        "agt-subcontractor",
-        "POST",
-        "/proxy/payments",
-        {"amount": "100.0000", "recipient": {"account_id": "acct_9004"}},
+        ("vendor:read", "payment:initiate"),
+        Decimal("20000.0000"),
+        "Deposit to lock Jamuna Traders' quote; the negotiator cannot pay on its own.",
     ),
 )
 
+#: How long an opened escalation stays actionable. The API default is 15 minutes, which is
+#: shorter than the gap between seeding the stack and showing the queue.
+ESCALATION_TTL_S: Final = 8 * 3600.0
 
-def drive(tokens_file: Path, pep_url: str, control_plane_url: str) -> int:
-    """Phase two: send the scenario's traffic so the console pages have content."""
+#: Seconds `drive` waits before an agent's first call. The identity tree pushes a diff every
+#: 3 s (`tree_api`), so anything shorter lands several agents in one frame and the tree
+#: appears at once instead of growing.
+DEFAULT_SPAWN_DELAY_S: Final = 3.5
+#: Seconds between every other call, so the decision stream scrolls rather than jumps.
+DEFAULT_CALL_DELAY_S: Final = 0.3
+
+
+def _open_escalations(client: httpx.Client, api_url: str, payload: dict[str, Any]) -> int:
+    """Put `_ESCALATIONS` in the queue. Returns how many were opened."""
+    from agentiam_core.hashing import intent_hash
+
+    opened = 0
+    for agent_id, scopes, amount, reason in _ESCALATIONS:
+        response = client.post(
+            f"{api_url}/v1/escalations",
+            json={
+                # A fresh id each run: the queue refuses a second escalation for one
+                # decision, and a re-run should add to the queue rather than fail.
+                "decision_id": str(uuid.uuid4()),
+                "task_id": payload["task_id"],
+                "agent_id": agent_id,
+                "principal_id": payload["principal_id"],
+                "intent_hash": intent_hash(payload["intent"]),
+                "requested_scopes": list(scopes),
+                "requested_amount": str(amount),
+                "reason": reason,
+                "ttl_s": ESCALATION_TTL_S,
+            },
+        )
+        status = "opened" if response.status_code == 201 else f"FAILED {response.status_code}"
+        print(f"  {status:8s} {agent_id:18s} asks for {', '.join(scopes)} up to {amount}")
+        opened += response.status_code == 201
+    return opened
+
+
+def drive(
+    tokens_file: Path,
+    pep_url: str,
+    control_plane_url: str,
+    *,
+    control_plane_api_url: str | None = None,
+    spawn_delay: float = DEFAULT_SPAWN_DELAY_S,
+    call_delay: float = DEFAULT_CALL_DELAY_S,
+) -> int:
+    """Phase two: send the scenario's traffic so the console pages have content.
+
+    Paced on purpose. Open the identity tree before running this and each agent appears as
+    it makes its first call; ``spawn_delay=0, call_delay=0`` sends everything at once.
+    """
+    import time
+
     import httpx
 
     payload = json.loads(tokens_file.read_text(encoding="utf-8"))
     tokens = payload["tokens"]
 
-    print(f"driving {len(_TRAFFIC)} calls through {pep_url}\n")
+    print(f"driving {len(_TRAFFIC)} calls through {pep_url}")
+    print(f"  watch: {control_plane_url}/identity-tree?task_id={payload['task_id']}\n")
     outcomes: dict[str, int] = {}
+    spawned: set[str] = set()
     with httpx.Client(timeout=30.0) as client:
         for label, who, method, path, body in _TRAFFIC:
+            if who not in spawned:
+                if spawned and spawn_delay > 0:
+                    time.sleep(spawn_delay)
+                spawned.add(who)
+                print(f"  -- spawn {who}")
+            elif call_delay > 0:
+                time.sleep(call_delay)
             response = client.request(
                 method,
                 f"{pep_url}{path}",
@@ -342,13 +525,16 @@ def drive(tokens_file: Path, pep_url: str, control_plane_url: str) -> int:
             outcomes[reason] = outcomes.get(reason, 0) + 1
             print(f"  {verdict} {response.status_code}  {label:44s} {reason}")
 
+        print("\nescalations:")
+        _open_escalations(client, control_plane_api_url or control_plane_url, payload)
+
     print("\noutcomes: " + ", ".join(f"{k}={v}" for k, v in sorted(outcomes.items())))
     print("\nNow look at:")
     print(f"  {control_plane_url}/                      overview")
     print(f"  {control_plane_url}/decisions             every call above")
     print(f"  {control_plane_url}/budgets               the pool moving")
     print(f"  {control_plane_url}/identity-tree?task_id={payload['task_id']}")
-    print(f"  {control_plane_url}/audit                 the hash-chained ledger")
+    print(f"  {control_plane_url}/escalations           approve one (sign in as the CFO)")
     return 0
 
 
@@ -374,6 +560,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Send the scenario's traffic through a running PEP instead of seeding.",
     )
     parser.add_argument("--pep-url", default="http://localhost:8082")
+    parser.add_argument(
+        "--control-plane-api-url",
+        default=None,
+        help="Where --drive opens escalations, if not --control-plane-url (e.g. inside compose).",
+    )
+    parser.add_argument(
+        "--spawn-delay",
+        type=float,
+        default=DEFAULT_SPAWN_DELAY_S,
+        help="Seconds to pause before each agent's first call, so the tree grows visibly.",
+    )
+    parser.add_argument(
+        "--call-delay",
+        type=float,
+        default=DEFAULT_CALL_DELAY_S,
+        help="Seconds between the other calls. 0 with --spawn-delay 0 sends all at once.",
+    )
     parser.add_argument("--control-plane-url", default="http://localhost:8000")
     parser.add_argument(
         "--tokens",
@@ -395,6 +598,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.tokens or (args.out / DEFAULT_TOKENS_FILE),
             args.pep_url.rstrip("/"),
             args.control_plane_url.rstrip("/"),
+            control_plane_api_url=args.control_plane_api_url,
+            spawn_delay=args.spawn_delay,
+            call_delay=args.call_delay,
         )
 
     database_url = (

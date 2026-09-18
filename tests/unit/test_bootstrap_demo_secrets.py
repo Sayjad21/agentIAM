@@ -211,6 +211,22 @@ class TestIdempotency:
 
         assert first_sig == second_sig
 
+    def test_a_second_run_refreshes_a_stale_role_map_without_rotating(self, tmp_path: Path) -> None:
+        """An agent added to the demo tree must reach an existing secrets volume.
+
+        Otherwise its payments are refused by the sensitivity forbid until someone rotates
+        the keys by hand — and rotating invalidates every token already minted.
+        """
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        first_key = (tmp_path / "root_public_key.hex").read_text(encoding="utf-8")
+        (tmp_path / "role_assignments.json").write_text("{}", encoding="utf-8")
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+
+        roles = json.loads((tmp_path / "role_assignments.json").read_text(encoding="utf-8"))
+        assert roles == bootstrap_demo_secrets.ROLE_ASSIGNMENTS
+        assert (tmp_path / "root_public_key.hex").read_text(encoding="utf-8") == first_key
+
     def test_force_does_rotate(self, tmp_path: Path) -> None:
         bootstrap_demo_secrets.main(["--out", str(tmp_path)])
         first = (tmp_path / "root_public_key.hex").read_text(encoding="utf-8")
