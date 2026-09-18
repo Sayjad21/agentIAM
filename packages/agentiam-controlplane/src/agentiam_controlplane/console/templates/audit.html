@@ -88,6 +88,10 @@
         </div>
         <div class="drawer-section">
             <h3>Custody chain — task <span class="mono" id="custody-task"></span></h3>
+            {# The answer to the question this drawer is opened to ask, above the chain
+               rather than inside it: every link shares one principal, so repeating it on
+               each row would bury the name it exists to show. #}
+            <div id="custody-principal" class="custody-principal" hidden></div>
             <div class="chain" id="custody-chain"></div>
         </div>
     </div>
@@ -235,6 +239,39 @@ async function loadCustody(taskId) {
     const data = await resp.json();
 
     document.getElementById("custody-task").textContent = data.task_id;
+
+    // Who authorized all of this. Bound into the signed root token and read back off it by
+    // the enforcement point, so it cannot be set by a request header — which is what makes
+    // it worth showing rather than just logging.
+    const principalBox = document.getElementById("custody-principal");
+    const principals = data.principals || [];
+    principalBox.textContent = "";
+    principalBox.hidden = principals.length === 0;
+    if (principals.length) {
+        const label = document.createElement("span");
+        label.className = "custody-principal-label";
+        label.textContent = "Authorized by";
+        const who = document.createElement("span");
+        who.className = "mono";
+        who.textContent = principals.join(", ");
+        principalBox.append(label, who);
+
+        // Only when something actually widened this task. Nothing writes it yet, so it is
+        // absent rather than shown as an empty row — an "elevated by: —" line on every
+        // chain would read as a feature that is always off.
+        const approvers = [...new Set(
+            data.entries.map(e => e.elevated_by).filter(Boolean)
+        )];
+        if (approvers.length) {
+            const elevLabel = document.createElement("span");
+            elevLabel.className = "custody-principal-label";
+            elevLabel.textContent = "Elevated by";
+            const elev = document.createElement("span");
+            elev.className = "mono";
+            elev.textContent = approvers.join(", ");
+            principalBox.append(elevLabel, elev);
+        }
+    }
 
     if (!data.entries.length) {
         const d = document.createElement("div");
