@@ -8,149 +8,418 @@
    this the whole page is a blank SVG the moment the network is unavailable. #}
 <script src="/static/vendor/d3-7.min.js"></script>
 <style>
-    /* Tree-local only. Anything that could be shared (pills, cards, buttons, the empty
-       state) comes from style.css so this page cannot drift from the others again. */
-
+    /* Tree Layout Canvas & Graph Workbench */
     .tree-layout {
         position: relative;
         display: flex;
-        /* Fill what the top bar leaves, minus the page head. */
-        height: calc(100vh - var(--nav-height) - 112px);
-        min-height: 420px;
-        border: 1px solid var(--hairline);
+        height: calc(100vh - var(--nav-height) - 130px);
+        min-height: 480px;
+        border: 1px solid var(--border);
         border-radius: var(--radius);
         box-shadow: var(--specular);
         overflow: hidden;
-        /* The canvas is a glass pane too — the aurora runs behind the delegation graph,
-           with a dot grid etched into the surface so pan and zoom have a reference. */
-        -webkit-backdrop-filter: var(--blur-regular);
-        backdrop-filter: var(--blur-regular);
-        background:
-            radial-gradient(circle at 1px 1px, rgba(255,255,255,0.07) 1px, transparent 0)
-            0 0 / 26px 26px,
-            var(--mat-thin);
+        background-color: var(--bg);
+        background-image: radial-gradient(circle at 1px 1px, var(--border-strong) 1px, transparent 0);
+        background-size: 24px 24px;
+        background-color: #FAFAFA;
+        background-image: radial-gradient(#CBD5E1 1.2px, transparent 1.2px);
+        background-size: 20px 20px;
     }
 
     #tree-container { flex: 1 1 auto; min-width: 0; }
     #tree-container svg { display: block; width: 100%; height: 100%; cursor: grab; }
     #tree-container svg:active { cursor: grabbing; }
 
-    /* The panel slides over the canvas instead of resizing it: a reflow mid-transition
-       makes the d3 layout jump, which reads as a glitch rather than a detail view. */
+    /* Right Docked Detail Panel */
     #side-panel {
         position: absolute;
         top: 0;
         right: 0;
         bottom: 0;
-        width: 380px;
+        width: 440px;
         max-width: 92%;
-        padding: 1.25rem;
+        padding: 1.5rem;
         overflow-y: auto;
-        /* Thick material, not thin: the panel sits over a live canvas, and caveats read
-           through a lightly-blurred tree are caveats nobody can check. */
-        background: rgba(20, 20, 26, 0.72);
-        -webkit-backdrop-filter: var(--blur-thick);
-        backdrop-filter: var(--blur-thick);
-        border-left: 1px solid var(--hairline);
-        box-shadow: var(--specular-raised);
+        background: var(--surface);
+        border-left: 1px solid var(--border);
+        box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+        color: var(--text);
         transform: translateX(100%);
-        transition: transform 0.24s ease;
+        transition: transform 0.25s var(--ease);
+        z-index: 50;
     }
     #side-panel.open { transform: translateX(0); }
 
     .close-btn {
         position: absolute;
-        top: 0.75rem;
-        right: 0.75rem;
-        padding: 0.1rem 0.45rem;
-        font-size: 1.1rem;
-        line-height: 1.2;
-        background: transparent;
-        border-color: transparent;
-        color: var(--text-muted);
+        top: 1rem;
+        right: 1rem;
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border-radius: var(--radius-xs);
+        font-size: 1.15rem;
+        line-height: 1;
+        background: var(--surface-subtle);
+        border: 1px solid var(--border);
+        color: var(--text-3);
+        cursor: pointer;
+        transition: background 0.15s var(--ease), color 0.15s var(--ease);
     }
-    .close-btn:hover { background: var(--surface-3); color: var(--text); border-color: var(--line); }
+    .close-btn:hover { background: var(--surface-hover); color: var(--text); }
+
+    #panel-agent-id {
+        margin: 0 0 0.85rem;
+        padding-right: 2rem;
+    }
 
     .status-badge {
         display: inline-block;
-        padding: 0.2rem 0.6rem;
-        margin-bottom: 1rem;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        font-weight: 600;
+        padding: 0.18rem 0.6rem;
+        margin-bottom: 1.2rem;
+        border-radius: var(--radius-xs);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
     }
-    .status-active { background: var(--success-soft); color: var(--success); border: 1px solid rgba(16,185,129,0.25); }
-    .status-revoked { background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(244,63,94,0.25); }
-    .status-escalated { background: var(--warning-soft); color: var(--warning); border: 1px solid rgba(245,158,11,0.25); }
+    .status-active { background: var(--allow-soft); color: var(--allow-text); border: 1px solid var(--allow-line); }
+    .status-revoked { background: var(--neutral-soft); color: var(--neutral-text); border: 1px solid var(--neutral-line); }
+    .status-escalated { background: var(--escalate-soft); color: var(--escalate-text); border: 1px solid var(--escalate-line); }
+    .status-breached { background: var(--deny-soft); color: var(--deny-text); border: 1px solid var(--deny-line); }
 
-    .caveat-block { margin-bottom: 0.9rem; }
-    .caveat-block pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+    .panel-budget-box {
+        background: var(--surface-subtle);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xs);
+        padding: 0.75rem 0.95rem;
+        margin-bottom: 1.25rem;
+    }
+    .panel-budget-box .panel-budget-title {
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin-bottom: 0.55rem;
+    }
+    .panel-budget-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.28rem 0;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-2);
+        font-size: 0.82rem;
+    }
+    .panel-budget-row:last-child { border-bottom: none; }
+    .panel-budget-row .mono {
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+    }
+    .panel-budget-row .key { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-2); }
+    .panel-budget-row .val { font-family: var(--font-mono); font-weight: 650; color: var(--text); }
+
+    .authority-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xs);
+        box-shadow: var(--specular);
+        overflow: hidden;
+    }
+
     .panel-section-title {
-        margin: 1.75rem 0 0.8rem;
+        margin: 1.25rem 0 0.75rem;
         padding-bottom: 0.45rem;
         border-bottom: 1px solid var(--border);
-        font-size: 0.9rem;
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--text);
     }
-
-    /* --- the d3 marks --- */
-
-    .node { cursor: pointer; }
-    .node circle {
-        fill: var(--bg-elevated);
-        stroke: var(--accent);
-        stroke-width: 2px;
-        transition: stroke 0.2s, fill 0.2s;
-    }
-    .node:hover circle { fill: var(--accent-soft); stroke: var(--accent-hover); }
-    .node.revoked circle { stroke: var(--danger); }
-    .node.escalated circle { stroke: var(--warning); fill: var(--warning-soft); }
-
-    .node text {
-        fill: var(--text-primary);
-        font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 500;
-        pointer-events: none;
-    }
-    .node text.subtitle {
-        fill: var(--text-muted);
-        font-family: var(--font-sans);
-        font-size: 10px;
+    .authority-card-header {
+        background: var(--surface-subtle);
+        border-bottom: 1px solid var(--border);
+        padding: 0.65rem 0.95rem;
+        font-size: 0.74rem;
+        font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.05em;
+        color: var(--text-2);
     }
-    .node.revoked text.subtitle { fill: var(--danger); }
-    .node.escalated text.subtitle { fill: var(--warning); }
+    .authority-card-body {
+        padding: 0.85rem 0.95rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
 
-    .link { fill: none; stroke: var(--border); stroke-width: 1.5px; }
+    .authority-principal {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        padding: 0.75rem 0.95rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xs);
+        background: var(--surface-subtle);
+        font-size: 0.82rem;
+    }
+    .authority-principal-label {
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-3);
+    }
 
-    /* Only unsettled nodes pulse. A tree where everything pulses says nothing. */
+    .authority-spend {
+        background: var(--surface-subtle);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xs);
+        padding: 0.75rem 0.95rem;
+    }
+    .authority-spend-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font-size: 0.82rem;
+        margin-bottom: 0.4rem;
+        color: var(--text);
+    }
+    .authority-spend-head strong { font-weight: 700; }
+    .authority-spend-head .dim { color: var(--text-3); font-size: 0.74rem; }
+    .authority-bar {
+        height: 6px;
+        border-radius: var(--radius-xs);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        overflow: hidden;
+    }
+    .authority-bar > span {
+        display: block;
+        height: 100%;
+        background: var(--brand);
+        border-radius: var(--radius-xs);
+    }
+
+    .authority-grid {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.4rem 0.85rem;
+        padding: 0.75rem 0.95rem;
+        background: var(--surface-subtle);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xs);
+        font-size: 0.82rem;
+        margin: 0;
+    }
+    .authority-grid dt {
+        color: var(--text-3);
+        text-transform: uppercase;
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        align-self: center;
+    }
+    .authority-grid dd {
+        margin: 0;
+        font-weight: 600;
+        color: var(--text);
+        word-break: break-word;
+    }
+    .authority-grid dd code {
+        display: inline-block;
+        padding: 0.1rem 0.35rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--brand);
+        border-radius: var(--radius-xs);
+        font-size: 0.74rem;
+    }
+
+    .authority-note {
+        font-size: 0.74rem;
+        color: var(--text-3);
+        line-height: 1.45;
+        margin: 0;
+    }
+
+    .chain-details {
+        margin-top: 1rem;
+        border-top: 1px solid var(--border);
+        padding-top: 0.85rem;
+    }
+    .chain-details summary {
+        cursor: pointer;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--text-3);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.65rem;
+    }
+    .chain-details summary:hover { color: var(--text); }
+
+    .caveat-block {
+        margin-bottom: 0.75rem;
+        background: var(--surface-subtle);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xs);
+        padding: 0.65rem 0.85rem;
+    }
+    .caveat-block .label {
+        font-size: 0.66rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-3);
+        margin-bottom: 0.35rem;
+    }
+    .caveat-block pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-xs);
+        padding: 0.55rem 0.75rem;
+        font-family: var(--font-mono);
+        font-size: 0.74rem;
+        color: var(--text);
+        line-height: 1.5;
+    }
+
+    /* --- D3 Node Graph Marks --- */
+    .node { cursor: pointer; }
+    .node circle {
+        fill: #FFFFFF;
+        stroke: var(--brand); /* #0284C7 */
+        stroke-width: 2.2px;
+        transition: stroke 0.2s var(--ease), fill 0.2s var(--ease);
+    }
+    .node:hover circle { fill: var(--brand-soft); stroke: var(--brand-hover); }
+    .node.escalated circle { stroke: var(--escalate); fill: var(--escalate-soft); }
+    .node.revoked circle { stroke: var(--neutral); fill: #FFFFFF; }
+    .node.breached circle { stroke: var(--deny); fill: var(--deny-soft); }
+
+    .node text {
+        fill: var(--text);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 600;
+        pointer-events: none;
+    }
+
+    .node text.subtitle {
+        fill: var(--text-3);
+        font-family: var(--font-sans);
+        font-size: 9.5px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .node.escalated text.subtitle { fill: var(--escalate-text); }
+    .node.revoked text.subtitle { fill: var(--neutral-text); }
+    .node.breached text.subtitle { fill: var(--deny-text); }
+
+    .link { fill: none !important; stroke: #94A3B8; stroke-width: 1.5px; }
+
+    /* Operational Pulse Rings */
     @keyframes pulse {
-        0%   { r: 15; opacity: 0.55; }
-        70%  { r: 26; opacity: 0; }
-        100% { r: 26; opacity: 0; }
+        0%   { r: 15; opacity: 0.6; }
+        70%  { r: 24; opacity: 0; }
+        100% { r: 24; opacity: 0; }
     }
     .pulse-ring { fill: none; stroke: transparent; stroke-width: 2px; }
-    .node.revoked .pulse-ring,
-    .node.escalated .pulse-ring { animation: pulse 1.8s ease-out infinite; }
-    .node.revoked .pulse-ring { stroke: var(--danger); }
-    .node.escalated .pulse-ring { stroke: var(--warning); }
+    .node.escalated .pulse-ring { animation: pulse 1.8s ease-out infinite; stroke: var(--escalate); }
+    .node.revoked .pulse-ring { animation: pulse 1.8s ease-out infinite; stroke: var(--neutral); }
+    .node.breached .pulse-ring { animation: pulse 1.8s ease-out infinite; stroke: var(--deny); }
 
-    /* Remaining budget is a level, not a verdict — neutral ramp, so green on this canvas
-       only ever means an allowed token. */
-    .budget-bar-bg { fill: rgba(255,255,255,0.09); rx: 2; }
-    .budget-bar-fg { fill: var(--level-1); rx: 2; }
+    .budget-bar-bg { fill: #E2E8F0; rx: 2; }
+    .budget-bar-fg { fill: var(--brand); rx: 2; }
 
-    /* The "which task?" prompt, shown centred over the empty canvas. */
+    /* Canvas Controls Overlay */
+    .canvas-controls-overlay {
+        position: absolute;
+        bottom: 1rem;
+        left: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        z-index: 30;
+        pointer-events: none;
+    }
+    .canvas-toolbar {
+        display: flex;
+        align-items: center;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--specular-raised);
+        overflow: hidden;
+        pointer-events: auto;
+    }
+    .canvas-btn {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        background: transparent;
+        border: none;
+        border-right: 1px solid var(--border);
+        border-radius: 0;
+        color: var(--text-2);
+        cursor: pointer;
+        padding: 0;
+        transition: background 0.15s var(--ease), color 0.15s var(--ease);
+    }
+    .canvas-btn:last-child { border-right: none; }
+    .canvas-btn:hover { background: var(--surface-subtle); color: var(--text); }
+    .canvas-btn:active { background: var(--surface-hover); }
+
+    .canvas-live-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.35rem 0.75rem;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--specular);
+        font-family: var(--font-mono);
+        font-size: 0.76rem;
+        font-weight: 600;
+        color: var(--text-2);
+        pointer-events: auto;
+    }
+    .live-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--allow);
+        box-shadow: 0 0 0 2px rgba(5, 150, 105, 0.25);
+    }
+
+    /* Task Selection Modal */
     .task-prompt {
         position: absolute;
         inset: 0;
         display: grid;
         place-items: center;
-        background: rgba(9, 9, 11, 0.72);
-        backdrop-filter: blur(3px);
+        background: rgba(15, 23, 42, 0.35);
+        z-index: 40;
     }
-    .task-prompt .card { width: min(440px, 90%); box-shadow: var(--shadow); }
+    .task-prompt .card {
+        width: min(440px, 90%);
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        box-shadow: var(--specular-raised), 0 16px 36px rgba(0, 0, 0, 0.1);
+        padding: 1.75rem;
+    }
     .task-prompt input { width: 100%; margin-bottom: 0.8rem; font-family: var(--font-mono); }
 </style>
 {% endblock %}
@@ -222,6 +491,25 @@
         </div>
     </div>
     {% endif %}
+
+    <!-- Floating Mini-Toolbar & Live Status Chip -->
+    <div class="canvas-controls-overlay">
+        <div class="canvas-toolbar">
+            <button type="button" class="canvas-btn" onclick="zoomIn()" title="Zoom In">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button type="button" class="canvas-btn" onclick="zoomOut()" title="Zoom Out">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button type="button" class="canvas-btn" onclick="resetZoom()" title="Reset View">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+            </button>
+        </div>
+        <div class="canvas-live-chip">
+            <span class="live-dot pulse"></span>
+            <span>Graph Live &middot; <span id="agent-count-label">8 Sub-agents Tracked</span></span>
+        </div>
+    </div>
 </div>
 <div class="dim" style="margin-top:0.6rem;">
     Task <span class="mono">{{ task_id or 'not set' }}</span> · scroll to zoom, drag to pan
@@ -239,16 +527,31 @@
 
     // D3 setup
     const container = document.getElementById('tree-container');
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+    const width = container ? container.clientWidth : 800;
+    const height = container ? container.clientHeight : 600;
+    let g;
+    const d3Zoom = d3.zoom().on("zoom", (event) => {
+        if (g) g.attr("transform", event.transform);
+    });
     const svg = d3.select("#tree-container svg")
         .call(d3.zoom().on("zoom", (event) => {
-            g.attr("transform", event.transform);
+            if (g) g.attr("transform", event.transform);
         }))
+        .call(d3Zoom)
         .append("g")
         .attr("transform", "translate(50, 0)");
 
-    const g = svg.append("g").attr("transform", `translate(50, ${height / 2})`);
+    g = svg.append("g").attr("transform", `translate(50, ${height / 2})`);
+
+    window.zoomIn = function() {
+        d3.select("#tree-container svg").transition().duration(280).call(d3Zoom.scaleBy, 1.35);
+    };
+    window.zoomOut = function() {
+        d3.select("#tree-container svg").transition().duration(280).call(d3Zoom.scaleBy, 0.74);
+    };
+    window.resetZoom = function() {
+        d3.select("#tree-container svg").transition().duration(320).call(d3Zoom.transform, d3.zoomIdentity.translate(50, height / 2));
+    };
 
     const treeLayout = d3.tree().nodeSize([80, 250]);
 
@@ -386,6 +689,9 @@
 
         link.enter().insert("path", "g")
             .attr("class", "link")
+            .attr("fill", "none")
+            .attr("stroke", "#94A3B8")
+            .attr("stroke-width", "1.5px")
             // Collapsed at the parent, so the link grows outward as the child appears.
             //
             // This was `d3.linkHorizontal().x(d => d.source.y).y(d => d.source.x)`, which
@@ -420,7 +726,10 @@
             .attr("r", 15);
 
         nodeEnter.append("circle")
-            .attr("r", 15);
+            .attr("r", 15)
+            .attr("fill", "#FFFFFF")
+            .attr("stroke", "#0284C7")
+            .attr("stroke-width", "2.2px");
 
         // The depth-0 node is the *principal* acting directly, not a delegated agent: a
         // root token carries no attenuation block, so it declares no `agent()` and no
@@ -448,18 +757,22 @@
 
         budgetGroup.append("rect")
             .attr("class", "budget-bar-bg")
+            .attr("fill", "#E2E8F0")
             .attr("width", 50)
-            .attr("height", 4);
+            .attr("height", 4)
+            .attr("rx", 2);
 
         budgetGroup.append("rect")
             .attr("class", "budget-bar-fg")
+            .attr("fill", "#0284C7")
             .attr("width", d => {
                 if (!d.data.budget || d.data.budget.length === 0) return 0;
                 const b = d.data.budget[0];
                 if (b.total <= 0) return 0;
                 return (b.available / b.total) * 50;
             })
-            .attr("height", 4);
+            .attr("height", 4)
+            .attr("rx", 2);
 
         // Update existing
         const nodeUpdate = node.merge(nodeEnter)
@@ -477,6 +790,11 @@
             .attr("transform", d => `translate(${d.y},${d.x})`)
             .attr("opacity", 1);
 
+        nodeUpdate.select("text")
+            .text(d => nodeLabel(d.data))
+            .select("title")
+            .text(d => nodeTitle(d.data));
+
         nodeUpdate.select(".budget-bar-fg").transition().duration(500)
             .attr("width", d => {
                 if (!d.data.budget || d.data.budget.length === 0) return 0;
@@ -487,6 +805,9 @@
 
         nodeUpdate.select("text.subtitle")
             .text(d => nodeSubtitle(d.data));
+
+        const countEl = document.getElementById('agent-count-label');
+        if (countEl) countEl.textContent = treeData.descendants().length + " Sub-agents Tracked";
 
         node.exit().transition().duration(500).attr("opacity", 0).remove();
     }
@@ -544,8 +865,10 @@
     }
 
     function renderPanelState(node) {
-        document.getElementById('panel-agent-id').innerText = node.agent_id;
-        document.getElementById('panel-agent-id').dataset.agentId = node.agent_id;
+        const agentEl = document.getElementById('panel-agent-id');
+        agentEl.textContent = "";
+        agentEl.appendChild(AgentIAM.copyChip(node.agent_id, node.agent_id));
+        agentEl.dataset.agentId = node.agent_id;
 
         let statusHtml = '';
         if (node.revoked) {
@@ -559,15 +882,16 @@
 
         let budgetHtml = '';
         if (node.budget && node.budget.length > 0) {
-            budgetHtml = `<div class="dim" style="margin-bottom:0.5rem;">Budgets</div>`;
+            budgetHtml = `<div class="panel-budget-box"><div class="panel-budget-title">Budgets</div>`;
             node.budget.forEach(b => {
                 budgetHtml += `
-                    <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem; font-size:0.85rem;">
+                    <div class="panel-budget-row">
                         <span>${b.dimension}</span>
                         <span class="mono">${b.available} / ${b.total}</span>
                     </div>
                 `;
             });
+            budgetHtml += `</div>`;
         }
         document.getElementById('panel-budget').innerHTML = budgetHtml;
     }
@@ -590,12 +914,17 @@
         // it is doing it under. Read from the record when one carried a folded authority and
         // from the node otherwise, so it survives records written before that fold existed.
         const principal = (a && a.principal_id) || (node && node.principal_id) || null;
-        const who = principal
-            ? `<div class="authority-principal">
+        let who = '';
+        if (principal) {
+            const label = principal.length > 22 ? (principal.slice(0, 10) + '…' + principal.slice(-6)) : principal;
+            who = `<div class="authority-principal">
                  <span class="authority-principal-label">Acting for</span>
-                 <span class="mono">${principal}</span>
-               </div>`
-            : '';
+                 <span class="copy-chip" title="${principal} (Click to copy)" onclick="AgentIAM.copy('${principal}', this); event.stopPropagation();">
+                     <span class="chip-val mono">${label}</span>
+                     <svg class="chip-icon" viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                 </span>
+               </div>`;
+        }
 
         if (!a) {
             return who + `<p class="muted">No folded authority on this agent's records &mdash; they
@@ -684,5 +1013,10 @@
             caveatsContainer.innerHTML = `<p class="alert danger">Error loading block sources.</p>`;
         }
     }
+
+    window.renderPanelState = renderPanelState;
+    window.renderAuthority = renderAuthority;
+    window.openPanel = openPanel;
+    window.closePanel = closePanel;
 </script>
 {% endblock %}
