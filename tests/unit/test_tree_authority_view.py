@@ -11,21 +11,21 @@ database, so a stub row carrying `.record` exercises it exactly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from agentiam_controlplane.db.models import AuditRecordRow
 from agentiam_controlplane.tree_api import _authority_view
 
 
-@dataclass
-class StubRow:
-    """Just the one attribute `_authority_view` reads off an `AuditRecordRow`."""
+def a_row(**over: Any) -> AuditRecordRow:
+    """One unsaved `AuditRecordRow` carrying the JSON body the projection reads.
 
-    record: dict[str, Any] = field(default_factory=dict)
-
-
-def a_row(**over: Any) -> StubRow:
+    A real row rather than a stand-in with the one attribute: declarative models construct
+    fine without a session, so the fake bought nothing and cost the signature — mypy holds
+    `_authority_view` to `Sequence[AuditRecordRow]` and a structural look-alike does not
+    satisfy it.
+    """
     base: dict[str, Any] = {
         "principal_id": "kc:alice",
         "role": "payer",
@@ -39,7 +39,7 @@ def a_row(**over: Any) -> StubRow:
             "max_depth": 4,
         },
     }
-    return StubRow(record=base | over)
+    return AuditRecordRow(record=base | over)
 
 
 class TestItNamesTheHuman:
