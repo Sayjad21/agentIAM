@@ -30,7 +30,7 @@ demo-up: ## Build and start the full demo stack (control plane, PEP, tools) and 
 # during `demo-up` — not on the host — so this runs inside a container that mounts it.
 # `--no-deps` because everything it needs is already up by the time you run this.
 demo-seed: ## Drive the demo scenario through a running stack, so the console has content (T-057)
-	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080 --control-plane-api-url http://controlplane:8000
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080
 
 demo-down: ## Stop the demo stack, keeping volumes
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml down

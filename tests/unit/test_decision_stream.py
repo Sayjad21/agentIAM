@@ -90,6 +90,24 @@ class TestExplainNamesTheCause:
         assert explain({"outcome": "deny", "reason_code": "TOKEN_EXPIRED"}) == "TOKEN_EXPIRED"
         assert explain({"outcome": "deny"}).strip() != ""
 
+    def test_an_escalation_reads_as_held_not_refused(self) -> None:
+        # An ESCALATE is not a refusal: the call waits for a human. "refused it" on the
+        # one row a demo points at would contradict the escalation queue beside it.
+        sentence = explain(
+            a_record(
+                outcome="escalate",
+                reason_code="APPROVAL_REQUIRED",
+                failing_caveat={
+                    "kind": "requires_approval",
+                    "block_index": 4,
+                    "detail": "operation 'payment:initiate' requires human approval",
+                },
+            )
+        )
+        assert "refused" not in sentence
+        assert "human approval" in sentence
+        assert "requires_approval" in sentence
+
     def test_an_allow_reads_as_allowed(self) -> None:
         assert explain({"outcome": "allow", "reason_code": "OK"}) == "allowed"
 

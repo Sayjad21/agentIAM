@@ -135,6 +135,24 @@ def _decimal_env(name: str, default: Decimal) -> Decimal:
     return value
 
 
+def _optional_positive_float(name: str) -> float | None:
+    """Read an optional positive number of seconds. Unset means "use the default".
+
+    Same stance as `_decimal_env`: set-but-unusable refuses to start rather than falling
+    back, because a typo would otherwise take effect as a value nobody wrote.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} is not a number: {raw!r}") from exc
+    if not value > 0 or value == float("inf"):
+        raise ValueError(f"{name} must be a finite number greater than zero, got {raw!r}")
+    return value
+
+
 def _optional_path(name: str) -> Path | None:
     """Read an optional path setting. Unset or empty means the feature is not configured.
 
@@ -187,6 +205,10 @@ class ServiceSettings:
     lease_size: Decimal = DEFAULT_LEASE_SIZE
     lease_ttl_s: float = DEFAULT_LEASE_TTL_S
     low_water: Decimal = DEFAULT_LOW_WATER
+    #: How long an escalation this PEP opens stays actionable. `None` keeps
+    #: `PipelineSettings`' own default (15 minutes) — right for a real approver on call, too
+    #: short for a demo queue opened well before anyone looks at it.
+    escalation_ttl_s: float | None = None
     #: What `principal.role` a Cedar policy sees. Configuration, deliberately, and *not* the
     #: `role` fact in the token's attenuation block — that one is written by the delegating
     #: parent, and spec 01 §6.1 assigns it to the console and the audit trail. A Cedar bundle
@@ -272,6 +294,7 @@ class ServiceSettings:
             # the lease size rather than to cover the request. Measured: three
             # attempts three seconds apart, all 429, against a 500,000 mandate.
             lease_size=_decimal_env(f"{ENV_PREFIX}LEASE_SIZE", DEFAULT_LEASE_SIZE),
+            escalation_ttl_s=_optional_positive_float(f"{ENV_PREFIX}ESCALATION_TTL_S"),
         )
 
 
@@ -474,6 +497,7 @@ def build_service(settings: ServiceSettings) -> Service:
 
     from agentiam_controlplane.db.audit_sink import LedgerAuditSink
     from agentiam_controlplane.db.base import make_engine, make_session_factory
+    from agentiam_controlplane.db.escalation_sink import LedgerEscalationSink
     from agentiam_controlplane.db.ledger import acquire, release
     from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
     from agentiam_core.datalog import chain_identity, token_caveats
@@ -609,9 +633,20 @@ def build_service(settings: ServiceSettings) -> Service:
         emitter=emitter,
         revocation=revocation,
         settlement=settlement,
-        settings=PipelineSettings(pep_id=settings.pep_id),
+        settings=(
+            PipelineSettings(pep_id=settings.pep_id)
+            if settings.escalation_ttl_s is None
+            else PipelineSettings(
+                pep_id=settings.pep_id, escalation_ttl_s=settings.escalation_ttl_s
+            )
+        ),
         now=lambda: datetime.now(UTC),
         drift_oracle=drift_oracle,
+        # Without it an `ESCALATE` decision is a 403 no human is ever asked about: the
+        # pipeline opens a queue entry only when it has somewhere to open one. Same session
+        # factory as the audit and settlement sinks; a failed write refuses the request
+        # rather than telling the agent a human was asked (pipeline.py, ADR-026).
+        escalation_sink=LedgerEscalationSink(factory),
     )
 
     @asynccontextmanager

@@ -57,7 +57,7 @@ _FILES: Final = (
 #: Both payer lineages — `agt-payer`'s and `agt-treasury`'s — are `senior` and nothing else
 #: is. That is not a convenience to keep payments green: `payment_api` is `sensitivity:
 #: "critical"` in the catalogue, the corpus bundle forbids critical resources to non-seniors,
-#: and these five are exactly the agents the demo entrusts with `payment:initiate`.
+#: and these six are exactly the agents the demo entrusts with `payment:initiate`.
 #: `agt-doc-reader`, `agt-negotiator` and the read-only agents below them are *not* senior,
 #: so the forbid is live rather than disarmed — which is the difference between this and
 #: setting `AGENTIAM_PEP_DEFAULT_ROLE=senior` and calling the catalogue wired.
@@ -76,6 +76,7 @@ ROLE_ASSIGNMENTS: Final[dict[str, str]] = {
     "agt-payer/agt-settlement/agt-subcontractor": "senior",
     "agt-treasury": "senior",
     "agt-treasury/agt-reconciler": "senior",
+    "agt-treasury/agt-bulk-buyer": "senior",
 }
 
 DEFAULT_OUT: Final = _REPO_ROOT / "deploy" / "demo-secrets"

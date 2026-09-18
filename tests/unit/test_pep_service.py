@@ -1086,6 +1086,54 @@ class TestOrganizationAssertedRoles:
             pep_service.load_role_assignments(settings)
 
 
+class TestEscalationWiring:
+    """An `ESCALATE` decision must reach the escalation queue.
+
+    `Pipeline` has taken an `escalation_sink` since T-037 and `LedgerEscalationSink` has
+    existed as long, but this composition root passed none — so a `RequiresApproval` caveat
+    produced a 403 `APPROVAL_REQUIRED` that no human was ever asked about, and the console's
+    queue stayed empty unless something opened an entry by hand.
+    """
+
+    def test_the_pipeline_is_given_the_ledger_escalation_sink(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agentiam_controlplane.db.escalation_sink import LedgerEscalationSink
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        assert isinstance(service.pipeline._escalation_sink, LedgerEscalationSink)
+
+    def test_unset_ttl_keeps_the_pipeline_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agentiam_pep.pipeline import PipelineSettings
+
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.delenv(f"{pep_service.ENV_PREFIX}ESCALATION_TTL_S", raising=False)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        default = PipelineSettings(pep_id="x").escalation_ttl_s
+        assert service.pipeline._settings.escalation_ttl_s == default
+
+    def test_a_longer_ttl_reaches_the_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Parsed and never used would be the bug, not the fix."""
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv(f"{pep_service.ENV_PREFIX}ESCALATION_TTL_S", "28800")
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        assert service.pipeline._settings.escalation_ttl_s == 28800.0
+
+    @pytest.mark.parametrize("bad", ["nonsense", "0", "-5"])
+    def test_an_unusable_ttl_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bad: str
+    ) -> None:
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv(f"{pep_service.ENV_PREFIX}ESCALATION_TTL_S", bad)
+        with pytest.raises(ValueError, match="ESCALATION_TTL_S"):
+            pep_service.ServiceSettings.from_env()
+
+
 class TestTheHarnessMatchesTheDeployedComposition:
     """`serve_pep.py` must do the same work per request as this file — TODO item 21.
 

@@ -46,8 +46,6 @@ if str(_REPO_ROOT) not in sys.path:
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    import httpx
-
     from agentiam_core.models import Mandate
 
 #: Named in `docker-compose.demo.yml` before this script runs, so it cannot be random.
@@ -128,6 +126,16 @@ _DESCENDANTS: Final[tuple[tuple[str, str, str, frozenset[str], Decimal], ...]] =
         frozenset({"payment:initiate"}),
         Decimal("20000.0000"),
     ),
+    # Reads and pays like its parent, under a smaller ceiling — and every payment it makes
+    # needs a human first (`_APPROVAL_REQUIRED`). Depth 2 and senior, so the policy permits
+    # the payment; the approval requirement is the only thing holding it.
+    (
+        "agt-treasury",
+        "agt-bulk-buyer",
+        "payer",
+        frozenset({"invoice:read", "payment:initiate"}),
+        Decimal("80000.0000"),
+    ),
     (
         "agt-settlement",
         "agt-subcontractor",
@@ -136,6 +144,24 @@ _DESCENDANTS: Final[tuple[tuple[str, str, str, frozenset[str], Decimal], ...]] =
         Decimal("5000.0000"),
     ),
 )
+
+
+#: Agents whose token carries a `RequiresApproval` caveat, and for which scopes. A call in
+#: one of those scopes is not refused and not allowed: `decide()` returns ESCALATE, and the
+#: PEP opens an entry in the escalation queue itself (`pep_service` wires
+#: `LedgerEscalationSink`) and answers 403 `APPROVAL_REQUIRED` with the escalation's id.
+#:
+#: `decide()` honours the requirement only after the scope subset, every deny caveat, the
+#: token's own Datalog and the Cedar policy have all passed, and it returns before the budget
+#: step. So the held call must be one the agent could otherwise make, and it may be larger
+#: than a lease. `tests/unit/test_seed_demo.py` pins each of those preconditions.
+#:
+#: The caveat covers a whole scope, not an amount: every payment this agent makes is held.
+#: That is why it sits on its own agent rather than on `agt-treasury`, whose payments are
+#: part of the ordinary green traffic.
+_APPROVAL_REQUIRED: Final[dict[str, frozenset[str]]] = {
+    "agt-bulk-buyer": frozenset({"payment:initiate"}),
+}
 
 
 def _mandate(now: datetime) -> Mandate:
@@ -200,7 +226,13 @@ def _mint_chain(secrets: Path, now: datetime) -> dict[str, Any]:
     from biscuit_auth import Algorithm, PrivateKey, PublicKey
 
     from agentiam_core.attenuation import attenuate
-    from agentiam_core.models import BudgetCeiling, BudgetDimension, ScopeSubset
+    from agentiam_core.models import (
+        BudgetCeiling,
+        BudgetDimension,
+        Caveat,
+        RequiresApproval,
+        ScopeSubset,
+    )
     from agentiam_core.tokens import RootKeySet, mint_root, verify
 
     # biscuit-python has no `from_hex`, and `from_bytes` needs the algorithm explicitly —
@@ -242,12 +274,15 @@ def _mint_chain(secrets: Path, now: datetime) -> dict[str, Any]:
 
     for parent_id, agent_id, role, scopes, ceiling in _DESCENDANTS:
         parent = verify(tokens[parent_id], key_set, now=now)
+        caveats: list[Caveat] = [
+            ScopeSubset(scopes=scopes),
+            BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=ceiling),
+        ]
+        if agent_id in _APPROVAL_REQUIRED:
+            caveats.append(RequiresApproval(scopes=_APPROVAL_REQUIRED[agent_id]))
         tokens[agent_id] = attenuate(
             parent,
-            [
-                ScopeSubset(scopes=scopes),
-                BudgetCeiling(dimension=BudgetDimension.SPEND_BDT, value=ceiling),
-            ],
+            caveats,
             agent_id=agent_id,
             role=role,
         )
@@ -329,6 +364,7 @@ def _build_traffic() -> tuple[_Call, ...]:
         _read_vendor("price checker looks up a vendor", "agt-price-checker", "ven_02"),
         _pay("settlement agent pays within its slice", "agt-settlement", "900.0000", "acct_9002"),
         _pay("reconciler clears a balance", "agt-reconciler", "450.0000", "acct_9005"),
+        _read_invoice("bulk buyer reads an invoice", "agt-bulk-buyer", "inv_002"),
     ]
 
     work: list[_Call] = []
@@ -356,6 +392,7 @@ def _build_traffic() -> tuple[_Call, ...]:
             _read_invoice("treasury reads an invoice", "agt-treasury", inv),
             _pay("treasury pays an invoice", "agt-treasury", f"{1400 + 50 * n}.0000", "acct_9003"),
             _read_vendor("doc-reader checks a vendor", "agt-doc-reader", ven_next),
+            _read_invoice("bulk buyer checks an invoice", "agt-bulk-buyer", inv_next),
             _pay(
                 "reconciler clears a balance", "agt-reconciler", f"{350 + 25 * n}.0000", "acct_9005"
             ),
@@ -394,7 +431,14 @@ def _build_traffic() -> tuple[_Call, ...]:
             ),
         ),
     ]
-    for offset, (at, call) in enumerate(refusals):
+    # Not a refusal: held for a human. The bulk buyer's token requires approval for every
+    # payment, so the PEP opens an escalation and answers 403 APPROVAL_REQUIRED. 75,000 is
+    # inside its 80,000 ceiling and the policy's limits — it is refused by nothing else.
+    held = (
+        57,
+        _pay("bulk buyer places a large order", "agt-bulk-buyer", "75000.0000", "acct_1001"),
+    )
+    for offset, (at, call) in enumerate(sorted([*refusals, held], key=lambda item: item[0])):
         work.insert(at + offset, call)
 
     return (*spawn, *work)
@@ -410,37 +454,6 @@ def _build_traffic() -> tuple[_Call, ...]:
 #: are not: one is an agent narrowing itself, the other is the grant it never had.
 _TRAFFIC: Final[tuple[_Call, ...]] = _build_traffic()
 
-#: Requests for more authority than a token carries, opened in the escalation queue so the
-#: approve/deny screen has something to act on. Each is (agent, scopes, amount, reason).
-#:
-#: **Opened by this script through `POST /v1/escalations`, not raised by the PEP.** The
-#: deployed PEP has no escalation sink wired and no demo token carries a `RequiresApproval`
-#: caveat, so no live call is ever held for approval. What *is* real is everything after:
-#: the queue, narrowing-only approval, the approver allowlist, separation of duties, and the
-#: elevated token minted on approve.
-#:
-#: Both name the mandate's principal, so that person is refused approving them (their own
-#: agent's request) and a second approver has to. The negotiator's asks for two scopes so
-#: an approver can visibly drop one.
-_ESCALATIONS: Final[tuple[tuple[str, tuple[str, ...], Decimal, str], ...]] = (
-    (
-        "agt-treasury",
-        ("payment:initiate",),
-        Decimal("75000.0000"),
-        "Bulk packaging order from Padma Supplies, far above a normal payment.",
-    ),
-    (
-        "agt-negotiator",
-        ("vendor:read", "payment:initiate"),
-        Decimal("20000.0000"),
-        "Deposit to lock Jamuna Traders' quote; the negotiator cannot pay on its own.",
-    ),
-)
-
-#: How long an opened escalation stays actionable. The API default is 15 minutes, which is
-#: shorter than the gap between seeding the stack and showing the queue.
-ESCALATION_TTL_S: Final = 8 * 3600.0
-
 #: Seconds `drive` waits before an agent's first call. The identity tree pushes a diff every
 #: 3 s (`tree_api`), so anything shorter lands several agents in one frame and the tree
 #: appears at once instead of growing.
@@ -449,40 +462,11 @@ DEFAULT_SPAWN_DELAY_S: Final = 3.5
 DEFAULT_CALL_DELAY_S: Final = 0.3
 
 
-def _open_escalations(client: httpx.Client, api_url: str, payload: dict[str, Any]) -> int:
-    """Put `_ESCALATIONS` in the queue. Returns how many were opened."""
-    from agentiam_core.hashing import intent_hash
-
-    opened = 0
-    for agent_id, scopes, amount, reason in _ESCALATIONS:
-        response = client.post(
-            f"{api_url}/v1/escalations",
-            json={
-                # A fresh id each run: the queue refuses a second escalation for one
-                # decision, and a re-run should add to the queue rather than fail.
-                "decision_id": str(uuid.uuid4()),
-                "task_id": payload["task_id"],
-                "agent_id": agent_id,
-                "principal_id": payload["principal_id"],
-                "intent_hash": intent_hash(payload["intent"]),
-                "requested_scopes": list(scopes),
-                "requested_amount": str(amount),
-                "reason": reason,
-                "ttl_s": ESCALATION_TTL_S,
-            },
-        )
-        status = "opened" if response.status_code == 201 else f"FAILED {response.status_code}"
-        print(f"  {status:8s} {agent_id:18s} asks for {', '.join(scopes)} up to {amount}")
-        opened += response.status_code == 201
-    return opened
-
-
 def drive(
     tokens_file: Path,
     pep_url: str,
     control_plane_url: str,
     *,
-    control_plane_api_url: str | None = None,
     spawn_delay: float = DEFAULT_SPAWN_DELAY_S,
     call_delay: float = DEFAULT_CALL_DELAY_S,
 ) -> int:
@@ -502,6 +486,8 @@ def drive(
     print(f"  watch: {control_plane_url}/identity-tree?task_id={payload['task_id']}\n")
     outcomes: dict[str, int] = {}
     spawned: set[str] = set()
+    escalations: list[str] = []
+    unqueued: list[str] = []
     with httpx.Client(timeout=30.0) as client:
         for label, who, method, path, body in _TRAFFIC:
             if who not in spawned:
@@ -521,12 +507,23 @@ def drive(
                 reason = response.json().get("reason_code", "OK")
             except ValueError:
                 reason = "OK"
-            verdict = "allow" if response.is_success else "deny "
+            if reason == "APPROVAL_REQUIRED":
+                verdict = "held "
+                escalation_id = response.json().get("escalation_id")
+                # Without an id the PEP asked nobody: no sink is wired, and the queue will
+                # be empty. That is a broken demo, not a quirk, so it is reported as one.
+                if escalation_id:
+                    escalations.append(f"{label}: {escalation_id}")
+                else:
+                    unqueued.append(label)
+            else:
+                verdict = "allow" if response.is_success else "deny "
             outcomes[reason] = outcomes.get(reason, 0) + 1
             print(f"  {verdict} {response.status_code}  {label:44s} {reason}")
 
-        print("\nescalations:")
-        _open_escalations(client, control_plane_api_url or control_plane_url, payload)
+    print("\nescalations opened by the PEP:")
+    for line in escalations or ["(none)"]:
+        print(f"  {line}")
 
     print("\noutcomes: " + ", ".join(f"{k}={v}" for k, v in sorted(outcomes.items())))
     print("\nNow look at:")
@@ -535,6 +532,12 @@ def drive(
     print(f"  {control_plane_url}/budgets               the pool moving")
     print(f"  {control_plane_url}/identity-tree?task_id={payload['task_id']}")
     print(f"  {control_plane_url}/escalations           approve one (sign in as the CFO)")
+    if unqueued:
+        print(
+            "\nERROR: the PEP held these for approval but opened no escalation — is "
+            "`escalation_sink` wired in pep_service? " + "; ".join(unqueued)
+        )
+        return 1
     return 0
 
 
@@ -560,11 +563,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Send the scenario's traffic through a running PEP instead of seeding.",
     )
     parser.add_argument("--pep-url", default="http://localhost:8082")
-    parser.add_argument(
-        "--control-plane-api-url",
-        default=None,
-        help="Where --drive opens escalations, if not --control-plane-url (e.g. inside compose).",
-    )
     parser.add_argument(
         "--spawn-delay",
         type=float,
@@ -598,7 +596,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.tokens or (args.out / DEFAULT_TOKENS_FILE),
             args.pep_url.rstrip("/"),
             args.control_plane_url.rstrip("/"),
-            control_plane_api_url=args.control_plane_api_url,
             spawn_delay=args.spawn_delay,
             call_delay=args.call_delay,
         )
