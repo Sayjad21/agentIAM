@@ -183,20 +183,24 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     right: 0;
     z-index: 100;
     width: 100%;
+    min-height: var(--nav-height);
     height: var(--nav-height);
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 1.5rem;
+    gap: 0.75rem;
+    padding: 0 1.25rem;
     box-shadow: var(--shadow);
 }
 
 .topbar-left {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.75rem;
+    flex: 0 0 auto;
+    min-width: 0;
 }
 
 .brand {
@@ -206,6 +210,7 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     color: var(--text);
     text-decoration: none;
     cursor: pointer;
+    flex-shrink: 0;
 }
 .brand:hover { text-decoration: none; }
 
@@ -246,14 +251,16 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     width: 1px;
     height: 22px;
     background: var(--border);
+    flex-shrink: 0;
 }
 
+/* Capsule status chips — soft ends, not boxy rectangles */
 .env-pill {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: var(--radius-xs);
+    gap: 0.4rem;
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
     background: var(--surface-subtle);
     border: 1px solid var(--border);
     font-family: var(--font-mono);
@@ -261,27 +268,38 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     font-weight: 650;
     letter-spacing: 0.05em;
     color: var(--text-3);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 .env-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: var(--allow);
+    flex-shrink: 0;
 }
 
-/* Nav Tabs with bottom ink-indicator */
+/* Nav Tabs with bottom ink-indicator — scrolls instead of clipping */
 .nav {
     display: flex;
     align-items: stretch;
-    height: var(--nav-height);
-    gap: 0.25rem;
+    height: 100%;
+    min-height: var(--nav-height);
+    gap: 0.15rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
 }
 
 .nav a,
 .nav-tab {
     display: flex;
     align-items: center;
-    padding: 0 0.85rem;
+    padding: 0 0.7rem;
     height: 100%;
     color: var(--text-2);
     font-size: 0.84rem;
@@ -290,6 +308,7 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     position: relative;
     border-bottom: 2px solid transparent;
     transition: color 0.15s var(--ease), border-color 0.15s var(--ease);
+    flex-shrink: 0;
 }
 .nav a:hover,
 .nav-tab:hover {
@@ -307,16 +326,18 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
 .topbar-right {
     display: flex;
     align-items: center;
-    gap: 0.85rem;
+    gap: 0.55rem;
+    flex: 0 0 auto;
+    min-width: 0;
 }
 
 /* Heartbeat Status Badge */
 .heartbeat-badge {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    padding: 0.25rem 0.65rem;
-    border-radius: var(--radius-xs);
+    gap: 0.4rem;
+    padding: 0.22rem 0.75rem;
+    border-radius: 999px;
     background: var(--allow-soft);
     border: 1px solid var(--allow-line);
     color: var(--allow-text);
@@ -324,6 +345,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     font-size: 0.72rem;
     font-weight: 650;
     letter-spacing: 0.02em;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 .heartbeat-dot {
     width: 7px;
@@ -331,19 +354,22 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     border-radius: 50%;
     background: var(--allow);
     box-shadow: 0 0 0 2px rgba(5, 150, 105, 0.2);
+    flex-shrink: 0;
 }
 
 /* Tenant Selector */
 .tenant-selector {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.25rem 0.6rem;
-    border-radius: var(--radius-xs);
+    gap: 0.35rem;
+    padding: 0.22rem 0.7rem;
+    border-radius: 999px;
     background: var(--surface-subtle);
     border: 1px solid var(--border);
     font-size: 0.76rem;
     color: var(--text-2);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 .tenant-prefix {
     font-size: 0.65rem;
@@ -356,44 +382,52 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
 }
 
 .user-pill {
-    padding: 0.25rem 0.6rem;
-    border-radius: var(--radius-xs);
+    padding: 0.22rem 0.7rem;
+    border-radius: 999px;
     background: var(--surface);
     border: 1px solid var(--border);
     font-size: 0.76rem;
     color: var(--text-2);
+    white-space: nowrap;
 }
 
 /* Whoami Card in Topbar */
 .whoami-card {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
-    padding: 0.2rem 0.55rem;
-    border-radius: var(--radius-xs);
+    gap: 0.5rem;
+    padding: 0.18rem 0.55rem 0.18rem 0.3rem;
+    border-radius: 999px;
     background: var(--surface-subtle);
     border: 1px solid var(--border);
+    flex-shrink: 0;
+    max-width: 14rem;
 }
 .whoami-avatar {
     width: 22px;
     height: 22px;
-    border-radius: var(--radius-xs);
+    border-radius: 50%;
     display: grid;
     place-items: center;
     background: var(--brand);
     color: #FFFFFF;
     font-size: 0.68rem;
     font-weight: 700;
+    flex-shrink: 0;
 }
 .whoami-info {
     display: flex;
     flex-direction: column;
+    min-width: 0;
 }
 .whoami-name {
     font-size: 0.76rem;
     font-weight: 600;
     color: var(--text);
     line-height: 1.1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .whoami-tag {
     font-size: 0.58rem;
@@ -404,17 +438,111 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
 .whoami-logout {
     font-size: 0.72rem;
     color: var(--text-3);
-    margin-left: 0.25rem;
+    margin-left: 0.15rem;
+    flex-shrink: 0;
 }
 .whoami-logout:hover { color: var(--deny); }
 
 .btn-auth {
-    padding: 0.25rem 0.65rem;
-    border-radius: var(--radius-sm);
+    padding: 0.25rem 0.85rem;
+    border-radius: 999px;
     background: var(--brand);
     color: #FFFFFF;
     font-size: 0.78rem;
     font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Progressive density: drop secondary chips before anything clips */
+@media (max-width: 1280px) {
+    .topbar {
+        padding: 0 1rem;
+        gap: 0.5rem;
+    }
+    .topbar-divider,
+    .env-pill {
+        display: none;
+    }
+    .nav a,
+    .nav-tab {
+        padding: 0 0.55rem;
+        font-size: 0.8rem;
+    }
+}
+
+@media (max-width: 1100px) {
+    .tenant-selector {
+        display: none;
+    }
+    .heartbeat-badge .heartbeat-text {
+        display: none;
+    }
+    .heartbeat-badge {
+        padding: 0.35rem;
+        width: 1.65rem;
+        height: 1.65rem;
+        justify-content: center;
+    }
+    .whoami-card {
+        max-width: 11rem;
+    }
+}
+
+@media (max-width: 900px) {
+    :root {
+        --nav-height: 100px;
+    }
+    .topbar {
+        height: auto;
+        min-height: 0;
+        flex-wrap: wrap;
+        align-items: stretch;
+        padding: 0;
+        gap: 0;
+    }
+    .topbar-left,
+    .topbar-right {
+        height: 48px;
+        padding: 0 0.85rem;
+        gap: 0.45rem;
+    }
+    .topbar-left {
+        flex: 1 1 auto;
+    }
+    .topbar-right {
+        flex: 0 1 auto;
+        margin-left: auto;
+    }
+    .nav {
+        flex: 1 1 100%;
+        order: 3;
+        height: 52px;
+        min-height: 52px;
+        border-top: 1px solid var(--border);
+        mask-image: none;
+        padding: 0 0.5rem;
+    }
+    .brand-sub {
+        display: none;
+    }
+    .whoami-info {
+        display: none;
+    }
+    .whoami-card {
+        max-width: none;
+        padding: 0.18rem 0.45rem 0.18rem 0.25rem;
+        gap: 0.35rem;
+    }
+}
+
+@media (max-width: 560px) {
+    .heartbeat-badge {
+        display: none;
+    }
+    .topbar-left,
+    .topbar-right {
+        padding: 0 0.65rem;
+    }
 }
 
 /* --- 4. PAGE LAYOUT & HEADERS -------------------------------------------- */

@@ -17,6 +17,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-down', 'demo-reset',
+                 'demo-tamper', 'demo-untamper',
                  'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
                  'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'benchmarks', 'evidence',
@@ -66,6 +67,8 @@ switch ($Target) {
             'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
             'demo-seed'        = 'Drive the demo scenario through a running stack (T-057)'
             'demo-reset'       = 'Wipe all demo data and bring the stack back up empty'
+            'demo-tamper'      = 'Edit one audit record so Verify chain turns red (demo only)'
+            'demo-untamper'    = 'Restore the record demo-tamper edited'
             'benchmarks'       = 'Regenerate docs/benchmarks/performance.md from committed JSON'
             'evidence'         = 'Regenerate docs/evidence/evidence-pack.html (T-055)'
             'clean'            = 'Remove caches and build artifacts'
@@ -87,6 +90,16 @@ switch ($Target) {
     'demo-down' {
         Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
                       'docker-compose.demo.yml', 'down')
+    }
+    'demo-tamper' {
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
+                      'python', 'scripts/demo_tamper.py')
+    }
+    'demo-untamper' {
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
+                      'python', 'scripts/demo_tamper.py', '--undo')
     }
     'demo-reset' {
         # Append-only audit chain: a rehearsal's decisions, spend and escalations stay until
