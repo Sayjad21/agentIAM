@@ -164,8 +164,7 @@ switch ($Target) {
                       'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
                       'python', 'scripts/seed_demo.py', '--drive',
                       '--tokens', '/secrets/demo-tokens.json',
-                      '--pep-url', 'http://pep:8080',
-                      '--control-plane-api-url', 'http://controlplane:8000')
+                      '--pep-url', 'http://pep:8080')
     }
     'benchmarks' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_benchmark_results.py') }
     'evidence' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_evidence_pack.py') }

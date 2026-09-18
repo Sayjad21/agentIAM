@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from scripts import seed_demo
 
@@ -133,11 +134,15 @@ class TestTheTraffic:
     def test_payments_fit_inside_one_lease(self) -> None:
         """A request larger than the PEP's lease is refused however full the pool is.
 
-        The only payments allowed over it are the two that exist to be refused by a ceiling.
+        The only payments allowed over it are the two that exist to be refused by a ceiling,
+        and the one held for approval — `decide()` returns an escalation before the budget
+        step, so the lease never sees it.
         """
         from scripts.pep_service import DEFAULT_LEASE_SIZE
 
-        for label, _who, _method, _path, body in seed_demo._TRAFFIC:
+        for label, who, _method, _path, body in seed_demo._TRAFFIC:
+            if who in seed_demo._APPROVAL_REQUIRED:
+                continue
             if body is not None and "exceeds" not in label and "more than" not in label:
                 assert Decimal(body["amount"]) < DEFAULT_LEASE_SIZE, label
 
@@ -158,20 +163,90 @@ class TestTheTraffic:
 
 
 class TestTheEscalations:
-    def test_each_names_an_agent_the_seed_mints(self) -> None:
-        """The tree flags a node with a pending escalation — an unminted agent has no node."""
-        minted = {a for a, _r, _s, _c in seed_demo._CHILDREN}
-        minted |= {a for _p, a, _r, _s, _c in seed_demo._DESCENDANTS}
-        for agent, *_ in seed_demo._ESCALATIONS:
-            assert agent in minted
+    """One agent's payments need a human, and the PEP — not this script — opens the request.
 
-    def test_one_asks_for_more_than_one_scope(self) -> None:
-        """So an approver can drop a scope and show narrowing, not only cut the amount."""
-        assert any(len(scopes) > 1 for _a, scopes, _m, _r in seed_demo._ESCALATIONS)
+    `decide()` checks the policy, every deny caveat and the token's own Datalog *before* it
+    honours an approval requirement, and it returns the escalation before the budget step. So
+    the escalating call must pass all of those first, or it is refused for another reason and
+    no human is ever asked. These tests pin each precondition to a number.
+    """
 
-    def test_they_outlive_the_gap_before_the_demo(self) -> None:
-        """The API's 15-minute default would expire them before anyone opened the queue."""
-        assert seed_demo.ESCALATION_TTL_S >= 3600
+    @staticmethod
+    def _approval_agents() -> dict[str, frozenset[str]]:
+        return dict(seed_demo._APPROVAL_REQUIRED)
+
+    @staticmethod
+    def _grants() -> dict[str, tuple[frozenset[str], Decimal, int]]:
+        grants = {a: (s, c, 1) for a, _r, s, c in seed_demo._CHILDREN}
+        for parent, agent, _r, scopes, ceiling in seed_demo._DESCENDANTS:
+            grants[agent] = (scopes, ceiling, grants[parent][2] + 1)
+        return grants
+
+    def test_the_minted_token_really_carries_the_requirement(self, tmp_path: Path) -> None:
+        """Read back from a real token, the way the PEP reads it — not from our own table."""
+        from biscuit_auth import Algorithm, PublicKey
+
+        from agentiam_core.datalog import token_caveats
+        from agentiam_core.models import RequiresApproval
+        from agentiam_core.tokens import RootKeySet, verify
+        from scripts import bootstrap_demo_secrets
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        now = datetime.now(UTC)
+        payload = seed_demo._mint_chain(tmp_path, now)
+        public = PublicKey.from_bytes(  # type: ignore[call-arg]
+            bytes.fromhex((tmp_path / "root_public_key.hex").read_text(encoding="utf-8")),
+            Algorithm.Ed25519,  # type: ignore[attr-defined]
+        )
+        key_set = RootKeySet([public])
+
+        for agent, token in payload["tokens"].items():
+            required: set[str] = set()
+            for caveat in token_caveats(verify(token, key_set, now=now)):
+                if isinstance(caveat, RequiresApproval):
+                    required |= caveat.scopes
+            # Exactly the configured agents, and nobody else — an approval requirement on
+            # any other agent would turn its ordinary traffic into escalations.
+            assert required == set(self._approval_agents().get(agent, frozenset())), agent
+
+    def test_there_is_one_and_it_is_on_payments(self) -> None:
+        assert self._approval_agents() == {"agt-bulk-buyer": frozenset({"payment:initiate"})}
+
+    def test_the_agent_can_also_do_something_without_a_human(self) -> None:
+        """It spawns on an allowed read, so the tree shows it before its request is held."""
+        agent = "agt-bulk-buyer"
+        first = next(call for call in seed_demo._TRAFFIC if call[1] == agent)
+        assert first[3].startswith("/proxy/invoices/")
+
+    def test_exactly_one_call_escalates(self) -> None:
+        held = [
+            label
+            for label, who, method, _path, _body in seed_demo._TRAFFIC
+            if who in self._approval_agents() and method == "POST"
+        ]
+        assert len(held) == 1, held
+
+    def test_the_held_call_passes_every_check_that_runs_before_escalation(self) -> None:
+        """Otherwise it is refused outright and the queue never hears of it."""
+        from scripts.bootstrap_demo_secrets import ROLE_ASSIGNMENTS
+
+        grants = self._grants()
+        for _label, who, method, _path, body in seed_demo._TRAFFIC:
+            if who not in self._approval_agents() or method != "POST":
+                continue
+            assert body is not None
+            scopes, ceiling, depth = grants[who]
+            amount = Decimal(body["amount"])
+            assert "payment:initiate" in scopes  # the scope subset
+            assert amount <= ceiling  # the agent's own ceiling caveat
+            assert amount <= seed_demo.POOL_TOTAL  # the mandate's ceiling
+            # The corpus bundle: `amount <= 500000 && principal.depth <= 2`, and the
+            # critical-resource forbid for anyone not senior.
+            assert amount <= Decimal("500000") and depth <= 2
+            assert ROLE_ASSIGNMENTS.get(f"agt-treasury/{who}") == "senior"
+            # Big enough to be worth a human, and bigger than a lease could ever carry —
+            # the escalation is decided before the budget step, so this is not refused.
+            assert amount > Decimal("5000")
 
 
 class TestTheFixedIdentifiers:

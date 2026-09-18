@@ -144,7 +144,10 @@ def explain(record: dict[str, Any]) -> str:
         block = caveat.get("block_index")
         where = f"block {block}" if isinstance(block, int) else "the token chain"
         caveat_detail = str(caveat.get("detail", "") or "").strip()
-        sentence = f"{where}'s {kind} caveat refused it"
+        # An escalation is held for a human, not refused — the same caveat pointer, a
+        # different verb.
+        verb = "held it for a human" if outcome == "escalate" else "refused it"
+        sentence = f"{where}'s {kind} caveat {verb}"
         if caveat_detail:
             sentence = f"{sentence}: {caveat_detail}"
         elif detail:

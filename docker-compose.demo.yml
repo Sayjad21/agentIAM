@@ -195,6 +195,9 @@ services:
       # writes the file; `tests/unit/test_demo_compose.py` checks the two agree.
       AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH: /secrets/role_assignments.json
       AGENTIAM_PEP_OLLAMA_URL: ${AGENTIAM_PEP_OLLAMA_URL:-}
+      # How long an escalation the PEP opens stays pending. The pipeline's own default is
+      # 15 minutes, which expires between `make demo-seed` and anyone opening the queue.
+      AGENTIAM_PEP_ESCALATION_TTL_S: ${AGENTIAM_PEP_ESCALATION_TTL_S:-28800}
     command: >
       sh -c "export AGENTIAM_PEP_ROOT_PUBLIC_KEYS=$$(cat /secrets/root_public_key.hex) &&
              export AGENTIAM_PEP_POLICY_PUBLIC_KEY=$$(cat /secrets/policy_public_key.hex) &&
