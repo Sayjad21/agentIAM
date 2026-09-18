@@ -1529,7 +1529,8 @@ tr.row-fail td:first-child { box-shadow: inset 3px 0 0 var(--deny); }
 /* The human at the top of a custody chain. Set above the links rather than inside them:
    every link shares one principal, and repeating it per row buries the name the drawer is
    opened to find. */
-.custody-principal {
+.custody-principal,
+.authority-principal {
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: 0.3rem 0.7rem;
@@ -1542,9 +1543,20 @@ tr.row-fail td:first-child { box-shadow: inset 3px 0 0 var(--deny); }
     font-size: 0.85rem;
 }
 
-.custody-principal-label {
+.custody-principal-label,
+.authority-principal-label {
     font-size: 0.68rem;
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--text-3, #9ca3af);
+}
+
+/* One line, never four. See `principalCell` in the decisions and audit templates: the id
+   stays whole in the DOM, so it copies and searches in full — it is only the row height
+   that is capped. */
+td.principal {
+    max-width: 19ch;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }

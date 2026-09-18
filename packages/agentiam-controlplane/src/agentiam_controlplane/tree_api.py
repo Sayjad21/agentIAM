@@ -56,6 +56,12 @@ class AgentAuthorityView(BaseModel):
     panel says so rather than presenting this as an exhaustive list of an agent's limits.
     """
 
+    #: The human this agent is acting for. It was on every decision record and on the tree
+    #: node, and in neither the panel nor this model — so clicking a node answered "what may
+    #: this agent do" and never "whose authority is it doing it under", which is the question
+    #: an operator opens the panel with. Attested, not asserted: bound into the signed root
+    #: token and read back off it by the PEP, so no request header can set it.
+    principal_id: str | None = None
     role: str = ""
     depth: int = 0
     #: What this agent may ask for, after every block narrowed the grant. `None` for a record
@@ -124,6 +130,7 @@ def _authority_view(rows: Sequence[AuditRecordRow]) -> AgentAuthorityView | None
     raw_scopes = newest_authority.get("scopes")
     expires_raw = newest_authority.get("not_after")
     return AgentAuthorityView(
+        principal_id=str(newest["principal_id"]) if newest.get("principal_id") else None,
         role=str(newest.get("role") or ""),
         depth=int(str(newest.get("depth", 0) or 0)),
         scopes=[str(s) for s in raw_scopes] if isinstance(raw_scopes, list) else None,
