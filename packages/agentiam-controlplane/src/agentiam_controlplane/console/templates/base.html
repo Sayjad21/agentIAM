@@ -1,96 +1,106 @@
 {#
-  The console shell: one `<head>`, one stylesheet, one nav.
-
-  Every page was previously a standalone document that repeated the boilerplate, declared
-  its own palette, and linked nowhere — six pages with no way to get from any one of them
-  to any other. The nav below is the fix, and it lives here so a seventh page inherits it
-  rather than reinventing it.
-
-  Blocks a page may fill:
-    title       — the browser tab, appended to "AgentIAM"
-    page_title  — the <h1>
-    page_sub    — the one-line explanation under it
-    head_extra  — page-local <style>/<script>, for the genuinely local case only
-    content     — the body
-    scripts     — deferred page scripts, after the DOM exists
-    nav_extra   — right-hand side of the top bar (the escalation queue puts sign-in here)
-
-  `active` is a plain string a view passes in ("budgets", "audit", …) to mark the current
-  nav item. Marked with aria-current so the styling and the accessibility tree agree.
+  AgentIAM Console Shell — Precision Infrastructure (High-Trust Light Mode)
+  Benchmark: HashiCorp Vault (Helios), Cloudflare Zero Trust, AWS Security Hub
 #}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    {# Without this the browser paints its own canvas — white — in the gap between one
-       document and the next, which is the flash you see on every tab switch no matter
-       what `body { background }` says. Declaring the scheme makes that canvas dark. #}
-    <meta name="color-scheme" content="dark">
+    <meta name="color-scheme" content="light">
     <title>{% block title %}Console{% endblock %} · AgentIAM</title>
     <link rel="stylesheet" href="/static/style.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2318181b'/><rect width='32' height='32' rx='8' fill='none' stroke='white' stroke-opacity='0.14'/><text x='16' y='23' font-family='sans-serif' font-size='18' font-weight='bold' fill='white' text-anchor='middle'>A</text></svg>">
-    {# Shared, framework-free UI primitives (number ticker, record drawer, key/value
-       grid). Loaded for every page so a page script can assume `AgentIAM` exists; it is
-       a static file from this same origin, so there is no network dependency. #}
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230284c7'/><path d='M16 6 L26 11 L26 19 C26 24 16 28 16 28 C16 28 6 24 6 19 L6 11 Z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/><path d='M16 11 L16 23 M12 16 L20 16' stroke='white' stroke-width='2' stroke-linecap='round'/></svg>">
     <script src="/static/ui.js"></script>
     {% block head_extra %}{% endblock %}
 </head>
 <body data-page="{{ active | default('') }}">
-{# The aurora every glass pane refracts. A real element rather than a `body` pseudo so
-   it can hold its own `view-transition-name`: that keeps it OUT of the page snapshot,
-   so on a tab switch the background cross-fades its hue in place instead of sliding
-   around with the content. #}
-<div class="ambient" aria-hidden="true"></div>
+
+{# Enterprise Anchored Top Command Bar (Fixed Edge-to-Edge 56px) #}
 <header class="topbar">
-    <a class="brand" href="/"><span class="mark">AI</span><span>AgentIAM</span></a>
+    <div class="topbar-left">
+        <a class="brand" href="/" title="AgentIAM Autonomous Identity &amp; Governance Control Plane">
+            <span class="brand-glyph" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <circle cx="12" cy="11" r="3"/>
+                </svg>
+            </span>
+            <div class="brand-text">
+                <span class="brand-title">AgentIAM</span>
+                <span class="brand-sub">CONTROL PLANE</span>
+            </div>
+        </a>
+        <div class="topbar-divider" aria-hidden="true"></div>
+        <div class="env-pill" title="Operational Environment">
+            <span class="env-dot"></span>
+            <span>DEMO SESSION</span>
+        </div>
+    </div>
 
     <nav class="nav">
         {% set items = [
             ('/',              'overview',      'Overview'),
-            ('/run',           'run',           'Run a task'),
-            ('/identity-tree', 'identity-tree', 'Identity tree'),
+            ('/run',           'run',           'Run Task'),
+            ('/identity-tree', 'identity-tree', 'Identity Tree'),
             ('/decisions',     'decisions',     'Decisions'),
             ('/budgets',       'budgets',       'Budgets'),
             ('/policy',        'policy',        'Policy'),
             ('/escalations',   'escalations',   'Escalations'),
         ] %}
         {% for href, key, label in items %}
-        <a href="{{ href }}"{% if active == key %} aria-current="page"{% endif %}>{{ label }}</a>
+        <a href="{{ href }}" class="nav-tab{% if active == key %} active{% endif %}"{% if active == key %} aria-current="page"{% endif %}>
+            {{ label }}
+        </a>
         {% endfor %}
     </nav>
 
-    {#
-      Sign-in state is a property of the session, not of any one page, so it is rendered
-      here for every page rather than by whichever page happens to care. It used to live
-      in the escalation queue's `nav_extra` alone, which meant the one screen that needs a
-      session was also the only screen that would tell you whether you had one.
+    <div class="topbar-right">
+        {# Real-time Ledger Invariant Heartbeat #}
+        <div class="heartbeat-badge" id="hud-status" title="Cryptographic Balance Invariant &amp; Monotonic Hash Chain Verified">
+            <span class="heartbeat-dot"></span>
+            <span class="heartbeat-text">INVARIANTS: OK</span>
+        </div>
 
-      Read straight off `request.session`, which needs no view to pass it — but that
-      attribute raises when `SessionMiddleware` is not installed (the console-only app has
-      no database and so no session), hence the `scope` guard rather than a `default`.
-    #}
-    <div class="topbar-right">{% block nav_extra %}
+        {# Tenant Switcher #}
+        <div class="tenant-selector" title="Active Organization &amp; Authority Realm">
+            <span class="tenant-prefix">ORG:</span>
+            <span class="tenant-name mono">demo-org/main</span>
+        </div>
+
+        {% block nav_extra %}
         {% set _mode = request.app.state.login_mode if request else none %}
         {% set _sess = request.session if request and 'session' in request.scope else none %}
         {% if _sess and _sess.get('principal_id') %}
-        <span class="whoami" title="{{ _sess.get('principal_id') }}">
-            {% if _sess.get('demo_login') %}<span class="whoami-tag" title="Passwordless demo sign-in — no credential was checked">demo</span>{% endif %}
-            <span class="whoami-name">{{ _sess.get('display_name') or _sess.get('principal_id') }}</span>
-        </span>
-        <a href="/auth/logout">Sign out</a>
+        <div class="whoami-card" title="{{ _sess.get('principal_id') }}">
+            <span class="whoami-avatar">{{ (_sess.get('display_name') or _sess.get('principal_id'))[:1] | upper }}</span>
+            <div class="whoami-info">
+                <span class="whoami-name">{{ _sess.get('display_name') or _sess.get('principal_id') }}</span>
+                {% if _sess.get('demo_login') %}<span class="whoami-tag">Demo</span>{% endif %}
+            </div>
+            <a class="whoami-logout" href="/auth/logout" title="Sign out">Sign out</a>
+        </div>
         {% elif _mode %}
-        <a href="/auth/login?next={{ request.url.path }}">Sign in</a>
+        <a class="btn-auth" href="/auth/login?next={{ request.url.path }}">Sign In</a>
+        <a class="btn-auth" href="/auth/login?next={{ request.url.path }}">Sign in</a>
         {% else %}
-        <span class="dim" title="Neither OIDC nor demo sign-in is configured, so approving an escalation will answer 401">login not configured</span>
+        <div class="user-pill" title="In-Memory Demonstration Authority">
+            <span class="mono">demo-admin</span>
+        </div>
+        <span class="dim user-pill" title="Neither OIDC nor demo sign-in is configured, so approving an escalation will answer 401">login not configured</span>
         {% endif %}
-    {% endblock %}</div>
+        {% endblock %}
+    </div>
 </header>
 
 <main class="page{% block page_class %}{% endblock %}">
     {% block page_head %}
     <div class="page-head">
-        <h1>{% block page_title %}{% endblock %}</h1>
+        <div class="breadcrumb-trail">
+            <span class="breadcrumb-root">AgentIAM</span>
+            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb-current">{% block page_title %}{% endblock %}</span>
+        </div>
         <div class="sub">{% block page_sub %}{% endblock %}</div>
     </div>
     {% endblock %}

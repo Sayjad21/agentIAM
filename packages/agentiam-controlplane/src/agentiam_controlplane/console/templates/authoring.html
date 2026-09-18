@@ -31,9 +31,27 @@
         <h2>Cedar editor</h2>
         <p class="dim" style="margin-top:-0.4rem;">The candidate bundle. Activation is refused unless every corpus case still passes.</p>
         <form id="policy-form" hx-post="/policy/test" hx-target="#results-container" hx-indicator="#loading">
-            <textarea name="source" id="cedar-editor" spellcheck="false">{{ source }}</textarea>
+            <div class="cedar-terminal">
+                <div class="cedar-terminal-header">
+                    <div class="cedar-terminal-meta">
+                        <span class="cedar-file-chip">📄 policy_bundle.cedar</span>
+                        <span class="cedar-version-chip">v3.2</span>
+                    </div>
+                    <button type="button" class="cedar-copy-btn" onclick="AgentIAM.copy(document.getElementById('cedar-editor').value, this)" title="Copy Cedar policy bundle">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        <span>Copy</span>
+                    </button>
+                </div>
+                <div class="cedar-terminal-body">
+                    <div class="cedar-gutter" id="cedar-gutter" aria-hidden="true">1</div>
+                    <textarea name="source" id="cedar-editor" spellcheck="false">{{ source }}</textarea>
+                </div>
+            </div>
 
-            <div class="actions">
+            <div class="actions" style="margin-top: 0.85rem;">
                 <button type="submit" class="btn primary">Run tests &amp; diff</button>
                 <span id="loading" class="htmx-indicator">Evaluating corpus…</span>
             </div>
@@ -47,4 +65,35 @@
         <div class="empty">Compile a sentence or edit the Cedar, then run the tests to see the corpus diff.</div>
     </div>
 </section>
+
+<script>
+    function updateCedarGutter() {
+        const editor = document.getElementById('cedar-editor');
+        const gutter = document.getElementById('cedar-gutter');
+        if (!editor || !gutter) return;
+        const lines = editor.value.split('\n').length;
+        let numbers = '';
+        for (let i = 1; i <= Math.max(lines, 1); i++) {
+            numbers += i + '\n';
+        }
+        gutter.textContent = numbers;
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const editor = document.getElementById('cedar-editor');
+        const gutter = document.getElementById('cedar-gutter');
+        if (editor && gutter) {
+            updateCedarGutter();
+            editor.addEventListener('input', updateCedarGutter);
+            editor.addEventListener('scroll', () => {
+                gutter.scrollTop = editor.scrollTop;
+            });
+        }
+    });
+
+    // Also update gutter when HTMX swaps in new content
+    document.body.addEventListener('htmx:afterSwap', () => {
+        updateCedarGutter();
+    });
+</script>
 {% endblock %}

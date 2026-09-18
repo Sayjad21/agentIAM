@@ -39,6 +39,14 @@
 </form>
 
 <div class="count" id="count"></div>
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem;">
+    <div class="count" id="count" style="margin-bottom:0;"></div>
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+        <span class="dim">Density:</span>
+        <button type="button" class="btn small ghost" onclick="AgentIAM.setDensity('compact')">Compact</button>
+        <button type="button" class="btn small ghost" onclick="AgentIAM.setDensity('relaxed')">Relaxed</button>
+    </div>
+</div>
 
 <div class="table-wrap">
     <table>
@@ -116,13 +124,14 @@ function cell(text) {
 }
 
 function principalCell(id) {
-    // A principal is a Keycloak UUID: 45 characters, which wrapped to four lines and
-    // tripled the height of every row in the table. Clipped to one line, with the whole
-    // value on hover, selectable in full, and spelled out in the drawer.
     const td = document.createElement("td");
     td.className = "principal";
-    td.textContent = id ?? "";
-    if (id) td.title = id;
+    if (id) {
+        td.title = id;
+        td.appendChild(AgentIAM.copyChip(id));
+    } else {
+        td.textContent = "—";
+    }
     return td;
 }
 
@@ -168,6 +177,8 @@ function inspect(d, tr) {
 function renderRow(d) {
     const tr = document.createElement("tr");
     tr.className = "hit";
+    const isDeny = (d.outcome || "").toLowerCase() === "deny";
+    tr.className = "hit" + (isDeny ? " row-deny" : "");
     tr.title = "Open this record and its task's custody chain";
 
     const time = cell((d.timestamp || "").replace("T", " ").slice(0, 19));

@@ -137,15 +137,107 @@
         return span;
     }
 
-    /* Tab switching is pure CSS — `@view-transition` plus a shared
-     * `view-transition-name` on the lit pill, so the browser tweens the pill from its
-     * old position to its new one across the navigation.
-     *
-     * There was JavaScript here that moved `aria-current` on click, to make the pill
-     * respond before the new document arrived. It did the opposite: the browser
-     * snapshots the outgoing page *after* the click handler runs, so the "old" pill was
-     * already sitting at its destination and the morph had nothing left to animate.
-     * Deleted rather than fixed — the transition needs no help, only to be left alone. */
+    /* 1-click clipboard copy affordance with transient success feedback */
+    function copy(text, btn) {
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(function () {
+            if (!btn) return;
+            var origText = btn.innerHTML;
+            btn.classList.add("copied");
+            btn.setAttribute("title", "Copied to clipboard!");
+            setTimeout(function () {
+                btn.classList.remove("copied");
+                btn.setAttribute("title", "Copy to clipboard");
+            }, 1800);
+        }).catch(function () {
+            // Fallback for non-secure contexts
+            var ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand("copy"); } catch (_) {}
+            document.body.removeChild(ta);
+            if (btn) {
+                btn.classList.add("copied");
+                setTimeout(function () { btn.classList.remove("copied"); }, 1800);
+            }
+        });
+    }
 
-    global.AgentIAM = { tick: tick, drawer: drawer, kv: kv, pill: pill, reduceMotion: reduceMotion };
+    /* Table density switcher (compact vs relaxed) */
+    function setDensity(mode) {
+        var tables = document.querySelectorAll(".data-grid, .results-table, table.grid");
+        var tables = document.querySelectorAll(".data-grid, .results-table, table.grid, table");
+        tables.forEach(function (t) {
+            t.classList.remove("density-compact", "density-relaxed");
+            t.classList.add(mode === "compact" ? "density-compact" : "density-relaxed");
+        });
+        localStorage.setItem("agentiam_table_density", mode);
+    }
+
+    function initDensity() {
+        var saved = localStorage.getItem("agentiam_table_density") || "relaxed";
+        setDensity(saved);
+    }
+
+    /* Truncated entity ID with 1-click clipboard copy affordance */
+    function copyChip(fullText, label) {
+        if (!fullText) {
+            var empty = document.createElement("span");
+            empty.className = "muted";
+            empty.textContent = "—";
+            return empty;
+        }
+        var display = label || (fullText.length > 20 ? (fullText.slice(0, 8) + "…" + fullText.slice(-4)) : fullText);
+        var span = document.createElement("span");
+        span.className = "copy-chip";
+        span.title = fullText + " (Click to copy)";
+        span.onclick = function (e) {
+            e.stopPropagation();
+            copy(fullText, span);
+        };
+        span.innerHTML = '<span class="chip-val mono">' + display + '</span>' +
+            '<svg class="chip-icon" viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+        return span;
+    }
+
+    function filterTests(mode) {
+        var tables = document.querySelectorAll(".results-table");
+        tables.forEach(function (table) {
+            var rows = table.querySelectorAll("tbody tr");
+            rows.forEach(function (tr) {
+                var isFail = tr.classList.contains("row-fail");
+                if (mode === "failed") {
+                    tr.style.display = isFail ? "" : "none";
+                } else if (mode === "passed") {
+                    tr.style.display = isFail ? "none" : "";
+                } else {
+                    tr.style.display = "";
+                }
+            });
+        });
+        document.querySelectorAll(".cicd-filter-btn").forEach(function (btn) {
+            btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
+        });
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initDensity);
+    } else {
+        initDensity();
+    }
+
+    global.AgentIAM = {
+        tick: tick,
+        drawer: drawer,
+        kv: kv,
+        pill: pill,
+        copy: copy,
+        copyChip: copyChip,
+        setDensity: setDensity,
+        filterTests: filterTests,
+        reduceMotion: reduceMotion
+    };
 })(window);

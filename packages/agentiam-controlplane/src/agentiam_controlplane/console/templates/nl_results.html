@@ -82,6 +82,7 @@
 </div>
 {% endif %}
 
+<div class="cicd-table-wrap">
 <table class="results-table">
     <thead>
         <tr>
@@ -95,6 +96,7 @@
     <tbody>
         {% for item in diffs %}
         <tr class="{% if not item.passed %}row-fail{% elif item.changed %}row-changed{% endif %}">
+        <tr class="{% if not item.passed %}row-fail{% else %}row-pass{% endif %}{% if item.changed %} row-changed{% endif %}">
             <td>
                 {{ item.case.operation }}
                 <div class="small muted">Role: {{ item.case.role }}</div>
@@ -131,6 +133,7 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
 
 {% if can_activate %}
 <div class="activation-panel">

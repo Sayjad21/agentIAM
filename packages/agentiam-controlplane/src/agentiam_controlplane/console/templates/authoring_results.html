@@ -4,70 +4,95 @@
         <pre>{{ error }}</pre>
     </div>
 {% else %}
-    <div class="summary-cards">
-        <div class="card {% if summary.all_passed %}success{% else %}danger{% endif %}">
-            <span class="value">{{ summary.passed }} / {{ summary.total }}</span>
-            <span class="label">Tests Passed</span>
+    {% set pass_pct = ((summary.passed / summary.total) * 100) | round(1) if summary.total > 0 else 0 %}
+    {% set fail_pct = (100 - pass_pct) | round(1) if summary.total > 0 else 0 %}
+
+    <div class="cicd-summary-strip">
+        <div class="cicd-metrics">
+            <span class="cicd-pill total"><span class="cicd-dot"></span> Total <strong>{{ summary.total }} Tests</strong></span>
+            <span class="cicd-pill pass"><span class="cicd-dot pass"></span> Tests Passed <strong>{{ summary.passed }} / {{ summary.total }}</strong></span>
+            <span class="cicd-pill fail"><span class="cicd-dot fail"></span> Failures <strong>{{ summary.failed }}</strong></span>
         </div>
-        <div class="card {% if summary.failed == 0 %}success{% else %}danger{% endif %}">
-            <span class="value">{{ summary.failed }}</span>
-            <span class="label">Failures</span>
+
+        <div class="cicd-progress-wrap">
+            <div class="cicd-progress-bar" title="{{ pass_pct }}% Passed, {{ fail_pct }}% Failed">
+                <div class="cicd-seg-pass" style="width: {{ pass_pct }}%;"></div>
+                <div class="cicd-seg-fail" style="width: {{ fail_pct }}%;"></div>
+            </div>
+            <span class="cicd-progress-label mono">{{ pass_pct }}% passing</span>
+        </div>
+
+        <div class="cicd-filters" role="group" aria-label="Test filters">
+            <button type="button" class="cicd-filter-btn" data-mode="all" onclick="AgentIAM.filterTests('all')">
+                All ({{ summary.total }})
+            </button>
+            <button type="button" class="cicd-filter-btn{% if summary.failed > 0 %} active{% endif %}" data-mode="failed" onclick="AgentIAM.filterTests('failed')">
+                Failed Only ({{ summary.failed }})
+            </button>
+            <button type="button" class="cicd-filter-btn{% if summary.failed == 0 %} active{% endif %}" data-mode="passed" onclick="AgentIAM.filterTests('passed')">
+                Passed ({{ summary.passed }})
+            </button>
         </div>
     </div>
 
     {% if diffs %}
-    <table class="results-table">
-        <thead>
-            <tr>
-                <th>Test Case</th>
-                <th>Expected</th>
-                <th>Candidate Result</th>
-                <th>Change vs Current</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for diff in diffs %}
-            <tr class="{% if not diff.passed %}row-fail{% elif diff.changed %}row-changed{% endif %}">
-                <td>
-                    <strong>{{ diff.case.name }}</strong>
-                    <div class="muted small">{{ diff.case.description }}</div>
-                </td>
-                <td>
-                    <span class="badge {% if diff.case.expected %}allow{% else %}deny{% endif %}">
-                        {{ "Allow" if diff.case.expected else "Deny" }}
-                    </span>
-                </td>
-                <td>
-                    <span class="badge {% if diff.candidate_allowed %}allow{% else %}deny{% endif %}">
-                        {{ "Allow" if diff.candidate_allowed else "Deny" }}
-                    </span>
-                    {% if not diff.passed %}
-                        <span class="x-mark">❌</span>
-                    {% else %}
-                        <span class="check-mark">✅</span>
-                    {% endif %}
-                </td>
-                <td>
-                    {% if diff.changed %}
-                        {% if diff.current_allowed is not none %}
-                            <span class="badge {% if diff.current_allowed %}allow{% else %}deny{% endif %}">
-                                {{ "Allow" if diff.current_allowed else "Deny" }}
-                            </span>
-                            ➔
-                            <span class="badge {% if diff.candidate_allowed %}allow{% else %}deny{% endif %}">
-                                {{ "Allow" if diff.candidate_allowed else "Deny" }}
-                            </span>
+    <div class="cicd-table-wrap">
+        <table class="results-table">
+            <thead>
+                <tr>
+                    <th>Test Case</th>
+                    <th>Expected</th>
+                    <th>Candidate Result</th>
+                    <th>Change vs Current</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for diff in diffs %}
+                <tr class="{% if not diff.passed %}row-fail{% else %}row-pass{% endif %}{% if diff.changed %} row-changed{% endif %}">
+                    <td>
+                        <strong>{{ diff.case.name }}</strong>
+                        <div class="muted small">{{ diff.case.description }}</div>
+                    </td>
+                    <td>
+                        <span class="badge {% if diff.case.expected %}allow{% else %}deny{% endif %}">
+                            {{ "Allow" if diff.case.expected else "Deny" }}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge {% if diff.candidate_allowed %}allow{% else %}deny{% endif %}">
+                            {{ "Allow" if diff.candidate_allowed else "Deny" }}
+                        </span>
+                        {% if not diff.passed %}
+                            <span class="x-mark">❌</span>
                         {% else %}
-                            <span class="badge neutral">New</span>
+                            <span class="check-mark">✅</span>
                         {% endif %}
-                    {% else %}
-                        <span class="muted">—</span>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+                    </td>
+                    <td>
+                        {% if diff.changed %}
+                            {% if diff.current_allowed is not none %}
+                                <span class="badge {% if diff.current_allowed %}allow{% else %}deny{% endif %}">
+                                    {{ "Allow" if diff.current_allowed else "Deny" }}
+                                </span>
+                                ➔
+                                <span class="badge {% if diff.candidate_allowed %}allow{% else %}deny{% endif %}">
+                                    {{ "Allow" if diff.candidate_allowed else "Deny" }}
+                                </span>
+                            {% else %}
+                                <span class="badge neutral">New</span>
+                            {% endif %}
+                        {% else %}
+                            <span class="muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <script>
+        AgentIAM.filterTests('{% if summary.failed > 0 %}failed{% else %}all{% endif %}');
+    </script>
     {% endif %}
 
     <div class="activation-panel">
