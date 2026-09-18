@@ -207,4 +207,112 @@ class OIDCSettings:
         return cls(issuer=issuer, client_id=client_id, client_secret=client_secret)
 
 
-__all__ = ["ENV_PREFIX", "ControlPlaneSettings", "OIDCSettings"]
+@dataclass(frozen=True, slots=True)
+class Persona:
+    """One name on the demo sign-in screen."""
+
+    principal_id: str
+    display_name: str
+    title: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DemoLoginSettings:
+    """Passwordless sign-in for a demo deployment — a stand-in for `OIDCSettings`.
+
+    The escalation routes have required a real session since T-043/ADR-046: approve and deny
+    derive the acting approver from `request.session`, never from the request body. Only
+    `OIDCSettings` ever put a principal *into* that session, and the demo stack deliberately
+    leaves OIDC unwired (`docker-compose.demo.yml` says so, and `/readyz` reports
+    `auth: false`). The result was a queue that renders, validates its narrowing live, and
+    then answers every approval with 401 — the one screen in the console that could not
+    complete its own workflow.
+
+    This fills that gap without a Keycloak realm, a client secret, or a password: the
+    operator picks a name and that name becomes `session["principal_id"]`. Whether the name
+    may actually approve is **not** decided here — `escalations_api` still checks it against
+    `ControlPlaneSettings.approvers`, so signing in as someone outside the allowlist gets a
+    403 from the same code path a real OIDC session would hit. That is worth demonstrating
+    rather than hiding, so the default personas include one non-approver.
+
+    **This is an authentication bypass, and it is gated to stay one deliberately.** It is
+    mounted only when `AGENTIAM_CONTROLPLANE_DEMO_LOGIN` is explicitly truthy, it refuses to
+    mount at all when `OIDCSettings` is present (a real issuer always wins), the sign-in page
+    says in as many words that no password is checked, and `/readyz` reports `demo_login`
+    separately from `auth` so a probe can tell the two apart. None of those four is load
+    bearing on its own; together they mean this cannot be switched on by drift.
+    """
+
+    personas: tuple[Persona, ...]
+
+    @classmethod
+    def from_env(cls) -> DemoLoginSettings | None:
+        """Build from `AGENTIAM_CONTROLPLANE_DEMO_LOGIN` / `_DEMO_PERSONAS`.
+
+        Returns:
+            `None` unless `DEMO_LOGIN` is explicitly truthy — absent, empty, `0`, `false`
+            and `no` all leave passwordless sign-in off. Defaulting this on would be the
+            drift the gate exists to prevent.
+
+        Raises:
+            ValueError: `DEMO_PERSONAS` is set but names nobody, or an entry has no
+                principal id before its `=`.
+        """
+        if os.environ.get(f"{ENV_PREFIX}DEMO_LOGIN", "").strip().lower() not in _TRUTHY:
+            return None
+        raw = os.environ.get(f"{ENV_PREFIX}DEMO_PERSONAS", "").strip()
+        personas = _parse_personas(raw) if raw else _DEFAULT_PERSONAS
+        if not personas:
+            raise ValueError(f"{ENV_PREFIX}DEMO_PERSONAS is set but names nobody")
+        return cls(personas=personas)
+
+
+def _parse_personas(raw: str) -> tuple[Persona, ...]:
+    """Parse `kc:<sub>=<display name>|<title>,...` into personas.
+
+    The title is optional; everything after the first `|` is it. Splitting on `=` only once
+    means a display name may contain one, which costs nothing to allow and is surprising to
+    forbid.
+
+    Raises:
+        ValueError: an entry is empty before its `=`, which would put a nameless principal
+            into a session and make every downstream allowlist check fail confusingly.
+    """
+    personas: list[Persona] = []
+    for entry in (e.strip() for e in raw.split(",")):
+        if not entry:
+            continue
+        principal, _, rest = entry.partition("=")
+        principal = principal.strip()
+        if not principal:
+            raise ValueError(f"{ENV_PREFIX}DEMO_PERSONAS entry {entry!r} has no principal id")
+        name, _, title = rest.partition("|")
+        personas.append(
+            Persona(
+                principal_id=principal,
+                display_name=name.strip() or principal,
+                title=title.strip(),
+            )
+        )
+    return tuple(personas)
+
+
+_TRUTHY: Final = frozenset({"1", "true", "yes", "on"})
+
+#: Two approvers and one non-approver. The third exists so the demo can show the allowlist
+#: refusing someone — an approval screen that only ever succeeds proves nothing about who is
+#: allowed to use it. These ids match `docker-compose.demo.yml`'s `APPROVERS` default.
+_DEFAULT_PERSONAS: Final = (
+    Persona("kc:11111111-1111-1111-1111-111111111111", "Farhana Rahman", "Finance Manager"),
+    Persona("kc:22222222-2222-2222-2222-222222222222", "Tanvir Ahmed", "Chief Financial Officer"),
+    Persona("kc:33333333-3333-3333-3333-333333333333", "Nusrat Jahan", "Procurement Analyst"),
+)
+
+
+__all__ = [
+    "ENV_PREFIX",
+    "ControlPlaneSettings",
+    "DemoLoginSettings",
+    "OIDCSettings",
+    "Persona",
+]

@@ -124,10 +124,23 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       # OIDC is deliberately not wired here: it needs the console's redirect URI reachable
       # from a browser on the host, which depends on how the demo is being viewed. Set
-      # AGENTIAM_CONTROLPLANE_OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET to enable login; without
-      # them /readyz reports auth:false, the console's approve/deny buttons cannot be used,
-      # and the escalation queue is reachable only via a hand-signed session cookie, which
-      # is what every integration test does.
+      # AGENTIAM_CONTROLPLANE_OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET to enable login; doing so
+      # also switches the passwordless sign-in below off, since a real issuer always wins.
+      #
+      # Until then DEMO_LOGIN stands in for it. Approve and deny take the acting approver
+      # from the session and never from the request body (ADR-046), and with no login at all
+      # nothing ever put a principal into that session -- so the queue rendered, validated
+      # its narrowing live, and answered every approval with 401. It is the one screen that
+      # could not complete its own workflow.
+      #
+      # This checks no credential. It is off by default in code, on here because this file
+      # is the demo stack, and /readyz reports it as `demo_login` separately from `auth` so
+      # a probe cannot mistake one for the other. Do not set it anywhere reachable.
+      AGENTIAM_CONTROLPLANE_DEMO_LOGIN: ${AGENTIAM_CONTROLPLANE_DEMO_LOGIN:-true}
+      # `kc:<sub>=<display name>|<job title>`, comma separated. The first two ids match
+      # APPROVERS above; the third deliberately does not, so the demo can show the allowlist
+      # refusing an approval with 403 rather than only ever succeeding.
+      AGENTIAM_CONTROLPLANE_DEMO_PERSONAS: ${AGENTIAM_CONTROLPLANE_DEMO_PERSONAS:-kc:11111111-1111-1111-1111-111111111111=Farhana Rahman|Finance Manager,kc:22222222-2222-2222-2222-222222222222=Tanvir Ahmed|Chief Financial Officer,kc:33333333-3333-3333-3333-333333333333=Nusrat Jahan|Procurement Analyst}
     # The public half is read too, not derived: biscuit's `PrivateKey` exposes no
     # `public_key()` (measured against biscuit-python 0.4.0), and the console needs it to
     # verify a parent token before attenuating it when an operator spawns a sub-agent.

@@ -1560,3 +1560,77 @@ td.principal {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* ---- sign-in state in the top bar, and the persona picker -------------------------- */
+
+.whoami {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.8rem;
+    color: var(--text-2, #c8cbd9);
+}
+
+.whoami-name { font-weight: 600; }
+
+/* The session is passwordless and the top bar says so on every page. A demo login that
+   looks like a real one is worse than none, because nothing downstream can tell. */
+.whoami-tag {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.1rem 0.34rem;
+    border-radius: 5px;
+    color: #f5c86b;
+    background: rgba(245, 200, 107, 0.12);
+    border: 1px solid rgba(245, 200, 107, 0.34);
+}
+
+.personas {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+    gap: 0.9rem;
+    margin-top: 1.2rem;
+}
+
+.persona {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: 1.15rem 1.25rem;
+    border: 1px solid var(--hairline, #2a2e40);
+    border-radius: var(--radius, 12px);
+    background: var(--mat-regular, rgba(255, 255, 255, 0.04));
+    -webkit-backdrop-filter: var(--blur-regular);
+    backdrop-filter: var(--blur-regular);
+    transition: transform 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+
+.persona:hover { transform: translateY(-2px); border-color: var(--c-violet, #8b7bf5); }
+.persona.current { border-color: var(--c-mint, #4ade9b); }
+
+.persona-head { display: flex; align-items: center; gap: 0.7rem; }
+
+.persona-avatar {
+    display: grid;
+    place-items: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 50%;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(160deg, var(--c-violet, #8b7bf5), var(--c-indigo, #5b5bd6));
+}
+
+.persona-name { font-weight: 600; font-size: 0.95rem; }
+.persona-title { font-size: 0.78rem; color: var(--text-3, #9ca3af); }
+.persona-id { font-size: 0.7rem; color: var(--text-3, #9ca3af); word-break: break-all; }
+
+.persona-role { font-size: 0.76rem; }
+.persona-role.can { color: var(--c-mint, #4ade9b); }
+/* Not an error state: being outside the allowlist is the allowlist working, and this card
+   exists so that refusal can be demonstrated rather than designed around. */
+.persona-role.cannot { color: var(--text-3, #9ca3af); }
+
+.persona button { margin-top: auto; }

@@ -4,22 +4,23 @@
 {% block page_title %}Escalation queue{% endblock %}
 {% block page_sub %}Approving narrows scope or amount. It never widens them — the server refuses a widening even if this page were to ask for one (EC-A09).{% endblock %}
 
-{#
-  Sign-in state belongs in the top bar, not in a per-page header block: it is a property
-  of the session, not of this page, and the nav is where a reader already looks for it.
-#}
-{% block nav_extra %}
-    {% if principal_id %}
-    <span>{{ display_name or principal_id }} <span class="mono">({{ principal_id }})</span></span>
-    <a href="/auth/logout">Sign out</a>
-    {% elif login_wired %}
-    <a href="/auth/login?next=/escalations">Sign in</a>
-    {% else %}
-    <span title="No OIDC issuer configured, so approve/deny will 401">login not configured</span>
-    {% endif %}
-{% endblock %}
+{# Sign-in state is rendered by `base.html` for every page — this page argued for that
+   in the comment that used to sit here, then overrode it anyway. #}
 
 {% block content %}
+{# Approving derives its identity from the session and checks it against the approver
+   allowlist server-side. Saying so up front turns a 401 or a 403 from a surprise into a
+   thing the operator was already told — and the not-an-approver case is worth showing
+   rather than hiding, because it is the allowlist doing its job. #}
+{% if not principal_id %}
+<p class="alert warn">Not signed in. The queue is readable by anyone who can reach the
+    console; approving and denying are not. <a href="/auth/login?next=/escalations">Sign in</a>
+    to act on these.</p>
+{% elif not is_approver %}
+<p class="alert warn">Signed in as <span class="mono">{{ display_name or principal_id }}</span>,
+    who is not on the approver allowlist &mdash; approving will be refused with 403 by the
+    server, not by this page. <a href="/auth/login?next=/escalations">Switch user</a>.</p>
+{% endif %}
 {% if error %}
 <p class="alert danger">{{ error }}</p>
 {% elif not pending %}

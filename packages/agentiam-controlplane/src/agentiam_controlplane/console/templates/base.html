@@ -61,7 +61,31 @@
         {% endfor %}
     </nav>
 
-    <div class="topbar-right">{% block nav_extra %}{% endblock %}</div>
+    {#
+      Sign-in state is a property of the session, not of any one page, so it is rendered
+      here for every page rather than by whichever page happens to care. It used to live
+      in the escalation queue's `nav_extra` alone, which meant the one screen that needs a
+      session was also the only screen that would tell you whether you had one.
+
+      Read straight off `request.session`, which needs no view to pass it — but that
+      attribute raises when `SessionMiddleware` is not installed (the console-only app has
+      no database and so no session), hence the `scope` guard rather than a `default`.
+    #}
+    <div class="topbar-right">{% block nav_extra %}
+        {% set _mode = request.app.state.login_mode if request else none %}
+        {% set _sess = request.session if request and 'session' in request.scope else none %}
+        {% if _sess and _sess.get('principal_id') %}
+        <span class="whoami" title="{{ _sess.get('principal_id') }}">
+            {% if _sess.get('demo_login') %}<span class="whoami-tag" title="Passwordless demo sign-in — no credential was checked">demo</span>{% endif %}
+            <span class="whoami-name">{{ _sess.get('display_name') or _sess.get('principal_id') }}</span>
+        </span>
+        <a href="/auth/logout">Sign out</a>
+        {% elif _mode %}
+        <a href="/auth/login?next={{ request.url.path }}">Sign in</a>
+        {% else %}
+        <span class="dim" title="Neither OIDC nor demo sign-in is configured, so approving an escalation will answer 401">login not configured</span>
+        {% endif %}
+    {% endblock %}</div>
 </header>
 
 <main class="page{% block page_class %}{% endblock %}">
