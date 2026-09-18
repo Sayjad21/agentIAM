@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, ConfigDict, computed_field
 from sqlalchemy import desc, select
@@ -23,11 +24,61 @@ from agentiam_controlplane.db.models import (
     RevocationRow,
 )
 from agentiam_core.escalation import EscalationState
+from agentiam_core.models import BudgetDimension
 
 logger = logging.getLogger(__name__)
 
 #: Older than any `created_at`, so the first generation seen always wins the comparison.
 _EPOCH = datetime.min.replace(tzinfo=UTC)
+
+
+def decimal_field(value: object) -> Decimal:
+    """Read a money field back out of stored JSON, tolerating absence.
+
+    Public because `tree_api` folds the same records for the drawer and must parse them the
+    same way; two copies of this rule are two chances for the tree and the drawer to report
+    different numbers for one agent.
+    """
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal(0)
+
+
+def _spend_by_agent(records: Sequence[AuditRecordRow]) -> dict[str, dict[str, Decimal]]:
+    """Sum what each agent actually consumed, per dimension, over every record it has.
+
+    `budget_before` and `budget_after` bracket one call, so their difference is what that
+    call consumed — a refusal reserves nothing and contributes zero. Summed across the whole
+    chain rather than read off the newest record, because the newest record describes one
+    call and the question here is what the agent has spent in total.
+    """
+    spent: dict[str, dict[str, Decimal]] = {}
+    for row in records:
+        record = row.record
+        before = record.get("budget_before") or {}
+        after = record.get("budget_after") or {}
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            continue
+        per_dimension = spent.setdefault(str(record.get("agent_id", "")), {})
+        for dimension, before_value in before.items():
+            delta = decimal_field(before_value) - decimal_field(after.get(dimension))
+            if delta:
+                per_dimension[str(dimension)] = (
+                    per_dimension.get(str(dimension), Decimal(0)) + delta
+                )
+    return spent
+
+
+def _budget_order(budget: TreeBudget) -> tuple[int, str]:
+    """Money first, then alphabetical.
+
+    Which dimension leads is a display decision rather than a tidiness one: the console
+    draws each node's bar from `budget[0]` alone, so sorted purely by name `external_emails`
+    would lead and every bar on the tree would read empty against a ceiling of zero.
+    """
+    money = BudgetDimension.SPEND_BDT.value
+    return (0 if budget.dimension == money else 1, budget.dimension)
 
 
 class TreeBudget(BaseModel):
@@ -221,6 +272,7 @@ async def build_tree(
             pending_escalations.add(a_id)
 
     # 5. Assemble TreeNode objects
+    spent_by_agent = _spend_by_agent(records)
     nodes: list[TreeNode] = []
     for row in latest_records:
         rec = row.record
@@ -236,13 +288,43 @@ async def build_tree(
                 revocation_reason = revoked_blocks[b_id]
                 break
 
-        # Scope is logged as string in decision, but token might have multiple scopes.
-        # Tree displays the scopes of the agent. If record only has the requested 'scope', we
-        # can infer it or we might extract 'scopes' from known caveats if we had them.
-        # For now, we take 'scope' from the latest request, or empty list.
-        # It's better if we can get scopes from record, but `scope` is the single requested scope.
-        scope_val = rec.get("scope")
-        scopes = [str(scope_val)] if scope_val else []
+        # What this agent *may* do, read off the authority its own token carries — not the
+        # single scope this one request happened to ask for. The two differ precisely when
+        # it matters most: a refused request names the scope the agent does **not** hold, so
+        # taking `scope` from the latest record rendered the read-only `agt-doc-reader` as
+        # holding `payment:initiate`, the one scope its token exists to forbid. Measured on
+        # the demo stack, where three of six nodes displayed a scope they had been refused.
+        #
+        # A record written before the PEP folded authority onto it carries none, and reads
+        # empty rather than falling back to the requested scope. `tree_api._authority_view`
+        # returns `None` in that same case for the same reason: *not measured* is honest,
+        # and a scope the agent may not hold is not.
+        authority = rec.get("authority")
+        raw_scopes = authority.get("scopes") if isinstance(authority, dict) else None
+        scopes = sorted(str(s) for s in raw_scopes) if isinstance(raw_scopes, list) else []
+
+        # What it may spend, and what is left: the ceilings its own token carries, less what
+        # its records show it consumed. Keyed by dimension so a ledger row naming this agent
+        # overrides the token's claim for that one dimension — an allocated sub-pool is the
+        # ledger's own number, and the ledger is the only authority on budget.
+        #
+        # Until this read the token's authority, every node on every deployed tree showed no
+        # budget at all: the pool rows are joined on a `mandate_id` that decision records do
+        # not carry, so the lookup above found nothing to attach. The pool belongs on the
+        # budgets page regardless; what a *node* answers is what this agent may spend.
+        ceilings = authority.get("ceilings") if isinstance(authority, dict) else None
+        consumed = spent_by_agent.get(agent_id, {})
+        budgets: dict[str, TreeBudget] = {}
+        if isinstance(ceilings, dict):
+            for dimension, ceiling in ceilings.items():
+                total = decimal_field(ceiling)
+                budgets[str(dimension)] = TreeBudget(
+                    dimension=str(dimension),
+                    total=total,
+                    available=total - consumed.get(str(dimension), Decimal(0)),
+                )
+        for ledger_budget in agent_budgets.get(agent_id, []):
+            budgets[ledger_budget.dimension] = ledger_budget
 
         # The role the delegating parent asserted, read off the token's attenuation block by
         # the PEP and carried here on the decision record (spec 01 §6.1). Until the record
@@ -262,7 +344,7 @@ async def build_tree(
                 principal_id=str(rec.get("principal_id", "")),
                 block_ids=block_ids,
                 scopes=scopes,
-                budget=sorted(agent_budgets.get(agent_id, []), key=lambda b: b.dimension),
+                budget=sorted(budgets.values(), key=_budget_order),
                 revoked=revoked,
                 revocation_reason=revocation_reason,
                 has_pending_escalation=agent_id in pending_escalations,

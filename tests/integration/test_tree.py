@@ -261,14 +261,297 @@ async def test_an_expired_escalation_does_not_flag_the_node(
         assert nodes[0].has_pending_escalation is False
 
 
-async def test_budget_available_is_total_minus_consumed() -> None:
-    # Logic is tested in test_single_root_agent_node
-    pass
+def _authority_record(
+    *,
+    task_id: uuid.UUID,
+    seq: int,
+    agent_id: str,
+    scopes: list[str],
+    ceilings: dict[str, str],
+    requested_scope: str,
+    outcome: str = "allow",
+    spend_before: str = "0",
+    spend_after: str = "0",
+) -> AuditRecordRow:
+    """One decision record shaped the way the deployed PEP writes them.
+
+    The shape matters more than the values: `scope` is the single scope this request asked
+    for, while `authority` carries what the token actually permits, and the two disagree on
+    every refusal. Taken from a real record off the demo stack rather than invented.
+    """
+    return AuditRecordRow(
+        seq=seq,
+        decision_id=uuid.uuid4(),
+        record={
+            "task_id": str(task_id),
+            "agent_id": agent_id,
+            "depth": 1,
+            "principal_id": "kc:1111",
+            "token_chain_ids": ["b1", f"b-{agent_id}"],
+            "scope": requested_scope,
+            "outcome": outcome,
+            "reason_code": "OK" if outcome == "allow" else "SCOPE_ATTENUATED_AWAY",
+            "role": "reader",
+            "authority": {"scopes": scopes, "ceilings": ceilings},
+            "budget_before": {"spend_bdt": spend_before},
+            "budget_after": {"spend_bdt": spend_after},
+        },
+        # Only the genesis record may carry no predecessor — `audit_records` has a check
+        # constraint saying so, because a later record with a NULL `prev_hash` would verify
+        # as a fresh genesis and hide every record before it.
+        prev_hash=None if seq == 1 else f"{seq - 1:064d}",
+        record_hash=f"{seq:064d}",
+        created_at=datetime.now(UTC),
+    )
 
 
-async def test_budget_zero_total_does_not_divide() -> None:
-    # Decimal operations natively handle zeros gracefully if we don't divide
-    pass
+async def test_scopes_are_the_authority_not_the_scope_that_was_refused(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """The defect this pins put `payment:initiate` on the one agent that may never pay.
+
+    `agt-doc-reader` holds reads only, and its last call on the demo stack was the payment
+    it was refused. Reading `scope` off that record advertised the refused scope as held —
+    the node claimed authority the token exists to deny, which is the worst direction for
+    this screen to be wrong in.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        session.add(
+            _authority_record(
+                task_id=task_id,
+                seq=1,
+                agent_id="agt-doc-reader",
+                scopes=["invoice:read", "vendor:read"],
+                ceilings={"spend_bdt": "0"},
+                requested_scope="payment:initiate",
+                outcome="deny",
+            )
+        )
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
+        assert nodes[0].scopes == ["invoice:read", "vendor:read"]
+        assert "payment:initiate" not in nodes[0].scopes
+
+
+async def test_a_record_carrying_no_authority_reads_no_scopes(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """Empty, not the requested scope — the same rule `_authority_view` follows.
+
+    A record written before the PEP folded authority cannot say what the agent held. An
+    empty list reads as *not measured*; the requested scope would read as a held scope.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        session.add(
+            AuditRecordRow(
+                seq=1,
+                decision_id=uuid.uuid4(),
+                record={
+                    "task_id": str(task_id),
+                    "agent_id": "legacy",
+                    "depth": 1,
+                    "token_chain_ids": ["b1"],
+                    "scope": "payment:initiate",
+                },
+                record_hash="c" * 64,
+                created_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
+        assert nodes[0].scopes == []
+
+
+async def test_budget_available_is_total_minus_consumed(migrated_engine: AsyncEngine) -> None:
+    """Each node carries its own ceiling, less what its own records show it spent.
+
+    Two calls, because spend sums over the whole chain rather than being read off the
+    newest record: 900 then 250 against a 25,000 ceiling leaves 23,850.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        session.add(
+            _authority_record(
+                task_id=task_id,
+                seq=1,
+                agent_id="agt-settlement",
+                scopes=["payment:initiate"],
+                ceilings={"spend_bdt": "25000"},
+                requested_scope="payment:initiate",
+                spend_before="5000.0000",
+                spend_after="4100.0000",
+            )
+        )
+        session.add(
+            _authority_record(
+                task_id=task_id,
+                seq=2,
+                agent_id="agt-settlement",
+                scopes=["payment:initiate"],
+                ceilings={"spend_bdt": "25000"},
+                requested_scope="payment:initiate",
+                spend_before="4100.0000",
+                spend_after="3850.0000",
+            )
+        )
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
+        assert len(nodes[0].budget) == 1
+        assert nodes[0].budget[0].dimension == "spend_bdt"
+        assert nodes[0].budget[0].total == Decimal("25000")
+        assert nodes[0].budget[0].available == Decimal("23850.0000")
+
+
+async def test_a_refusal_consumes_nothing(migrated_engine: AsyncEngine) -> None:
+    """A denied request reserves no budget, so it must not move the node's remainder."""
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        session.add(
+            _authority_record(
+                task_id=task_id,
+                seq=1,
+                agent_id="agt-settlement",
+                scopes=["payment:initiate"],
+                ceilings={"spend_bdt": "25000"},
+                requested_scope="payment:initiate",
+                outcome="deny",
+                spend_before="5000.0000",
+                spend_after="5000.0000",
+            )
+        )
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
+        assert nodes[0].budget[0].available == Decimal("25000")
+
+
+async def test_budget_zero_total_does_not_divide(migrated_engine: AsyncEngine) -> None:
+    """A ceiling of zero is a real answer, not a missing one.
+
+    `agt-doc-reader` is granted exactly zero spend, and that is the point of it. The node
+    still carries the dimension so the console can draw an empty bar rather than none; the
+    console's own guard is `total <= 0`, so nothing here divides by it.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        session.add(
+            _authority_record(
+                task_id=task_id,
+                seq=1,
+                agent_id="agt-doc-reader",
+                scopes=["invoice:read"],
+                ceilings={"spend_bdt": "0"},
+                requested_scope="invoice:read",
+            )
+        )
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
+        assert nodes[0].budget[0].total == Decimal("0")
+        assert nodes[0].budget[0].available == Decimal("0")
+
+
+async def test_money_leads_the_budget_list(migrated_engine: AsyncEngine) -> None:
+    """The console draws each node's bar from `budget[0]`, so the order is load bearing.
+
+    Sorted by name alone, `external_emails` leads with a ceiling of zero and every bar on
+    the tree reads empty.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        session.add(
+            _authority_record(
+                task_id=task_id,
+                seq=1,
+                agent_id="agt-payer",
+                scopes=["payment:initiate"],
+                ceilings={
+                    "external_emails": "0",
+                    "rows_read": "100000",
+                    "spend_bdt": "200000",
+                    "tool_calls": "1000",
+                    "wall_clock_s": "0",
+                },
+                requested_scope="payment:initiate",
+            )
+        )
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
+        assert nodes[0].budget[0].dimension == "spend_bdt"
+        rest = [b.dimension for b in nodes[0].budget[1:]]
+        assert rest == sorted(rest)
+
+
+async def test_a_ledger_row_naming_the_agent_overrides_its_token_ceiling(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """An allocated sub-pool is the ledger's own number, and the ledger owns budget.
+
+    The token says what the agent may spend; a budget row addressed to that agent says what
+    it has actually been allocated. Where both speak, the ledger wins.
+    """
+    session_factory = make_session_factory(migrated_engine)
+    async with session_factory() as session:
+        task_id = uuid.uuid4()
+        mandate_id = uuid.uuid4()
+        record = _authority_record(
+            task_id=task_id,
+            seq=1,
+            agent_id="agt-payer",
+            scopes=["payment:initiate"],
+            ceilings={"spend_bdt": "200000"},
+            requested_scope="payment:initiate",
+        )
+        record.record = {**record.record, "mandate_id": str(mandate_id)}
+        session.add(record)
+        # A pool and an allocation drawn from it. Both halves are required: `budgets` has a
+        # check constraint that a row is one or the other and never half of each, because a
+        # row with an agent but no parent is a pool wearing a name tag.
+        pool_id = uuid.uuid4()
+        session.add(
+            BudgetRow(
+                id=pool_id,
+                mandate_id=mandate_id,
+                dimension="spend_bdt",
+                total=Decimal("200000"),
+                committed=Decimal("0"),
+                leased=Decimal("0"),
+                allocated=Decimal("40"),
+                agent_id=None,
+                parent_budget_id=None,
+            )
+        )
+        session.add(
+            BudgetRow(
+                id=uuid.uuid4(),
+                mandate_id=mandate_id,
+                dimension="spend_bdt",
+                total=Decimal("40"),
+                committed=Decimal("10"),
+                leased=Decimal("0"),
+                allocated=Decimal("0"),
+                agent_id="agt-payer",
+                parent_budget_id=pool_id,
+            )
+        )
+        await session.commit()
+
+        nodes = await build_tree(session, task_id=task_id, now=datetime.now(UTC))
+        assert len(nodes[0].budget) == 1
+        assert nodes[0].budget[0].total == Decimal("40")
+        assert nodes[0].budget[0].available == Decimal("30")
 
 
 async def test_build_tree_diff_detects_added_node() -> None:
