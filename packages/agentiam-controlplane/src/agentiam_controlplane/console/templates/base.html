@@ -54,7 +54,6 @@
             ('/budgets',       'budgets',       'Budgets'),
             ('/policy',        'policy',        'Policy'),
             ('/escalations',   'escalations',   'Escalations'),
-            ('/audit',         'audit',         'Audit'),
         ] %}
         {% for href, key, label in items %}
         <a href="{{ href }}"{% if active == key %} aria-current="page"{% endif %}>{{ label }}</a>

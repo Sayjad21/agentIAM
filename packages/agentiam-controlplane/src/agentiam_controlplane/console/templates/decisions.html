@@ -26,6 +26,18 @@
     <button type="submit" class="primary">Apply</button>
 </form>
 
+{# The chain check lives beside the feed it vouches for: the rows below are the ledger, and
+   this is the one-click proof that none of them has been edited since it was written. #}
+<div class="verify-row" style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:1rem;">
+    <button class="secondary" id="verify-btn" type="button">Verify chain</button>
+    <span class="dim">Recomputes every record's hash link, server-side — an edited row breaks the chain.</span>
+    <div class="invariant" id="verify-banner" style="display:none; flex-basis:100%;">
+        <span class="lamp"></span>
+        <span class="verdict" id="verify-verdict"></span>
+        <span class="meta" id="verify-meta"></span>
+    </div>
+</div>
+
 <div class="status">
     <span class="dot" id="dot"></span><span id="state">connecting…</span>
     <span id="count"></span>
@@ -252,5 +264,31 @@ dot.className = "dot down";
 state.textContent = "no database configured — streaming disabled";
 empty.textContent = "The control plane was started without a database, so there is nothing to stream.";
 {% endif %}
+
+document.getElementById("verify-btn").addEventListener("click", async () => {
+    const banner = document.getElementById("verify-banner");
+    const verdict = document.getElementById("verify-verdict");
+    const meta = document.getElementById("verify-meta");
+    banner.style.display = "flex";
+    banner.className = "invariant";
+    verdict.textContent = "verifying…";
+    meta.textContent = "";
+
+    try {
+        const resp = await fetch("/v1/audit/verify", { method: "POST" });
+        const data = await resp.json();
+        banner.className = "invariant " + (data.ok ? "ok" : "bad");
+        verdict.textContent = data.ok
+            ? "chain intact"
+            : "chain broken at seq " + data.first_bad_seq;
+        meta.textContent = data.ok
+            ? data.checked + " record(s) verified"
+            : data.detail;
+    } catch (err) {
+        banner.className = "invariant bad";
+        verdict.textContent = "could not verify";
+        meta.textContent = String(err);
+    }
+});
 </script>
 {% endblock %}

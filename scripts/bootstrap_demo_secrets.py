@@ -54,12 +54,13 @@ _FILES: Final = (
 #: `/`-separated) because an `agent_id` alone is the delegating parent's word — see
 #: `agentiam_core.datalog.chain_identity`.
 #:
-#: The whole payer lineage is `senior` and nothing else is. That is not a convenience to keep
-#: payments green: `payment_api` is `sensitivity: "critical"` in the catalogue, the corpus
-#: bundle forbids critical resources to non-seniors, and these three are exactly the agents
-#: the demo entrusts with `payment:initiate`. `agt-doc-reader` and `agt-negotiator` are
-#: *not* senior, so the forbid is live rather than disarmed — which is the difference between
-#: this and setting `AGENTIAM_PEP_DEFAULT_ROLE=senior` and calling the catalogue wired.
+#: Both payer lineages — `agt-payer`'s and `agt-treasury`'s — are `senior` and nothing else
+#: is. That is not a convenience to keep payments green: `payment_api` is `sensitivity:
+#: "critical"` in the catalogue, the corpus bundle forbids critical resources to non-seniors,
+#: and these five are exactly the agents the demo entrusts with `payment:initiate`.
+#: `agt-doc-reader`, `agt-negotiator` and the read-only agents below them are *not* senior,
+#: so the forbid is live rather than disarmed — which is the difference between this and
+#: setting `AGENTIAM_PEP_DEFAULT_ROLE=senior` and calling the catalogue wired.
 #:
 #: `agt-subcontractor` is senior too, and its payment is still refused: it sits at depth 3 and
 #: the bundle permits payments only at `principal.depth <= 2`. Leaving it unassigned would
@@ -73,6 +74,8 @@ ROLE_ASSIGNMENTS: Final[dict[str, str]] = {
     "agt-payer": "senior",
     "agt-payer/agt-settlement": "senior",
     "agt-payer/agt-settlement/agt-subcontractor": "senior",
+    "agt-treasury": "senior",
+    "agt-treasury/agt-reconciler": "senior",
 }
 
 DEFAULT_OUT: Final = _REPO_ROOT / "deploy" / "demo-secrets"
@@ -124,6 +127,11 @@ def generate(out: Path) -> None:
     )
 
     (out / "routes.json").write_text(json.dumps(ROUTES), encoding="utf-8")
+    _write_role_assignments(out)
+
+
+def _write_role_assignments(out: Path) -> None:
+    """The role map is configuration, not a credential — rewriting it rotates nothing."""
     (out / "role_assignments.json").write_text(json.dumps(ROLE_ASSIGNMENTS), encoding="utf-8")
 
 
@@ -153,7 +161,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     out = Path(args.out)
 
     if _is_complete(out) and not args.force:
-        print(f"{out}: already bootstrapped (use --force to rotate)")
+        # Refreshed anyway, so an agent added to the demo tree reaches an existing secrets
+        # volume without rotating the keys every token was minted under.
+        _write_role_assignments(out)
+        print(f"{out}: already bootstrapped (use --force to rotate); role map refreshed")
         return 0
 
     generate(out)

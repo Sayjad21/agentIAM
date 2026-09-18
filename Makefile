@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down demo-up demo-seed demo-down logs ps test test-unit \
+.PHONY: help install up down demo-up demo-seed demo-down demo-reset logs ps test test-unit \
         test-integration \
         test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
         benchmarks evidence
@@ -30,10 +30,17 @@ demo-up: ## Build and start the full demo stack (control plane, PEP, tools) and 
 # during `demo-up` — not on the host — so this runs inside a container that mounts it.
 # `--no-deps` because everything it needs is already up by the time you run this.
 demo-seed: ## Drive the demo scenario through a running stack, so the console has content (T-057)
-	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080 --control-plane-api-url http://controlplane:8000
 
 demo-down: ## Stop the demo stack, keeping volumes
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml down
+
+# The audit chain is append-only and the tree only resets when tokens are re-minted, so a
+# rehearsal leaves decisions, spend and escalations behind. This wipes every demo volume —
+# database, secrets, Keycloak — and brings the stack back empty. Run `demo-seed` after.
+demo-reset: ## Wipe all demo data and bring the stack back up empty (destroys local data)
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --wait --build
 
 logs: ## Tail infrastructure logs
 	docker compose logs -f
