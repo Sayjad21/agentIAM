@@ -7,6 +7,12 @@ Three endpoints, each read-only:
   order it happened, each entry carrying `decisions.explain()`'s narrative sentence rather
   than a bare outcome. This is `db/audit.py`'s `custody()` (T-023, already proven against real
   tampering, deletion and reordering) exposed live rather than rebuilt.
+
+  **It names the human.** The response leads with `principals` and every entry carries
+  `principal_id`, because the question this endpoint exists for is "who authorized this?"
+  and it used to answer with an agent chain and a rule while leaving the person out. The
+  value is attested, not asserted: it is bound into the signed root token and read back off
+  it by the PEP, so no request header can set it.
 * `POST /v1/audit/verify` — runs `verify_chain()` (also T-023) against the live database and
   returns its verdict. A `GET` would be cached by an intermediary; a verification result must
   never be served stale.
@@ -120,17 +126,44 @@ def build_router(
                 "seq": entry.seq,
                 "decision_id": entry.record.get("decision_id"),
                 "timestamp": entry.record.get("timestamp"),
+                # The human this action was taken on behalf of. Bound into the signed root
+                # token and read back off it by the PEP, so it is attested rather than
+                # asserted: a caller cannot set it with a header, and three attempts to do
+                # so were measured leaving the recorded principal unchanged.
+                #
+                # It was in every record and in none of these entries, which made the one
+                # question this endpoint exists to answer — "who authorized this?" — the one
+                # it could not answer. The agent chain and the deciding rule were both here;
+                # the person was not.
+                "principal_id": entry.record.get("principal_id"),
                 "agent_id": entry.agent_id,
                 "depth": entry.depth,
                 "scope": entry.scope,
                 "tool_id": entry.record.get("tool_id"),
                 "outcome": entry.outcome,
                 "reason_code": entry.reason_code,
+                # Who approved the elevation this ran under, when one did. Currently `None`
+                # on every record — nothing writes it, because the only path that could is
+                # escalation approval, which needs a login this deployment leaves unwired.
+                # Carried anyway so the shape of the answer does not change when it lands.
+                "elevated_by": entry.record.get("elevated_by"),
                 "explanation": explain(entry.record),
             }
             for entry in entries
         ]
-        return {"task_id": str(task_id), "entries": narrative}
+        # Hoisted so the answer leads with the person rather than making a reader infer them
+        # from a column. Every entry under one task shares a principal — the mandate binds
+        # it — so a set here is a single name in practice, and more than one would mean
+        # records from two mandates collided on a task id, which is worth seeing rather than
+        # flattening away.
+        principals = sorted(
+            {str(e["principal_id"]) for e in narrative if e["principal_id"] is not None}
+        )
+        return {
+            "task_id": str(task_id),
+            "principals": principals,
+            "entries": narrative,
+        }
 
     @router.post("/verify")
     async def verify(
