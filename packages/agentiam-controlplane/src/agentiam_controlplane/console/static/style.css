@@ -1525,3 +1525,26 @@ tr.row-fail td:first-child { box-shadow: inset 3px 0 0 var(--deny); }
     letter-spacing: 0.04em;
     margin-bottom: 0.6rem;
 }
+
+/* The human at the top of a custody chain. Set above the links rather than inside them:
+   every link shares one principal, and repeating it per row buries the name the drawer is
+   opened to find. */
+.custody-principal {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.3rem 0.7rem;
+    align-items: baseline;
+    margin: 0 0 0.9rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--hairline, #2a2e40);
+    border-radius: 8px;
+    background: var(--mat-thin, rgba(255, 255, 255, 0.03));
+    font-size: 0.85rem;
+}
+
+.custody-principal-label {
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-3, #9ca3af);
+}
