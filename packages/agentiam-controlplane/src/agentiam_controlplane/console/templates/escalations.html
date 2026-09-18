@@ -45,36 +45,10 @@
                 </div>
                 {% endfor %}
             {% else %}
-                <div class="queue-card active" onclick="selectQueueItem('demo-esc')" id="queue-tab-demo-esc">
-                    <div class="queue-card-head">
-                        <span class="status-pip amber"></span>
-                        <span class="queue-agent mono">agt-bulk-buyer</span>
-                        <span class="badge escalate">PENDING</span>
-                    </div>
-                    <div class="queue-reason">Procure high-volume packaging units exceeding single-call budget ceiling</div>
-                    <div class="queue-meta mono">req: kc:procurement-lead · cap: 75000</div>
+                <div class="queue-card">
+                    <div class="queue-reason muted">Queue is empty</div>
                 </div>
             {% endif %}
-
-            <!-- Historical / Audit Queue Items -->
-            <div class="queue-card" onclick="selectQueueItem('mock_resolved')" id="queue-tab-mock_resolved">
-                <div class="queue-card-head">
-                    <span class="status-pip green"></span>
-                    <span class="queue-agent mono">agt-quote-collector</span>
-                    <span class="badge allow">RESOLVED</span>
-                </div>
-                <div class="queue-reason">Historical vendor quote reconciliation and invoice verification</div>
-                <div class="queue-meta mono">req: kc:auditor · approved by cfo</div>
-            </div>
-            <div class="queue-card" onclick="selectQueueItem('mock_denied')" id="queue-tab-mock_denied">
-                <div class="queue-card-head">
-                    <span class="status-pip gray"></span>
-                    <span class="queue-agent mono">agt-depth-0</span>
-                    <span class="badge neutral">DENIED</span>
-                </div>
-                <div class="queue-reason">Bulk database query export across unattenuated customer PII</div>
-                <div class="queue-meta mono">req: kc:contractor · policy violation</div>
-            </div>
         </div>
     </aside>
 
@@ -86,11 +60,11 @@
                 <div class="detail-header-strip">
                     <div class="detail-meta-group">
                         <span class="detail-chip">Request ID: <strong class="mono">{{ e.id }}</strong></span>
-                        <span class="detail-chip">Triggered By: <strong>Cedar Policy Condition CP-104</strong></span>
+                        <span class="detail-chip">Task: <strong class="mono">{{ e.task_id }}</strong></span>
                     </div>
-                    <div class="countdown-badge" title="Automated timeout TTL enforcement">
+                    <div class="countdown-badge" title="Expires {{ e.expires_at }} — an unresolved escalation lapses">
                         <span class="timer-icon">⏱</span>
-                        <span>Auto-reject in <strong>14m 20s</strong></span>
+                        <span>Expires in <strong class="countdown" data-expires="{{ e.expires_at }}">…</strong></span>
                     </div>
                 </div>
 
@@ -155,117 +129,11 @@
             </div>
             {% endfor %}
         {% else %}
-            <!-- Interactive Demo Card for Presentation / Empty State -->
-            <div class="queue-detail-view" id="detail-demo-esc">
-                <div class="detail-header-strip">
-                    <div class="detail-meta-group">
-                        <span class="detail-chip">Request ID: <strong class="mono">esc_89f0a1c</strong></span>
-                        <span class="detail-chip">Triggered By: <strong>Cedar Policy Condition CP-104</strong></span>
-                    </div>
-                    <div class="countdown-badge" title="Automated timeout TTL enforcement">
-                        <span class="timer-icon">⏱</span>
-                        <span>Auto-reject in <strong>14m 20s</strong></span>
-                    </div>
-                </div>
-
-                <article class="approval" id="row-demo-esc">
-                    <header class="approval-head">
-                        <span class="pill escalate">escalate</span>
-                        <span class="who">agt-bulk-buyer</span>
-                        <span class="dim">requested by <span class="mono">kc:procurement-lead</span></span>
-                        <span class="when">expires in 14m 20s</span>
-                    </header>
-
-                    <div class="approval-reason">Procure high-volume packaging units exceeding single-call budget ceiling (50,000 BDT limit). Requires human executive authorization to narrow scope or amount.</div>
-
-                    <div class="approval-grant">
-                        <div>
-                            <span class="label">Grant scopes — uncheck to narrow</span>
-                            <div class="narrow-scopes" id="scopes-demo-esc">
-                                <label>
-                                    <input type="checkbox" value="invoice:read" checked onchange="validateRow('demo-esc')">
-                                    <span>invoice:read</span>
-                                </label>
-                                <label>
-                                    <input type="checkbox" value="payment:initiate" checked onchange="validateRow('demo-esc')">
-                                    <span>payment:initiate</span>
-                                </label>
-                            </div>
-                        </div>
-                        <div>
-                            <span class="label">Grant amount</span>
-                            <input
-                                type="number"
-                                class="narrow-amount"
-                                id="amount-demo-esc"
-                                value="75000"
-                                max="75000"
-                                min="0"
-                                step="any"
-                                data-requested="75000"
-                                data-scopes="2"
-                                oninput="validateRow('demo-esc')"
-                            >
-                            <div class="narrow-cap">ceiling 75,000 — above this the server returns 400</div>
-                        </div>
-                    </div>
-
-                    <div class="delta">
-                        <div class="meter"><div class="seg-granted" id="delta-bar-demo-esc" style="width:100%"></div></div>
-                        <span id="delta-text-demo-esc">granting everything requested</span>
-                    </div>
-
-                    <div class="approval-actions">
-                        <button class="btn primary" id="approve-demo-esc" onclick="approve('demo-esc')">Approve narrowed grant</button>
-                        <button class="btn danger" onclick="toggleDeny('demo-esc')">Deny…</button>
-                        <span class="spacer"></span>
-                        <span class="approval-msg" id="msg-demo-esc"></span>
-                    </div>
-
-                    <div class="deny-box" id="deny-demo-esc">
-                        <input type="text" id="deny-reason-demo-esc" placeholder="Reason for denial — recorded in the ledger">
-                        <button class="btn danger" onclick="deny('demo-esc')">Confirm denial</button>
-                        <button class="btn ghost" onclick="toggleDeny('demo-esc')">Cancel</button>
-                    </div>
-                </article>
+            <div class="queue-detail-view">
+                <p class="muted">No pending escalations. The PEP opens one here when a request
+                    needs human approval; <span class="mono">make demo-seed</span> drives one.</p>
             </div>
         {% endif %}
-
-        <!-- Historical Mock Resolved Detail (for UI preview when clicking mock_resolved) -->
-        <div class="queue-detail-view hidden" id="detail-mock_resolved">
-            <div class="detail-header-strip">
-                <div class="detail-meta-group">
-                    <span class="detail-chip">Request ID: <strong class="mono">esc_7b21e89</strong></span>
-                    <span class="detail-chip">Status: <strong class="badge allow">APPROVED</strong></span>
-                </div>
-            </div>
-            <article class="approval" id="row-mock-resolved">
-                <header class="approval-head">
-                    <span class="pill allow">approved</span>
-                    <span class="who">agt-quote-collector</span>
-                    <span class="dim">approved by <span class="mono">kc:cfo</span></span>
-                </header>
-                <div class="approval-reason">Historical vendor quote reconciliation and invoice verification. Approved with 1 scope narrowed.</div>
-            </article>
-        </div>
-
-        <!-- Historical Mock Denied Detail -->
-        <div class="queue-detail-view hidden" id="detail-mock_denied">
-            <div class="detail-header-strip">
-                <div class="detail-meta-group">
-                    <span class="detail-chip">Request ID: <strong class="mono">esc_3a90f14</strong></span>
-                    <span class="detail-chip">Status: <strong class="badge neutral">DENIED</strong></span>
-                </div>
-            </div>
-            <article class="approval" id="row-mock-denied">
-                <header class="approval-head">
-                    <span class="pill danger">denied</span>
-                    <span class="who">agt-depth-0</span>
-                    <span class="dim">denied by <span class="mono">kc:compliance-officer</span></span>
-                </header>
-                <div class="approval-reason">Bulk database query export across unattenuated customer PII. Denied due to regulatory constraint.</div>
-            </article>
-        </div>
     </section>
 </div>
 {% endblock %}
@@ -398,5 +266,18 @@
             card.style.display = text.includes(term) ? '' : 'none';
         });
     }
+
+    // Counts down to the escalation's real `expires_at`, which the PEP sets from
+    // AGENTIAM_PEP_ESCALATION_TTL_S — not a fixed figure.
+    function tickCountdowns() {
+        document.querySelectorAll('.countdown[data-expires]').forEach(el => {
+            const left = Math.floor((Date.parse(el.dataset.expires) - Date.now()) / 1000);
+            if (!(left > 0)) { el.textContent = "expired"; return; }
+            const h = Math.floor(left / 3600), m = Math.floor(left % 3600 / 60), s = left % 60;
+            el.textContent = (h ? h + "h " : "") + m + "m " + s + "s";
+        });
+    }
+    tickCountdowns();
+    setInterval(tickCountdowns, 1000);
 </script>
 {% endblock %}

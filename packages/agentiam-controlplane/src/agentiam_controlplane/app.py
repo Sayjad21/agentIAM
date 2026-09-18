@@ -499,6 +499,7 @@ def create_app(
             pending = [
                 {
                     "id": str(e.id),
+                    "task_id": str(e.task_id),
                     "agent_id": e.agent_id,
                     "principal_id": e.principal_id,
                     "requested_scopes": sorted(e.requested_scopes),

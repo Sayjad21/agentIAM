@@ -259,8 +259,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    padding: 0.2rem 0.7rem;
-    border-radius: 999px;
+    padding: 0.28rem 0.85rem;
+    border-radius: 9999px;
     background: var(--surface-subtle);
     border: 1px solid var(--border);
     font-family: var(--font-mono);
@@ -336,8 +336,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    padding: 0.22rem 0.75rem;
-    border-radius: 999px;
+    padding: 0.28rem 0.85rem;
+    border-radius: 9999px;
     background: var(--allow-soft);
     border: 1px solid var(--allow-line);
     color: var(--allow-text);
@@ -362,8 +362,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     display: flex;
     align-items: center;
     gap: 0.35rem;
-    padding: 0.22rem 0.7rem;
-    border-radius: 999px;
+    padding: 0.28rem 0.85rem;
+    border-radius: 9999px;
     background: var(--surface-subtle);
     border: 1px solid var(--border);
     font-size: 0.76rem;
@@ -382,8 +382,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
 }
 
 .user-pill {
-    padding: 0.22rem 0.7rem;
-    border-radius: 999px;
+    padding: 0.28rem 0.85rem;
+    border-radius: 9999px;
     background: var(--surface);
     border: 1px solid var(--border);
     font-size: 0.76rem;
@@ -396,8 +396,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.18rem 0.55rem 0.18rem 0.3rem;
-    border-radius: 999px;
+    padding: 0.2rem 0.65rem 0.2rem 0.28rem;
+    border-radius: 9999px;
     background: var(--surface-subtle);
     border: 1px solid var(--border);
     flex-shrink: 0;
@@ -444,8 +444,8 @@ h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.45rem; color: var(--tex
 .whoami-logout:hover { color: var(--deny); }
 
 .btn-auth {
-    padding: 0.25rem 0.85rem;
-    border-radius: 999px;
+    padding: 0.28rem 0.9rem;
+    border-radius: 9999px;
     background: var(--brand);
     color: #FFFFFF;
     font-size: 0.78rem;
