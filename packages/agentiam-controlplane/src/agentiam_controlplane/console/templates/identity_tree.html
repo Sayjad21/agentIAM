@@ -193,13 +193,31 @@
     <div class="task-prompt">
         <div class="card">
             <h2>Visualize a task</h2>
+            {# Pick, don't paste. A task id is a 36-character uuid; asking an operator to
+               retype one mid-demo is how you end up staring at an empty canvas wondering
+               whether the tree is broken. The dropdown is every task this console started;
+               the text field stays for ids that came from the decisions or audit pages. #}
+            {% if known_tasks %}
             <p class="dim" style="margin-top:-0.35rem; margin-bottom:1.1rem;">
-                Enter a task id to render its identity tree. Ids come from the decisions
-                and audit pages.
+                Pick a task this console started, or paste an id from the decisions or audit pages.
             </p>
+            <form action="/identity-tree" method="GET" style="margin-bottom:1rem;">
+                <select name="task_id">
+                    {% for t in known_tasks %}
+                    <option value="{{ t.task_id }}">{{ t.description }} &middot; ceiling {{ t.budget }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn primary">View tree</button>
+            </form>
+            {% else %}
+            <p class="dim" style="margin-top:-0.35rem; margin-bottom:1.1rem;">
+                No tasks started yet — <a href="/run">start one</a> and it will appear here.
+                Or paste an id from the decisions or audit pages.
+            </p>
+            {% endif %}
             <form action="/identity-tree" method="GET">
                 <input type="text" name="task_id" placeholder="00000000-0000-0000-0000-000000000000" required>
-                <button type="submit" class="btn primary">View tree</button>
+                <button type="submit" class="btn">View by id</button>
             </form>
         </div>
     </div>
@@ -554,6 +572,73 @@
         document.getElementById('panel-budget').innerHTML = budgetHtml;
     }
 
+    const money = v => Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+
+    // Every dimension is recorded, but a demo about money should lead with money. The rest
+    // stay available underneath rather than being dropped.
+    const DIMENSION_LABELS = {
+        spend_bdt: 'Spend (BDT)',
+        tool_calls: 'Tool calls',
+        rows_read: 'Rows read',
+        external_emails: 'External emails',
+        wall_clock_s: 'Wall clock (s)',
+    };
+
+    function renderAuthority(a) {
+        if (!a) {
+            return `<p class="muted">No folded authority on this agent's records &mdash; they
+                    predate the enforcement point recording it. The block ids below are all
+                    that was captured.</p>`;
+        }
+
+        const ceilings = a.ceilings || {};
+        const spend = ceilings.spend_bdt;
+        const spent = Number(a.spent || 0);
+        const remaining = spend !== undefined ? Number(spend) - spent : null;
+        const pct = (spend !== undefined && Number(spend) > 0)
+            ? Math.min(100, (spent / Number(spend)) * 100) : 0;
+
+        let html = '<div class="authority">';
+
+        if (spend !== undefined) {
+            html += `
+              <div class="authority-spend">
+                <div class="authority-spend-head">
+                  <span><strong>${money(spent)}</strong> of ${money(spend)} spent</span>
+                  <span class="dim">${remaining !== null ? money(remaining) + ' left' : ''}</span>
+                </div>
+                <div class="authority-bar"><span style="width:${pct}%"></span></div>
+              </div>`;
+        }
+
+        const rows = [];
+        rows.push(['Role', a.role || '<span class="dim">none declared</span>']);
+        rows.push(['Depth', `${a.depth}${a.max_depth !== null ? ' of ' + a.max_depth : ''}`]);
+        rows.push(['Scopes', a.scopes && a.scopes.length
+            ? a.scopes.map(s => `<code>${s}</code>`).join(' ')
+            : '<span class="dim">none — this token can ask for nothing</span>']);
+        for (const [dim, value] of Object.entries(ceilings)) {
+            if (dim === 'spend_bdt') continue;
+            rows.push([DIMENSION_LABELS[dim] || dim, money(value)]);
+        }
+        if (a.expires_at) {
+            rows.push(['Expires', new Date(a.expires_at).toLocaleString()]);
+        }
+        rows.push(['Decisions', String(a.decisions)]);
+
+        html += '<dl class="authority-grid">'
+            + rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')
+            + '</dl>';
+
+        // Stated, not buried: the fold covers the caveats the reader recognized, so an
+        // unread restriction makes the real token narrower than this. Never wider.
+        html += `<p class="authority-note dim">Effective authority, folded from the caveats
+                 on this chain. An unrecognized restriction would make the real token
+                 <em>narrower</em> than shown, never wider.</p>`;
+
+        return html + '</div>';
+    }
+
     async function openPanel(node) {
         renderPanelState(node);
         document.getElementById('side-panel').classList.add('open');
@@ -566,16 +651,23 @@
             if (!resp.ok) throw new Error('Failed to fetch caveats');
             const data = await resp.json();
 
+            // Authority first, block ids after. The ids are what a revocation names, so
+            // they stay — but on their own they told an operator nothing, which is what
+            // this panel used to be: three hashes under a heading promising caveats.
+            let html = renderAuthority(data.authority);
+
             if (data.blocks && data.blocks.length > 0) {
-                caveatsContainer.innerHTML = data.blocks.map(b => `
+                html += `<details class="chain-details"><summary>Token chain (${data.blocks.length} blocks)</summary>`
+                    + data.blocks.map(b => `
                     <div class="caveat-block">
                         <div class="label dim" style="text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">Block ${b.index} • ${b.block_id.substring(0,8)}…</div>
                         <pre>${b.source}</pre>
                     </div>
-                `).join('');
+                `).join('') + '</details>';
             } else {
-                caveatsContainer.innerHTML = '<p class="muted">No token chain blocks found.</p>';
+                html += '<p class="muted">No token chain blocks found.</p>';
             }
+            caveatsContainer.innerHTML = html;
         } catch (e) {
             caveatsContainer.innerHTML = `<p class="alert danger">Error loading block sources.</p>`;
         }

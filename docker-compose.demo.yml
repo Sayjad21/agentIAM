@@ -128,8 +128,12 @@ services:
       # them /readyz reports auth:false, the console's approve/deny buttons cannot be used,
       # and the escalation queue is reachable only via a hand-signed session cookie, which
       # is what every integration test does.
+    # The public half is read too, not derived: biscuit's `PrivateKey` exposes no
+    # `public_key()` (measured against biscuit-python 0.4.0), and the console needs it to
+    # verify a parent token before attenuating it when an operator spawns a sub-agent.
     command: >
       sh -c "export AGENTIAM_CONTROLPLANE_ROOT_PRIVATE_KEY=$$(cat /secrets/root_private_key.hex) &&
+             export AGENTIAM_CONTROLPLANE_ROOT_PUBLIC_KEY=$$(cat /secrets/root_public_key.hex) &&
              uvicorn agentiam_controlplane.app:create_app_from_env --factory --host 0.0.0.0 --port 8000"
     depends_on:
       bootstrap:

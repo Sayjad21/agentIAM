@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
-from biscuit_auth import Algorithm, PrivateKey
+from biscuit_auth import Algorithm, PrivateKey, PublicKey
 
 #: Prefix for every environment variable this reads.
 ENV_PREFIX: Final = "AGENTIAM_CONTROLPLANE_"
@@ -90,6 +90,15 @@ class ControlPlaneSettings:
     #: block and take every agent down. A secret the caller must possess is evidence; a
     #: field naming yourself is not. Empty means only a session can revoke.
     operator_tokens: Mapping[str, str] = field(default_factory=dict)
+    #: The root *public* key, needed to verify a token before attenuating it when the
+    #: console spawns a sub-agent. biscuit's `PrivateKey` cannot derive its own public half
+    #: (measured against `biscuit-python` 0.4.0 — it exposes only `to_bytes`/`from_*`), so
+    #: this is read separately rather than computed. `None` disables task creation and the
+    #: console says so, rather than failing at the first spawn.
+    root_public_key: PublicKey | None = None
+    #: Where the console sends a request when the operator drives a task's agent. Only the
+    #: demo driver uses it; nothing on the authorization path depends on it.
+    pep_url: str = "http://pep:8080"
 
     @classmethod
     def from_env(cls) -> ControlPlaneSettings:
@@ -129,6 +138,26 @@ class ControlPlaneSettings:
         if not session_secret_key:
             raise ValueError(f"{ENV_PREFIX}SESSION_SECRET_KEY is required")
 
+        # Optional, and deliberately not fatal: without it the console cannot start a task,
+        # but every inspection screen still works. A missing key here should narrow what the
+        # console offers, not stop it booting.
+        public_hex = os.environ.get(f"{ENV_PREFIX}ROOT_PUBLIC_KEY", "").strip()
+        root_public_key: PublicKey | None = None
+        if public_hex:
+            try:
+                public_bytes = bytes.fromhex(public_hex)
+            except ValueError as exc:
+                raise ValueError(f"{ENV_PREFIX}ROOT_PUBLIC_KEY must be hex") from exc
+            if len(public_bytes) != 32:
+                raise ValueError(
+                    f"{ENV_PREFIX}ROOT_PUBLIC_KEY must be 32 bytes (64 hex characters), "
+                    f"got {len(public_bytes)}"
+                )
+            root_public_key = PublicKey.from_bytes(  # type: ignore[call-arg]
+                public_bytes,
+                Algorithm.Ed25519,  # type: ignore[attr-defined]
+            )
+
         return cls(
             root_private_key=root_private_key,
             approvers=approvers,
@@ -136,6 +165,8 @@ class ControlPlaneSettings:
             operator_tokens=_parse_operator_tokens(
                 os.environ.get(f"{ENV_PREFIX}OPERATOR_TOKENS", ""), approvers=approvers
             ),
+            root_public_key=root_public_key,
+            pep_url=os.environ.get(f"{ENV_PREFIX}PEP_URL", "http://pep:8080").rstrip("/"),
         )
 
 

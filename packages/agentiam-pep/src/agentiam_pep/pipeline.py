@@ -27,9 +27,15 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
+from agentiam_core.attenuation import effective_bound, grant_caveats
 from agentiam_core.decision import DriftOracle, decide
 from agentiam_core.errors import ReasonCode, TokenError
-from agentiam_core.models import BudgetDimension, Outcome, RequestContext
+from agentiam_core.models import (
+    BudgetDimension,
+    Outcome,
+    RecordedAuthority,
+    RequestContext,
+)
 from agentiam_core.tokens import verify
 from agentiam_pep.emitter import AuditBufferFullError, current_trace_id
 from agentiam_pep.errors import ReservationInsufficientError
@@ -292,10 +298,14 @@ class Pipeline:
         # calls when `principal_for` only built a dataclass and the repetition did not
         # matter; it does now.
         principal = self._principal_for(token)
+        # Hoisted out of the `decide()` call so the record can fold the same list into the
+        # token's effective authority. Reading it costs a block-source parse, and the comment
+        # above is about exactly this: resolve once, carry it.
+        caveats = self._caveats_for(token)
         decision = decide(
             token,
             context,
-            caveats=self._caveats_for(token),
+            caveats=caveats,
             revocation=self._revocation,  # type: ignore[arg-type]
             policy=self._policy.bound(principal),
             budget=self._pool,
@@ -369,6 +379,7 @@ class Pipeline:
             drift_score=decision.drift_score,
             failing_caveat=decision.failing_caveat,
             context_for_features=context,
+            caveats=caveats,
         )
 
         # --- step 10, deliberately before step 8 -----------------------------------
@@ -541,6 +552,7 @@ class Pipeline:
         drift_score: Decimal | None = None,
         failing_caveat: CaveatRef | None = None,
         context_for_features: RequestContext | None = None,
+        caveats: Sequence[Caveat] | None = None,
     ) -> DecisionRecord:
         from agentiam_core.models import Budget, DecisionRecord
 
@@ -583,7 +595,33 @@ class Pipeline:
             reservation_id=reservation.id if reservation is not None else None,
             drift_score=drift_score,
             drift_features=features,
+            authority=self._authority(token, caveats),
             latency_us=int((time.perf_counter() - started) * 1e6),
+        )
+
+    @staticmethod
+    def _authority(
+        token: VerifiedToken, caveats: Sequence[Caveat] | None
+    ) -> RecordedAuthority | None:
+        """Fold the chain into what it actually permits, for the console's caveat panel.
+
+        `None` when the caller had no caveat list — `_record_and_refuse` runs before the
+        decision, so the blocks have not been read and nothing here may invent a bound. A
+        record with no authority is honest about that; one guessing from the grant alone
+        would claim the token is wider than it is.
+
+        No parse happens here. `authorize()` resolves the caveats once for `decide()` and
+        passes the same list down, which is the rule the comment above `principal` states:
+        reading block source costs ~150-230 µs on a depth-3 chain, so it happens once.
+        """
+        if caveats is None:
+            return None
+        bound = effective_bound([*grant_caveats(token), *caveats])
+        return RecordedAuthority(
+            scopes=sorted(bound.scopes) if bound.scopes is not None else None,
+            ceilings={dimension.value: amount for dimension, amount in bound.budget.items()},
+            not_after=bound.not_after,
+            max_depth=bound.max_depth,
         )
 
     def _feature_vector(self, context: RequestContext | None) -> dict[str, Decimal] | None:
