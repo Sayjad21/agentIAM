@@ -187,6 +187,50 @@ class TestTheEndpoints:
         assert "block 2" in denied["explanation"]
         assert "60000" in denied["explanation"]
 
+    async def test_custody_names_the_human(
+        self, client: AsyncClient, migrated_engine: AsyncEngine
+    ) -> None:
+        """The question this endpoint exists for is "who authorized this?".
+
+        It answered with the agent chain and the deciding rule and left the person out —
+        `principal_id` was on every record and in none of the projected entries. A custody
+        view that cannot name a human is the one thing it must not be, and the closing claim
+        made of it ("traces back to the human who approved it") was not true of the response.
+        """
+        task = uuid.uuid4()
+        await seed(
+            migrated_engine,
+            [
+                a_record(task_id=task, principal_id="kc:alice", agent_id="agt-root", depth=0),
+                a_record(task_id=task, principal_id="kc:alice", agent_id="agt-payer", depth=1),
+            ],
+        )
+        async with client:
+            resp = await client.get(f"/v1/audit/custody/{task}")
+        assert resp.status_code == 200
+        body = resp.json()
+        # Leads with the person, rather than making a reader infer them from a column.
+        assert body["principals"] == ["kc:alice"]
+        assert [e["principal_id"] for e in body["entries"]] == ["kc:alice", "kc:alice"]
+
+    async def test_custody_carries_the_elevation_approver_field(
+        self, client: AsyncClient, migrated_engine: AsyncEngine
+    ) -> None:
+        """`elevated_by` is projected even though nothing writes it yet.
+
+        Populating it needs escalation approval, which needs a login this deployment leaves
+        unwired — so today it is `None` on every record. Projecting it now means the shape of
+        the answer does not change when that lands, and a reader asking "who widened this?"
+        gets an explicit null rather than a missing key they have to interpret.
+        """
+        task = uuid.uuid4()
+        await seed(migrated_engine, [a_record(task_id=task, principal_id="kc:alice")])
+        async with client:
+            resp = await client.get(f"/v1/audit/custody/{task}")
+        entry = resp.json()["entries"][0]
+        assert "elevated_by" in entry
+        assert entry["elevated_by"] is None
+
     async def test_custody_of_an_unknown_task_is_404(
         self, client: AsyncClient, migrated_engine: AsyncEngine
     ) -> None:
