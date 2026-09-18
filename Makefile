@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down demo-up demo-seed demo-down demo-reset logs ps test test-unit \
+.PHONY: help install up down demo-up demo-seed demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
         test-integration \
         test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
         benchmarks evidence
@@ -31,6 +31,14 @@ demo-up: ## Build and start the full demo stack (control plane, PEP, tools) and 
 # `--no-deps` because everything it needs is already up by the time you run this.
 demo-seed: ## Drive the demo scenario through a running stack, so the console has content (T-057)
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080
+
+# Edits one audit record directly so "Verify chain" can be shown failing, then puts it back.
+# Runs in the seed container for the same reason demo-seed does: it has the DSN.
+demo-tamper: ## Edit one audit record so Verify chain turns red (demo only; undo with demo-untamper)
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/demo_tamper.py
+
+demo-untamper: ## Restore the record demo-tamper edited, so Verify chain is green again
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/demo_tamper.py --undo
 
 demo-down: ## Stop the demo stack, keeping volumes
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml down
