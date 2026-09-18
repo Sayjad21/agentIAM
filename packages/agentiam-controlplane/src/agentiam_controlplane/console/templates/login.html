@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in{% endblock %}
+{% block page_title %}Who is acting?{% endblock %}
+{% block page_sub %}Approving an escalation is an act by a person, so the server takes the approver from the session rather than from the request. Pick the name you are acting as.{% endblock %}
+
+{% block content %}
+{#
+  Stated on the screen itself, not only in the code: this checks no credential. A demo
+  login that looks like a real one is worse than no login, because the next reader — or
+  the next deployment — has no way to tell which they are looking at.
+#}
+<p class="alert warn">
+    <strong>Demo sign-in — no password is checked.</strong>
+    This stands in for OIDC so the escalation queue can complete its own workflow without a
+    Keycloak realm. Configure <span class="mono">AGENTIAM_CONTROLPLANE_OIDC_ISSUER</span> and
+    this screen is replaced by the real one.
+</p>
+
+{% if request.query_params.get('error') == 'unknown' %}
+<p class="alert danger">That is not one of the configured names. The session only ever holds
+    a persona this deployment published.</p>
+{% endif %}
+
+<div class="personas">
+    {% for p in personas %}
+    {# One form per card rather than one form with radio buttons: the identity being adopted
+       is then the submit button's own value, so there is no state to get out of step with
+       what was clicked. POST, because a link that changes who you are is prefetchable. #}
+    <form class="persona{% if p.principal_id == current %} current{% endif %}"
+          method="post" action="/auth/signin">
+        <input type="hidden" name="principal_id" value="{{ p.principal_id }}">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <div class="persona-head">
+            <span class="persona-avatar" aria-hidden="true">{{ p.display_name[0] }}</span>
+            <div>
+                <div class="persona-name">{{ p.display_name }}</div>
+                <div class="persona-title">{{ p.title or '—' }}</div>
+            </div>
+        </div>
+        <div class="persona-id mono">{{ p.principal_id }}</div>
+        {#
+          Labelled, not filtered. Signing in as a non-approver has to be possible: the 403
+          it produces comes from `escalations_api` checking the allowlist, which is the
+          check worth demonstrating. A picker that only offered approvers would prove
+          nothing about who is allowed to approve.
+        #}
+        {% if p.is_approver %}
+        <div class="persona-role can">may approve escalations</div>
+        {% else %}
+        <div class="persona-role cannot">not on the approver allowlist — approving returns 403</div>
+        {% endif %}
+        <button type="submit" class="btn primary">
+            {% if p.principal_id == current %}Signed in{% else %}Act as {{ p.display_name.split()[0] }}{% endif %}
+        </button>
+    </form>
+    {% endfor %}
+</div>
+
+<p class="dim small" style="margin-top:1.4rem">
+    Two browsers, or one plus a private window, hold two of these at once — which is what
+    the escalation flow needs: one person asks, a different person approves, and the ledger
+    records both.
+</p>
+{% endblock %}

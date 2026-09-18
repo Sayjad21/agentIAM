@@ -26,6 +26,7 @@ from agentiam_controlplane.auth import build_router as build_auth_router
 from agentiam_controlplane.budgets_api import build_router as build_budgets_router
 from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.decisions_api import build_router as build_decisions_router
+from agentiam_controlplane.demo_auth import build_router as build_demo_auth_router
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
 from agentiam_controlplane.metrics_api import build_router as build_metrics_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
@@ -49,7 +50,11 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from agentiam_controlplane.db.revocations import RevocationPublisher
-    from agentiam_controlplane.settings import ControlPlaneSettings, OIDCSettings
+    from agentiam_controlplane.settings import (
+        ControlPlaneSettings,
+        DemoLoginSettings,
+        OIDCSettings,
+    )
 
 # Set up paths for templates and static assets
 BASE_DIR = pathlib.Path(__file__).parent / "console"
@@ -228,6 +233,7 @@ def create_app(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     escalation_settings: ControlPlaneSettings | None = None,
     oidc_settings: OIDCSettings | None = None,
+    demo_login_settings: DemoLoginSettings | None = None,
     revocation_publisher: RevocationPublisher | None = None,
     reaper_interval_s: float | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -250,6 +256,12 @@ def create_app(
     operator) has to produce one some other way, e.g. a signed cookie built directly with the
     same secret — the same "wired means it does the thing, unwired means it visibly doesn't"
     shape as the PEP's `enforcing` flag.
+
+    `demo_login_settings` is the passwordless stand-in for that, and it is **ignored whenever
+    `oidc_settings` is present**: a real issuer always wins, so switching real login on cannot
+    leave a credential-free door open beside it. Without either, the queue still renders and
+    approving still answers 401 — which is the pre-existing behaviour, now stated in the top
+    bar rather than discovered at the first approval.
 
     `revocation_publisher` is independently optional (spec 07 §5.2): a `None` publisher still
     lets `POST /v1/revocations` persist and `GET /v1/revocations` serve pulls — a deployment
@@ -309,6 +321,10 @@ def create_app(
                     "database": session_factory is not None,
                     "escalations": session_factory is not None and escalation_settings is not None,
                     "auth": oidc_settings is not None,
+                    # Reported apart from `auth` on purpose. Both put a principal in the
+                    # session, but only one of them checked anything to do it, and a probe
+                    # that could not tell them apart would read a demo console as secured.
+                    "demo_login": demo_login_settings is not None and oidc_settings is None,
                     "revocation_publisher": revocation_publisher is not None,
                 },
             }
@@ -335,6 +351,24 @@ def create_app(
         )
         if oidc_settings is not None:
             app.include_router(build_auth_router(settings=oidc_settings))
+        elif demo_login_settings is not None:
+            # Only in the `else`: a deployment with a real issuer never also serves this.
+            app.include_router(
+                build_demo_auth_router(
+                    settings=demo_login_settings,
+                    approvers=escalation_settings.approvers,
+                    templates=templates,
+                )
+            )
+
+    # Read by `base.html` to decide between a "Sign in" link and "login not configured".
+    # On app state rather than threaded through every view's context: it is a property of
+    # how the process was wired, identical for every page, and there are ten of them.
+    app.state.login_mode = (
+        "oidc"
+        if oidc_settings is not None
+        else ("demo" if demo_login_settings is not None and session_factory is not None else None)
+    )
 
     app.include_router(build_tree_router(session_factory=session_factory, now=now))
 
@@ -484,7 +518,15 @@ def create_app(
                 "state": state,
                 "principal_id": principal_id,
                 "display_name": display_name,
-                "login_wired": oidc_settings is not None,
+                # Checked here only to *say* so — `escalations_api` is the gate, and it
+                # re-checks against the same allowlist. Telling an approver up front beats
+                # letting them narrow a grant carefully and then meet a 403.
+                "is_approver": (
+                    escalation_settings is not None
+                    and principal_id is not None
+                    and principal_id in escalation_settings.approvers
+                ),
+                "login_wired": oidc_settings is not None or demo_login_settings is not None,
             },
         )
 
@@ -869,7 +911,11 @@ def create_app_from_env() -> FastAPI:
     import os
 
     from agentiam_controlplane.db.base import make_engine, make_session_factory
-    from agentiam_controlplane.settings import ControlPlaneSettings, OIDCSettings
+    from agentiam_controlplane.settings import (
+        ControlPlaneSettings,
+        DemoLoginSettings,
+        OIDCSettings,
+    )
 
     settings = ControlPlaneSettings.from_env()
 
@@ -891,6 +937,10 @@ def create_app_from_env() -> FastAPI:
         else None
     )
 
+    # Off unless explicitly switched on, and inert when OIDC is configured. `from_env`
+    # returns `None` for absent/empty/`0`/`false`/`no` — see `DemoLoginSettings`.
+    demo_login_settings = DemoLoginSettings.from_env()
+
     redis_url = os.environ.get("AGENTIAM_CONTROLPLANE_REDIS_URL")
     revocation_publisher = None
     if redis_url:
@@ -904,6 +954,7 @@ def create_app_from_env() -> FastAPI:
         session_factory=session_factory,
         escalation_settings=settings,
         oidc_settings=oidc_settings,
+        demo_login_settings=demo_login_settings,
         revocation_publisher=revocation_publisher,
         # Spec 04 §4.6 prescribes `REAP() # background, every TTL/4`, and until now
         # nothing anywhere called it outside a test: not this module, not
