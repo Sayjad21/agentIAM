@@ -76,9 +76,9 @@
             <div class="activity-ring-container">
                 <svg class="activity-ring-svg" viewBox="0 0 120 120">
                     <circle class="ring-bg" cx="60" cy="60" r="48" />
-                    <circle class="ring-val-available" id="ring-available" cx="60" cy="60" r="48" stroke-dasharray="301.59" stroke-dashoffset="60" />
+                    <circle class="ring-val-available" id="ring-available" cx="60" cy="60" r="48" stroke-dasharray="301.59" stroke-dashoffset="301.59" />
                     <circle class="ring-bg" cx="60" cy="60" r="34" stroke-width="6" />
-                    <circle class="ring-val-committed" id="ring-committed" cx="60" cy="60" r="34" stroke-dasharray="213.62" stroke-dashoffset="140" />
+                    <circle class="ring-val-committed" id="ring-committed" cx="60" cy="60" r="34" stroke-dasharray="213.62" stroke-dashoffset="213.62" />
                 </svg>
                 <div class="ring-center-stat">
                     <span class="ring-center-glyph">⚡</span>
@@ -91,7 +91,7 @@
                 <span class="gauge-val-label">Total Available Capital</span>
                 <div class="gauge-hero-val">
                     <span class="hero-num" id="available">–</span>
-                    <span class="currency-tag">USD</span>
+                    <span class="currency-tag" id="currency"></span>
                 </div>
                 <div class="gauge-sub-caption">Across all allocated budget pools &amp; active sub-agent leases</div>
             </div>
@@ -169,28 +169,7 @@
             </tr>
         </thead>
         <tbody id="decision-preview-body">
-            <tr>
-                <td><span class="pill allow">ALLOW</span></td>
-                <td><span class="mono">agent:invoice-worker-01</span></td>
-                <td><span class="mono">invoice_api:read</span></td>
-                <td><span class="muted">arn:agentiam:invoice/*</span></td>
-                <td><span class="mono muted">0.42 ms</span></td>
-            </tr>
-            <tr>
-                <td><span class="pill allow">ALLOW</span></td>
-                <td><span class="mono">agent:payment-sub-agent-04</span></td>
-                <td><span class="mono">payment:initiate</span></td>
-                <td><span class="muted">budget_pool:operations</span></td>
-                <td><span class="mono muted">0.68 ms</span></td>
-            </tr>
-            <tr>
-            <tr class="row-deny">
-                <td><span class="pill deny">DENY</span></td>
-                <td><span class="mono">agent:data-export-agent</span></td>
-                <td><span class="mono">customer_db:bulk_export</span></td>
-                <td><span class="muted">arn:agentiam:customer_pii</span></td>
-                <td><span class="mono muted">0.29 ms</span></td>
-            </tr>
+            <tr><td colspan="5" class="muted">No decisions recorded yet.</td></tr>
         </tbody>
     </table>
 </div>
@@ -275,13 +254,13 @@ function updateActivityRings(available, committed) {
     
     if (availableRing && total > 0) {
         const circumAvailable = 2 * Math.PI * 48; // 301.59
-        const availRatio = Math.min(1, Math.max(0.1, available / total));
+        const availRatio = Math.min(1, Math.max(0, available / total));
         availableRing.style.strokeDashoffset = (circumAvailable * (1 - availRatio)).toString();
     }
     
     if (committedRing && total > 0) {
         const circumCommitted = 2 * Math.PI * 34; // 213.62
-        const commRatio = Math.min(1, Math.max(0.05, committed / total));
+        const commRatio = Math.min(1, Math.max(0, committed / total));
         committedRing.style.strokeDashoffset = (circumCommitted * (1 - commRatio)).toString();
     }
 }
@@ -352,10 +331,17 @@ async function loadBudgets() {
         document.getElementById("checkmeta").textContent =
             data.budgets_checked + " budgets swept in " + data.check_duration_ms + " ms without drift";
 
-        const poolsCount = data.gauges ? data.gauges.length : 0;
-        const leasesCount = data.gauges ? data.gauges.reduce((n, g) => n + (g.active_leases || 0), 0) : 0;
-        const committedVal = data.gauges ? data.gauges.reduce((n, g) => n + Number(g.committed || 0), 0) : 0;
-        const availableVal = data.gauges ? data.gauges.reduce((n, g) => n + Number(g.available || 0), 0) : 0;
+        // Money lives in `spend_<currency>` dimensions; `tool_calls` and the like are
+        // counts, and adding them to a capital figure would be adding calls to taka.
+        const gauges = data.gauges || [];
+        const money = gauges.filter(g => (g.dimension || "").startsWith("spend_"));
+        const currencies = [...new Set(money.map(g => g.dimension.slice("spend_".length).toUpperCase()))];
+        const poolsCount = gauges.length;
+        const leasesCount = gauges.reduce((n, g) => n + (g.active_leases || 0), 0);
+        const committedVal = money.reduce((n, g) => n + Number(g.committed || 0), 0);
+        const availableVal = money.reduce((n, g) => n + Number(g.available || 0), 0);
+        document.getElementById("currency").textContent =
+            currencies.length === 1 ? currencies[0] : (currencies.length ? "mixed" : "");
 
         AgentIAM.tick(document.getElementById("pools"), poolsCount);
         AgentIAM.tick(document.getElementById("leases"), leasesCount);
@@ -395,7 +381,7 @@ async function loadRecentDecisions() {
             tbody.appendChild(tr);
         }
     } catch (_) {
-        // Fallback demo rows already in place
+        // Leave the empty-state row; a failed fetch is not evidence of any decision.
     }
 }
 
@@ -408,11 +394,6 @@ setInterval(loadBudgets, 5000);
 document.getElementById("verdict").textContent = "In-Memory Demonstration Mode";
 document.getElementById("checkmeta").textContent =
     "Control plane active without persistent database — policy authoring and live verification fully enabled.";
-updateActivityRings(500000, 125000);
-AgentIAM.tick(document.getElementById("available"), 500000);
-AgentIAM.tick(document.getElementById("committed"), 125000);
-AgentIAM.tick(document.getElementById("pools"), 3);
-AgentIAM.tick(document.getElementById("leases"), 4);
 {% endif %}
 </script>
 {% endblock %}

@@ -9,9 +9,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light">
     <title>{% block title %}Console{% endblock %} · AgentIAM</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=topbar-capsules-2">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230284c7'/><path d='M16 6 L26 11 L26 19 C26 24 16 28 16 28 C16 28 6 24 6 19 L6 11 Z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/><path d='M16 11 L16 23 M12 16 L20 16' stroke='white' stroke-width='2' stroke-linecap='round'/></svg>">
-    <script src="/static/ui.js"></script>
+    <script src="/static/ui.js?v=topbar-capsules-2"></script>
     {% block head_extra %}{% endblock %}
 </head>
 <body data-page="{{ active | default('') }}">
@@ -81,7 +81,6 @@
             <a class="whoami-logout" href="/auth/logout" title="Sign out">Sign out</a>
         </div>
         {% elif _mode %}
-        <a class="btn-auth" href="/auth/login?next={{ request.url.path }}">Sign In</a>
         <a class="btn-auth" href="/auth/login?next={{ request.url.path }}">Sign in</a>
         {% else %}
         <div class="user-pill" title="In-Memory Demonstration Authority">
