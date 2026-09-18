@@ -164,6 +164,13 @@
         <h2>Where to look</h2>
     </div>
     <div class="tiles">
+        {# First, and wide: every other destination inspects a scenario something else
+           already ran, and this is the only one that starts one. Mint because it is the
+           one tile that does rather than shows. #}
+        <a class="tile wide" href="/run" style="--tile: var(--c-mint)">
+            <div class="name"><span class="glyph">RT</span>Run a task<span class="arrow">&rarr;</span></div>
+            <p>Approve a task, set its ceiling, then delegate to sub-agents and watch the enforcement point allow and refuse. Start here.</p>
+        </a>
         <a class="tile wide" href="/identity-tree" style="--tile: var(--c-purple)">
             <div class="name"><span class="glyph">IT</span>Identity tree<span class="arrow">&rarr;</span></div>
             <p>The delegation graph for a task. Every sub-agent, its remaining budget, and the token blocks that narrowed it.</p>

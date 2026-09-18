@@ -579,6 +579,44 @@ class RequestContext(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class RecordedAuthority(BaseModel):
+    """What a token permitted, folded across its chain, as a decision record can carry it.
+
+    `attenuation.EffectiveAuthority` is the real fold and has been since T-045 — its own
+    docstring says it exists "for the identity tree", which is exactly this use. It never
+    reached the console because the control plane holds decision records, never tokens, so
+    it cannot read a caveat back out: the caveat panel had only 128-character block ids to
+    render, three hashes under a heading promising "token chain & caveats".
+
+    This is that fold projected into something JSON-serializable, written by the PEP where
+    the token *is* in hand. It carries no block ids and no argument values, so it adds
+    nothing to the audit store that was not already derivable from the token itself.
+
+    **This is an upper bound, and a renderer must not imply otherwise.** The fold covers the
+    caveats `datalog.token_caveats` could read; that function drops a statement it does not
+    recognize rather than guessing, and does not report having done so. An unread restriction
+    is therefore a restriction missing from this fold, which makes the real token *narrower*
+    than these numbers say — never wider. Safe for a console to show as "what this agent may
+    do", unsafe to present as an exhaustive list of its limits.
+
+    Carrying a `complete` flag was considered and dropped: `token_caveats` cannot report it,
+    and the only function that can (`datalog.effective_authority`) costs a second full parse
+    of every block — ~150-230 µs on a depth-3 chain, on the request path, for a field the
+    console would render as a footnote. Threading `unrecognized` out of the reader is the
+    honest way to add it later.
+    """
+
+    model_config = _FROZEN
+
+    #: The grant intersected with every `ScopeSubset` in the chain — what this agent can
+    #: actually ask for, not what the root was once granted. `None` means unconstrained.
+    scopes: list[str] | None = None
+    #: The tightest ceiling per dimension, keyed by the dimension's string value.
+    ceilings: dict[str, Decimal] = Field(default_factory=dict)
+    not_after: datetime | None = None
+    max_depth: int | None = None
+
+
 class DecisionRecord(BaseModel):
     """The immutable record of one authorization decision (`PLAN.md` §6.9).
 
@@ -632,6 +670,14 @@ class DecisionRecord(BaseModel):
     drift_features: dict[str, Decimal] | None = None
     latency_us: int = Field(ge=0)
     elevated_by: str | None = None
+    #: What the token permitted, folded across its whole chain — see `RecordedAuthority`.
+    #: Read by the console's caveat panel, which otherwise has only block ids to render.
+    #:
+    #: Defaulted for the same reason `role` is: records written before this field existed
+    #: still validate, and the audit chain is unaffected either way because verification
+    #: recomputes hashes over the *stored* body (spec 08 §3), never over a re-serialized
+    #: model.
+    authority: RecordedAuthority | None = None
 
     @field_validator("arg_digest")
     @classmethod

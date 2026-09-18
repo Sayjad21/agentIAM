@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from decimal import Decimal
-from typing import TYPE_CHECKING
+from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING, Any
 
 import cedarpy
+import httpx
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +30,7 @@ from agentiam_controlplane.escalations_api import build_router as build_escalati
 from agentiam_controlplane.metrics_api import build_router as build_metrics_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
 from agentiam_controlplane.revocations_api import build_router as build_revocations_router
+from agentiam_controlplane.tasks import GRANTABLE_SCOPES, TaskRegistry, TaskRegistryError
 from agentiam_controlplane.tree_api import build_router as build_tree_router
 from agentiam_core.corpus import CORPUS, CORPUS_SOURCE, CORPUS_TOOLS
 from agentiam_core.decision import PolicyVerdict
@@ -267,6 +270,17 @@ def create_app(
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
+    registry = (
+        TaskRegistry(
+            root_private_key=escalation_settings.root_private_key,
+            root_public_key=escalation_settings.root_public_key,
+            now=now,
+        )
+        if escalation_settings is not None and escalation_settings.root_public_key is not None
+        else None
+    )
+    pep_url = escalation_settings.pep_url if escalation_settings is not None else ""
+
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
         """Liveness. Deliberately checks nothing external — T-056.
@@ -400,7 +414,12 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="identity_tree.html",
-            context={"active": "identity-tree", "task_id": task_id},
+            context={
+                "active": "identity-tree",
+                "task_id": task_id,
+                # So the empty state offers a pick rather than demanding a pasted uuid.
+                "known_tasks": [t.as_dict() for t in registry.list_tasks()] if registry else [],
+            },
         )
 
     @app.get("/audit", response_class=HTMLResponse)
@@ -686,6 +705,134 @@ def create_app(
             ),
             status_code=200,
         )
+
+    # ---- the demo driver: start a task, spawn agents under it, drive them ---------
+    #
+    # Every other console page inspects a scenario something else already ran. This is the
+    # one place a human starts one. Mounted only when the control plane holds both halves
+    # of the root keypair: without them nothing here could mint, and a page whose only
+    # button fails is worse than a page that says why it is unavailable.
+
+    def _run_page(
+        request: Request, *, error: str | None = None, active_task: str = ""
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="run.html",
+            context={
+                "active": "run",
+                "registry_ready": registry is not None,
+                "tasks": [t.as_dict() for t in registry.list_tasks()] if registry else [],
+                "scopes": list(GRANTABLE_SCOPES),
+                "error": error,
+                "active_task": active_task,
+                "pep_url": pep_url,
+            },
+        )
+
+    @app.get("/run", response_class=HTMLResponse)
+    async def get_run(request: Request) -> HTMLResponse:
+        """The task driver: name the work, set the ceiling, then delegate and watch."""
+        return _run_page(request)
+
+    @app.post("/run/task", response_class=HTMLResponse)
+    async def post_run_task(
+        request: Request,
+        description: str = Form(...),
+        budget: str = Form(...),
+        scopes: list[str] = Form(default=[]),  # noqa: B008 — FastAPI reads it, never mutates
+        principal_id: str = Form(default="kc:11111111-1111-1111-1111-111111111111"),
+    ) -> HTMLResponse:
+        """Mint a root token for a new task."""
+        if registry is None:
+            return _run_page(request, error="Task creation is not configured on this deployment.")
+        try:
+            created = registry.create_task(
+                description=description,
+                budget=Decimal(budget),
+                scopes=frozenset(scopes),
+                principal_id=principal_id,
+            )
+        except (TaskRegistryError, InvalidOperation) as exc:
+            return _run_page(request, error=str(exc))
+        return _run_page(request, active_task=str(created.task_id))
+
+    @app.post("/run/agent", response_class=HTMLResponse)
+    async def post_run_agent(
+        request: Request,
+        task_id: str = Form(...),
+        parent_id: str = Form(...),
+        agent_id: str = Form(...),
+        role: str = Form(...),
+        ceiling: str = Form(...),
+        scopes: list[str] = Form(default=[]),  # noqa: B008 — see above
+    ) -> HTMLResponse:
+        """Attenuate a parent's token into a strictly narrower child."""
+        if registry is None:
+            return _run_page(request, error="Task creation is not configured on this deployment.")
+        try:
+            registry.spawn_agent(
+                task_id=uuid.UUID(task_id),
+                parent_id=parent_id,
+                agent_id=agent_id,
+                role=role,
+                scopes=frozenset(scopes),
+                ceiling=Decimal(ceiling),
+            )
+        except (TaskRegistryError, InvalidOperation, ValueError) as exc:
+            return _run_page(request, error=str(exc), active_task=task_id)
+        return _run_page(request, active_task=task_id)
+
+    @app.post("/run/call", response_class=HTMLResponse)
+    async def post_run_call(
+        request: Request,
+        task_id: str = Form(...),
+        agent_id: str = Form(...),
+        action: str = Form(...),
+        amount: str = Form(default="1000.0000"),
+    ) -> HTMLResponse:
+        """Send one request through the PEP as the chosen agent, and report what it said.
+
+        The point of the page: the operator picks an agent and an action, and the
+        enforcement point answers. A refusal is the interesting outcome, so the reason code
+        is what gets rendered, not the upstream body.
+        """
+        if registry is None:
+            return _run_page(request, error="Task creation is not configured on this deployment.")
+        try:
+            token = registry.token_for(uuid.UUID(task_id), agent_id)
+        except (TaskRegistryError, ValueError) as exc:
+            return _run_page(request, error=str(exc), active_task=task_id)
+
+        request_args: dict[str, Any] = {"headers": {"Authorization": f"Bearer {token}"}}
+        if action == "pay":
+            request_args |= {
+                "method": "POST",
+                "url": f"{pep_url}/proxy/payments",
+                "json": {"amount": amount, "recipient": {"account_id": "acct_9001"}},
+            }
+        elif action == "read-invoice":
+            request_args |= {"method": "GET", "url": f"{pep_url}/proxy/invoices/inv_001"}
+        elif action == "read-vendor":
+            request_args |= {"method": "GET", "url": f"{pep_url}/proxy/vendors/ven_01"}
+        else:
+            return _run_page(request, error=f"unknown action {action!r}", active_task=task_id)
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.request(**request_args)
+            try:
+                reason = response.json().get("reason_code", "OK")
+            except ValueError:
+                reason = "OK"
+            outcome = f"{response.status_code} {reason}"
+        except httpx.HTTPError as exc:
+            # The PEP being unreachable is an operator problem, not an authorization one.
+            # Saying which it was keeps the page honest about what it just proved.
+            outcome = f"could not reach the enforcement point: {exc}"
+
+        request.session["last_call"] = f"{agent_id} · {action} → {outcome}"
+        return _run_page(request, active_task=task_id)
 
     return app
 

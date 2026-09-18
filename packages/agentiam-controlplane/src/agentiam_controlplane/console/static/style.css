@@ -1367,3 +1367,161 @@ tr.row-fail td:first-child { box-shadow: inset 3px 0 0 var(--deny); }
     }
     @view-transition { navigation: none; }
 }
+
+/* ---- Run a task: the demo driver (T-tier1) -------------------------------- */
+
+.scope-set {
+    border: 1px solid var(--border, #2a2e40);
+    border-radius: 8px;
+    padding: 0.6rem 0.9rem 0.9rem;
+    margin: 0.9rem 0;
+}
+
+.scope-set legend {
+    padding: 0 0.4rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted, #9ca3af);
+}
+
+.scope-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.3rem 1.1rem 0.1rem 0;
+    font-weight: 400;
+    cursor: pointer;
+}
+
+.task-card {
+    border: 1px solid var(--border, #2a2e40);
+    border-radius: 10px;
+    padding: 1.1rem 1.2rem;
+    margin-top: 1.4rem;
+    background: var(--panel, #12151f);
+}
+
+/* The task just created or just acted on, so a page with several does not make the
+   operator hunt for the one they touched. */
+.task-card-active {
+    border-color: var(--accent, #6366f1);
+}
+
+.task-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.9rem;
+}
+
+.task-meta {
+    display: flex;
+    gap: 1.1rem;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 0.86rem;
+    color: var(--muted, #9ca3af);
+}
+
+.small { font-size: 0.82rem; }
+
+.drive-cell .inline-form {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.spawn-details {
+    margin-top: 1rem;
+    border-top: 1px solid var(--border, #2a2e40);
+    padding-top: 0.8rem;
+}
+
+.spawn-details summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.spawn-form {
+    margin-top: 0.9rem;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.6rem 0.9rem;
+    align-items: center;
+    max-width: 46rem;
+}
+
+/* The two full-width rows in a two-column grid: the scope picker and the submit row. */
+.spawn-form .scope-set,
+.spawn-form .actions {
+    grid-column: 1 / -1;
+}
+
+/* ---- Identity tree: the caveat panel's authority summary (Tier 2) ---------- */
+
+.authority-spend { margin-bottom: 1rem; }
+
+.authority-spend-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.9rem;
+    margin-bottom: 0.4rem;
+}
+
+.authority-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border, #2a2e40);
+    overflow: hidden;
+}
+
+.authority-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--accent, #6366f1);
+    border-radius: 3px;
+}
+
+.authority-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 0.9rem;
+    margin: 0 0 0.9rem;
+    font-size: 0.88rem;
+}
+
+.authority-grid dt {
+    color: var(--muted, #9ca3af);
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    align-self: center;
+}
+
+.authority-grid dd { margin: 0; }
+
+.authority-grid dd code {
+    display: inline-block;
+    margin: 0 0.2rem 0.2rem 0;
+}
+
+/* The honesty note. Small, but never hidden behind a disclosure. */
+.authority-note {
+    font-size: 0.78rem;
+    line-height: 1.45;
+    margin: 0 0 0.9rem;
+}
+
+.chain-details summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--muted, #9ca3af);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.6rem;
+}

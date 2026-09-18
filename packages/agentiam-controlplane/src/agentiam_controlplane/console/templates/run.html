@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}Run a task{% endblock %}
+{% block page_title %}Run a task{% endblock %}
+{% block page_sub %}Approve a task, set its ceiling, then hand progressively narrower authority to sub-agents. Every button below goes through the enforcement point — including the ones that get refused.{% endblock %}
+
+{% block content %}
+
+{% if not registry_ready %}
+<div class="alert danger">
+    Task creation is not configured on this deployment. The control plane needs both halves
+    of the root keypair — set <code>AGENTIAM_CONTROLPLANE_ROOT_PUBLIC_KEY</code> alongside
+    the private one. Every other console screen still works.
+</div>
+{% else %}
+
+{% if error %}
+<div class="alert danger">{{ error }}</div>
+{% endif %}
+
+{% if request.session.get('last_call') %}
+<div class="alert success">Last call — {{ request.session.get('last_call') }}</div>
+{% endif %}
+
+<div class="split-view">
+    <div class="editor-section">
+        <h2>1 · Approve a task</h2>
+        <p class="dim" style="margin-top:-0.4rem;">
+            The description becomes the token's intent hash, so an agent claiming a different
+            job is refused. The ceiling is enforced by the token itself, before the ledger is
+            consulted.
+        </p>
+        <form method="post" action="/run/task">
+            <label for="description">What is being approved</label>
+            <textarea name="description" id="description" rows="2" spellcheck="false"
+                      placeholder="Procure 500 units of packaging stock."></textarea>
+
+            <label for="budget">Ceiling (BDT)</label>
+            <input type="number" name="budget" id="budget" value="50000" min="1" step="1">
+
+            <fieldset class="scope-set">
+                <legend>Scopes this task may ever use</legend>
+                {% for scope in scopes %}
+                <label class="scope-option">
+                    <input type="checkbox" name="scopes" value="{{ scope }}"
+                           {% if scope in ('invoice:read', 'payment:initiate') %}checked{% endif %}>
+                    <code>{{ scope }}</code>
+                </label>
+                {% endfor %}
+            </fieldset>
+
+            <div class="actions">
+                <button type="submit" class="btn primary">Start task</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="editor-section">
+        <h2>Why this matters</h2>
+        <p class="dim">
+            A child token is minted <em>by its parent</em>, offline, and cannot exceed what the
+            parent held — not by policy, by mathematics. Spawn one below with a smaller ceiling
+            and then ask it to spend more than that: the refusal names the exact block that
+            stopped it.
+        </p>
+        <p class="dim">
+            The root you create carries no attenuation block, so it declares no role. Cedar
+            forbids a non-senior principal from touching <code>payment_api</code>, which is why
+            the root itself is refused a payment — that is the organization's policy overruling
+            a perfectly valid token.
+        </p>
+    </div>
+</div>
+
+{% for task in tasks %}
+<section class="task-card {% if task.task_id == active_task %}task-card-active{% endif %}">
+    <header class="task-head">
+        <div>
+            <strong>{{ task.description }}</strong>
+            <div class="dim mono small">{{ task.task_id }}</div>
+        </div>
+        <div class="task-meta">
+            <span>ceiling <strong>{{ task.budget }}</strong></span>
+            <span>{{ task.scopes | join(', ') }}</span>
+            <a href="/identity-tree?task_id={{ task.task_id }}">view the tree &rarr;</a>
+        </div>
+    </header>
+
+    <table class="results-table">
+        <thead>
+            <tr><th>Agent</th><th>Role</th><th>Depth</th><th>Scopes</th><th>Ceiling</th><th>Drive it</th></tr>
+        </thead>
+        <tbody>
+        {% for agent in task.agents %}
+            <tr>
+                <td class="mono">{{ agent.agent_id }}</td>
+                <td>{{ agent.role }}</td>
+                <td>{{ agent.depth }}</td>
+                <td class="mono small">{{ agent.scopes | join(', ') }}</td>
+                <td class="mono">{{ agent.ceiling if agent.ceiling else '—' }}</td>
+                <td class="drive-cell">
+                    <form method="post" action="/run/call" class="inline-form">
+                        <input type="hidden" name="task_id" value="{{ task.task_id }}">
+                        <input type="hidden" name="agent_id" value="{{ agent.agent_id }}">
+                        <select name="action">
+                            <option value="read-invoice">read an invoice</option>
+                            <option value="read-vendor">read a vendor</option>
+                            <option value="pay">pay</option>
+                        </select>
+                        <input type="number" name="amount" value="1000" min="1" step="1"
+                               style="width:7rem;" aria-label="amount">
+                        <button type="submit" class="btn">Send</button>
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <details class="spawn-details" {% if task.task_id == active_task %}open{% endif %}>
+        <summary>2 · Spawn a sub-agent under this task</summary>
+        <form method="post" action="/run/agent" class="spawn-form">
+            <input type="hidden" name="task_id" value="{{ task.task_id }}">
+
+            <label for="parent-{{ task.task_id }}">Parent</label>
+            <select name="parent_id" id="parent-{{ task.task_id }}">
+                {% for agent in task.agents %}
+                <option value="{{ agent.agent_id }}">{{ agent.agent_id }} (depth {{ agent.depth }})</option>
+                {% endfor %}
+            </select>
+
+            <label for="name-{{ task.task_id }}">Name</label>
+            <input type="text" name="agent_id" id="name-{{ task.task_id }}" placeholder="agt-payer">
+
+            <label for="role-{{ task.task_id }}">Role</label>
+            <input type="text" name="role" id="role-{{ task.task_id }}" value="payer">
+
+            <label for="ceiling-{{ task.task_id }}">Ceiling (BDT)</label>
+            <input type="number" name="ceiling" id="ceiling-{{ task.task_id }}"
+                   value="20000" min="0" step="1">
+
+            <fieldset class="scope-set">
+                <legend>Scopes — must be a subset of the parent's</legend>
+                {% for scope in scopes %}
+                <label class="scope-option">
+                    <input type="checkbox" name="scopes" value="{{ scope }}"
+                           {% if scope == 'payment:initiate' %}checked{% endif %}>
+                    <code>{{ scope }}</code>
+                </label>
+                {% endfor %}
+            </fieldset>
+
+            <div class="actions">
+                <button type="submit" class="btn primary">Spawn</button>
+            </div>
+        </form>
+    </details>
+</section>
+{% endfor %}
+
+{% if not tasks %}
+<p class="dim">No tasks yet. Approve one above and the identity tree will have something to draw.</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}
