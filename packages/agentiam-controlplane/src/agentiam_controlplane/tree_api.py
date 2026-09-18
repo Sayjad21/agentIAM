@@ -12,7 +12,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator, Callable, Sequence
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -21,7 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from agentiam_controlplane.db.models import AuditRecordRow
-from agentiam_controlplane.db.tree import TreeNode, build_tree, build_tree_diff
+from agentiam_controlplane.db.tree import (
+    TreeNode,
+    build_tree,
+    build_tree_diff,
+    decimal_field,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +92,6 @@ class BlockSourceResponse(BaseModel):
     authority: AgentAuthorityView | None = None
 
 
-def _decimal(value: object) -> Decimal:
-    """Read a money field back out of stored JSON, tolerating absence."""
-    try:
-        return Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        return Decimal(0)
-
-
 def _authority_view(rows: Sequence[AuditRecordRow]) -> AgentAuthorityView | None:
     """Fold one agent's records into what the caveat panel renders.
 
@@ -120,7 +117,7 @@ def _authority_view(rows: Sequence[AuditRecordRow]) -> AgentAuthorityView | None
         if isinstance(before, dict) and isinstance(after, dict):
             # The pool's remaining balance either side of this one call. A refusal reserves
             # nothing, so its delta is zero and it contributes nothing to the sum.
-            spent += _decimal(before.get("spend_bdt")) - _decimal(after.get("spend_bdt"))
+            spent += decimal_field(before.get("spend_bdt")) - decimal_field(after.get("spend_bdt"))
 
     newest = rows[0].record
     if newest_authority is None:
@@ -135,7 +132,7 @@ def _authority_view(rows: Sequence[AuditRecordRow]) -> AgentAuthorityView | None
         depth=int(str(newest.get("depth", 0) or 0)),
         scopes=[str(s) for s in raw_scopes] if isinstance(raw_scopes, list) else None,
         ceilings=(
-            {str(k): _decimal(v) for k, v in raw_ceilings.items()}
+            {str(k): decimal_field(v) for k, v in raw_ceilings.items()}
             if isinstance(raw_ceilings, dict)
             else None
         ),
