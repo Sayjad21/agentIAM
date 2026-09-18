@@ -115,6 +115,17 @@ function cell(text) {
     return td;
 }
 
+function principalCell(id) {
+    // A principal is a Keycloak UUID: 45 characters, which wrapped to four lines and
+    // tripled the height of every row in the table. Clipped to one line, with the whole
+    // value on hover, selectable in full, and spelled out in the drawer.
+    const td = document.createElement("td");
+    td.className = "principal";
+    td.textContent = id ?? "";
+    if (id) td.title = id;
+    return td;
+}
+
 function inspect(d, tr) {
     for (const marked of document.querySelectorAll("tr.selected")) marked.classList.remove("selected");
     if (tr) tr.classList.add("selected");
@@ -168,7 +179,7 @@ function renderRow(d) {
     tr.appendChild(out);
 
     tr.appendChild(cell(d.agent_id));
-    tr.appendChild(cell(d.principal_id));
+    tr.appendChild(principalCell(d.principal_id));
     const scope = cell(d.scope); scope.className = "mono"; tr.appendChild(scope);
     const tool = cell(d.tool_id); tool.className = "mono"; tr.appendChild(tool);
     const why = cell(d.explanation);

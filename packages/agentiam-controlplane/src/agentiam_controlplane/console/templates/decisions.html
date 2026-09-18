@@ -36,7 +36,7 @@
     <table>
         <thead>
         <tr>
-            <th>Time</th><th>Outcome</th><th>Agent</th><th>Scope</th>
+            <th>Time</th><th>Outcome</th><th>Agent</th><th>Principal</th><th>Scope</th>
             <th>Tool</th><th>Why</th><th>Latency</th>
         </tr>
         </thead>
@@ -113,6 +113,17 @@ function cell(text) {
     return td;
 }
 
+function principalCell(id) {
+    // A principal is a Keycloak UUID: 45 characters, which wrapped to four lines and
+    // tripled the height of every row in the table. Clipped to one line, with the whole
+    // value on hover, selectable in full, and spelled out in the drawer.
+    const td = document.createElement("td");
+    td.className = "principal";
+    td.textContent = id ?? "";
+    if (id) td.title = id;
+    return td;
+}
+
 function inspect(d, tr) {
     for (const marked of document.querySelectorAll("tr.selected")) marked.classList.remove("selected");
     if (tr) tr.classList.add("selected");
@@ -185,6 +196,10 @@ function render(d, isNew) {
     tr.appendChild(out);
 
     tr.appendChild(cell(d.agent_id));
+    // The human the call was made on behalf of, beside the agent that made it: the feed
+    // lists actions, so this is where "which action was initiated by which user" is read
+    // off a row rather than reconstructed by opening each record in turn.
+    tr.appendChild(principalCell(d.principal_id));
     const scope = cell(d.scope); scope.className = "mono"; tr.appendChild(scope);
     const tool = cell(d.tool_id); tool.className = "mono"; tr.appendChild(tool);
 

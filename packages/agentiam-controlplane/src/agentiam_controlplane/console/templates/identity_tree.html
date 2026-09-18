@@ -584,9 +584,21 @@
         wall_clock_s: 'Wall clock (s)',
     };
 
-    function renderAuthority(a) {
+    function renderAuthority(a, node) {
+        // Who this agent is acting for, first and above the fold. The panel used to open on
+        // a role and three hashes, which says what an agent may do and never whose authority
+        // it is doing it under. Read from the record when one carried a folded authority and
+        // from the node otherwise, so it survives records written before that fold existed.
+        const principal = (a && a.principal_id) || (node && node.principal_id) || null;
+        const who = principal
+            ? `<div class="authority-principal">
+                 <span class="authority-principal-label">Acting for</span>
+                 <span class="mono">${principal}</span>
+               </div>`
+            : '';
+
         if (!a) {
-            return `<p class="muted">No folded authority on this agent's records &mdash; they
+            return who + `<p class="muted">No folded authority on this agent's records &mdash; they
                     predate the enforcement point recording it. The block ids below are all
                     that was captured.</p>`;
         }
@@ -598,7 +610,7 @@
         const pct = (spend !== undefined && Number(spend) > 0)
             ? Math.min(100, (spent / Number(spend)) * 100) : 0;
 
-        let html = '<div class="authority">';
+        let html = '<div class="authority">' + who;
 
         if (spend !== undefined) {
             html += `
@@ -654,7 +666,7 @@
             // Authority first, block ids after. The ids are what a revocation names, so
             // they stay — but on their own they told an operator nothing, which is what
             // this panel used to be: three hashes under a heading promising caveats.
-            let html = renderAuthority(data.authority);
+            let html = renderAuthority(data.authority, node);
 
             if (data.blocks && data.blocks.length > 0) {
                 html += `<details class="chain-details"><summary>Token chain (${data.blocks.length} blocks)</summary>`
