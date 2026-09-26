@@ -1,6 +1,6 @@
 # AgentIAM — Research Foundation
 
-Audit written 2026-09-26/27 against commit `5c2c6ee`. Five documents. **Read them in this
+Audit written 2026-09-26/27 against commit `5c2c6ee`. Six documents. **Read them in this
 order** — each depends on the one before it.
 
 ---
@@ -59,7 +59,15 @@ the paper fails without them**, a five-phase sequence, and four decisions that n
 "safety does not depend on the enforcement point" is a protocol property, not a deployed one)
 and GAP-C (nothing verifies a PEP's clock, and spec 04's own open question 1 is still open).
 
-### 5. [`prior-survey-2026-08-21.md`](prior-survey-2026-08-21.md) — reference, not required
+### 5. [`decisions.md`](decisions.md) — the four decisions, with their costs
+`RD-1` TLA+ model (accepted) · `RD-2` restricted Postgres role now, ledger service deferred ·
+`RD-3` top-tier venue, no deadline · `RD-4` team allocation deferred.
+
+**The two consequences worth knowing:** RD-1 **reorders Phase 1** — the model goes before the
+skew fix, because it decides the bound rather than assuming the one derived by hand here. RD-3
+**promotes baselines and off-box performance from desirable to mandatory**.
+
+### 6. [`prior-survey-2026-08-21.md`](prior-survey-2026-08-21.md) — reference, not required
 The previous literature survey, recovered verbatim from git stash `45a6a67` where it was the
 only copy. 1,129 lines, genuinely good work. Its central conclusion is **superseded** by
 `related-work.md` §4.2 — read that first, then use this for its §3 search methodology, §7
