@@ -5,8 +5,8 @@
 backs it, what has to be built before a reviewer sees it, and in what order.
 
 **Grounding.** Every gap below was found by reading the running system at commit `5c2c6ee`,
-not by reading the spec. Four of the seven are new to this pass and are not in
-`docs/STATUS.md`'s gap register.
+not by reading the spec. Four of the eight (A, B, C, and F's false-citation half) are new to
+this pass and are not in `docs/STATUS.md`'s gap register.
 
 ---
 
@@ -83,9 +83,10 @@ record of spend.
 2. **A real ledger service** with a narrow API, so the PEP never holds credentials. This is the
    architecturally correct answer and is a ticket of its own.
 
-Option 1 is enough for the paper if stated precisely. **Do not claim A4-resistance until one of
-these lands.** [`threat-model.md`](threat-model.md) §5 P4 currently overstates this and is
-corrected in the same commit as this plan.
+Option 1 is enough for the paper if stated precisely, and is the one chosen —
+[`decisions.md`](decisions.md) RD-2 carries the grant list and the privilege test that makes it
+safe. **Do not claim A4-resistance until it lands.** [`threat-model.md`](threat-model.md) §5 P4
+has been corrected to match.
 
 ### GAP-B — the ablation model is not in the repository *(critical for reproducibility)*
 
@@ -106,7 +107,8 @@ each guard is load-bearing — **cannot be reproduced by a reader.** A reviewer 
 | **B2 — write a TLA+/PlusCal spec and run TLC** over small bounds (2–3 PEPs, 2 leases, crash/reap/late-commit) | ~1 week including learning, if nobody knows TLA+ | Makes "model-checked" **true**, exhaustively, rather than needing a reword. Converts the weakest claim into the strongest |
 
 The protocol is small — seven operations, a four-state lease machine. This is a tractable TLA+
-target, not a research project. **Decision needed from you** (§6).
+target, not a research project. **Both accepted — see [`decisions.md`](decisions.md) RD-1**, which
+also sets what to model and why the model must come before GAP-C's fix.
 
 ### GAP-C — clock skew is assumed, never verified *(critical: an unchecked assumption)*
 
@@ -215,14 +217,20 @@ this audit.
 
 ---
 
-## 6. Decisions needed from you
+## 6. Decisions — all four resolved
 
-1. **TLA+ or not** (GAP-B2)? It makes "model-checked" true rather than reworded, and the
-   protocol is small enough that this is tractable. Costs roughly a week. My recommendation:
-   **yes** — it converts your weakest claim into your strongest, and it is the one thing here a
-   reviewer cannot argue with.
-2. **GAP-A: restricted DB role now, or the full ledger service?** Recommendation: **restricted
-   role now**, ledger service as future work, and state the boundary precisely in the paper.
-3. **Venue and deadline?** Everything above is sequenced for a preprint first. If a specific
-   venue deadline exists, Phase 2 is the part to protect and Phase 3 is the part to drop.
-4. **Who does what** — three of you. Phase 1 items 1–3 are independent and parallelize cleanly.
+Decided 2026-09-27 and recorded with their costs in [`decisions.md`](decisions.md).
+
+| | Decision | Effect here |
+|---|---|---|
+| **RD-1** | **TLA+/PlusCal + TLC, accepted.** Keep the randomized simulator too | **Reorders Phase 1** — the model goes first, because GAP-C's `Δ < 2S` bound is hand-derived in this audit and a two-clock model settles it exhaustively. Model, then implement the bound it confirms |
+| **RD-2** | **Restricted Postgres role now**, ledger service deferred as future work | GAP-A closes for the case that matters. Grant list in `decisions.md`; **the privilege test is mandatory**, not optional — an over-tight grant fails in the money path under load |
+| **RD-3** | **Top-tier security venue**, no deadline chosen. NDSS / USENIX Security / CCS / S&P | **GAP-D and GAP-E are promoted from desirable to mandatory.** Also: do not split TM-26 into its own paper — fold it in and disclose separately |
+| **RD-4** | Team allocation deferred | Phase 1's four items parallelize; noted for when it is time |
+
+### Phase 1, reordered by RD-1
+
+1. **The TLA+ model, two clocks included** — decides GAP-C's bound.
+2. **GAP-B1, the committed simulator + ablation matrix** — hours, in parallel, de-risks RD-1.
+3. **GAP-C, the skew check + CH-7** — with the bound the model confirms.
+4. **RD-2, the restricted role + its privilege test.**
