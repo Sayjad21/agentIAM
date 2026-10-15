@@ -49,6 +49,8 @@ from scripts import pep_service
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agentiam_pep.pool import LeaseGrant
+
 # Real Ed25519 public keys. An arbitrary 64-hex string is *not* one: `PublicKey.from_bytes`
 # rejects a value that is not a valid curve point, so a made-up constant fails at assembly
 # rather than exercising it.
@@ -1270,3 +1272,79 @@ class TestTheHarnessMatchesTheDeployedComposition:
         for principal in (deployed.principal_for(promoted), harness_principal_for(promoted)):
             assert principal.role != "senior"
             assert principal.declared_role == "senior"
+
+
+class TestLedgerClient:
+    """`SessionLedger` — the PEP's adapter onto the control plane's `ACQUIRE`/`RELEASE`.
+
+    The pool's contract (`agentiam_pep.pool.LedgerClient`) is that `acquire` *returns*
+    `None` when the ledger has nothing left, and that `None` is what sets
+    `mandate_exhausted` — the difference between `BUDGET_EXHAUSTED_MANDATE` and
+    `LEASE_UNAVAILABLE`. The ledger *raises* `LeaseUnavailableError` for the same outcome.
+    Until the adapter translated one into the other, the exception escaped the top-up task
+    ("Task exception was never retrieved", 1,131 times in one PEP's log during the first
+    `make demo-conc`), the flag was never set, and a spent mandate was reported as a lease
+    that would come back if the agent retried.
+    """
+
+    class _Session:
+        async def __aenter__(self) -> object:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    def _ledger(self) -> pep_service.SessionLedger:
+        return pep_service.SessionLedger(lambda: self._Session())
+
+    async def _acquire(self, ledger: pep_service.SessionLedger) -> LeaseGrant | None:
+        from agentiam_core.models import BudgetDimension
+
+        return await ledger.acquire(
+            mandate_id=uuid.uuid4(),
+            dimension=BudgetDimension.SPEND_BDT,
+            requested=Decimal(100),
+            pep_id="pep-test",
+            ttl=timedelta(seconds=60),
+            now=datetime.now(UTC),
+        )
+
+    async def test_an_exhausted_pool_is_none_not_an_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agentiam_controlplane.db import ledger as ledger_db
+        from agentiam_controlplane.errors import LeaseUnavailableError
+
+        async def exhausted(*_: object, **__: object) -> object:
+            raise LeaseUnavailableError("no budget available in the pool")
+
+        monkeypatch.setattr(ledger_db, "acquire", exhausted)
+        assert await self._acquire(self._ledger()) is None
+
+    async def test_a_grant_is_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from types import SimpleNamespace
+
+        from agentiam_controlplane.db import ledger as ledger_db
+
+        lease_id = uuid.uuid4()
+        expires = datetime.now(UTC) + timedelta(seconds=60)
+
+        async def granted(*_: object, **__: object) -> object:
+            return SimpleNamespace(id=lease_id, granted=Decimal(100), expires_at=expires)
+
+        monkeypatch.setattr(ledger_db, "acquire", granted)
+        grant = await self._acquire(self._ledger())
+        assert grant is not None
+        assert (grant.id, grant.granted, grant.expires_at) == (lease_id, Decimal(100), expires)
+
+    async def test_other_failures_still_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Only "nothing left" means None. A dead database is not an empty pool, and turning
+        # it into one would report BUDGET_EXHAUSTED_MANDATE during CH-1's outage.
+        from agentiam_controlplane.db import ledger as ledger_db
+
+        async def down(*_: object, **__: object) -> object:
+            raise ConnectionRefusedError("postgres is down")
+
+        monkeypatch.setattr(ledger_db, "acquire", down)
+        with pytest.raises(ConnectionRefusedError):
+            await self._acquire(self._ledger())

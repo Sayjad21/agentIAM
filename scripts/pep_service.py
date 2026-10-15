@@ -64,7 +64,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 # `python scripts/pep_service.py` puts `scripts/` at sys.path[0], not the repo root;
 # pytest's `pythonpath = ["."]` only applies under pytest. Same bootstrap as
@@ -80,11 +80,12 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from agentiam_core.decision import DriftOracle
+    from agentiam_core.models import BudgetDimension
     from agentiam_core.tokens import VerifiedToken
     from agentiam_pep.config import PepSettings
     from agentiam_pep.pipeline import Pipeline
     from agentiam_pep.policy import AgentPrincipal, CedarEngine
-    from agentiam_pep.pool import LeasePool
+    from agentiam_pep.pool import LeaseGrant, LeasePool
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +457,64 @@ def _root_keys(settings: ServiceSettings) -> list[PublicKey]:
     return keys
 
 
+class SessionLedger:
+    """The real `ACQUIRE`/`RELEASE` over the configured DSN — spec 04 §4.1, §4.5.
+
+    **An empty pool is `None`, not an exception.** The pool's `LedgerClient` contract
+    returns `None` when the ledger has nothing left, and that `None` is what sets
+    `mandate_exhausted` — the difference between `BUDGET_EXHAUSTED_MANDATE` ("the budget is
+    spent") and `LEASE_UNAVAILABLE` ("this PEP's lease is empty, try again"). The ledger
+    raises `LeaseUnavailableError` for the same outcome (rule 5). Nested inside
+    `build_service` and untranslated, that exception escaped every top-up task — 1,131
+    unretrieved task exceptions in one PEP during the first `make demo-conc` — and a spent
+    mandate was reported as a lease that would come back. Only that error is translated:
+    a dead database is not an empty pool.
+    """
+
+    def __init__(self, factory: Callable[[], Any]) -> None:
+        """`factory` opens one `AsyncSession` per call, as `make_session_factory` does."""
+        self._factory = factory
+
+    async def acquire(
+        self,
+        *,
+        mandate_id: uuid.UUID,
+        dimension: BudgetDimension,
+        requested: Decimal,
+        pep_id: str,
+        ttl: timedelta,
+        now: datetime,
+    ) -> LeaseGrant | None:
+        """Lease up to `requested`, or `None` if the pool has nothing left to give."""
+        from agentiam_controlplane.db import ledger as ledger_db
+        from agentiam_controlplane.errors import LeaseUnavailableError
+        from agentiam_pep.pool import LeaseGrant
+
+        try:
+            async with self._factory() as session:
+                lease = await ledger_db.acquire(
+                    session,
+                    mandate_id=mandate_id,
+                    dimension=dimension.value,
+                    requested=requested,
+                    pep_id=pep_id,
+                    ttl=ttl,
+                    now=now,
+                )
+        except LeaseUnavailableError:
+            return None
+        if lease is None or lease.granted <= 0:
+            return None
+        return LeaseGrant(id=lease.id, granted=lease.granted, expires_at=lease.expires_at)
+
+    async def release(self, *, lease_id: uuid.UUID) -> None:
+        """Return a lease's outstanding budget to the pool."""
+        from agentiam_controlplane.db import ledger as ledger_db
+
+        async with self._factory() as session:
+            await ledger_db.release(session, lease_id=lease_id)
+
+
 @dataclass(frozen=True, slots=True)
 class Service:
     """The assembled object graph, exposed so tests can assert on the parts."""
@@ -498,7 +557,6 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_controlplane.db.audit_sink import LedgerAuditSink
     from agentiam_controlplane.db.base import make_engine, make_session_factory
     from agentiam_controlplane.db.escalation_sink import LedgerEscalationSink
-    from agentiam_controlplane.db.ledger import acquire, release
     from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
     from agentiam_core.datalog import chain_identity, token_caveats
     from agentiam_core.models import BudgetDimension
@@ -509,7 +567,7 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_pep.extractor import RouteTable
     from agentiam_pep.pipeline import Pipeline, PipelineSettings
     from agentiam_pep.policy import AgentPrincipal
-    from agentiam_pep.pool import LeaseGrant, LeasePool, PoolSettings
+    from agentiam_pep.pool import LeasePool, PoolSettings
     from agentiam_pep.revocation import RedisRevocationSet
     from agentiam_pep.settlement import SettlementQueue, SettlementSettings
 
@@ -518,42 +576,11 @@ def build_service(settings: ServiceSettings) -> Service:
     policy = load_policy(settings)
     role_assignments = load_role_assignments(settings)
 
-    class Ledger:
-        """The real `ACQUIRE`/`RELEASE` over the configured DSN — spec 04 §4.1, §4.5."""
-
-        async def acquire(
-            self,
-            *,
-            mandate_id: uuid.UUID,
-            dimension: BudgetDimension,
-            requested: Decimal,
-            pep_id: str,
-            ttl: timedelta,
-            now: datetime,
-        ) -> LeaseGrant | None:
-            async with factory() as session:
-                lease = await acquire(
-                    session,
-                    mandate_id=mandate_id,
-                    dimension=dimension.value,
-                    requested=requested,
-                    pep_id=pep_id,
-                    ttl=ttl,
-                    now=now,
-                )
-            if lease is None or lease.granted <= 0:
-                return None
-            return LeaseGrant(id=lease.id, granted=lease.granted, expires_at=lease.expires_at)
-
-        async def release(self, *, lease_id: uuid.UUID) -> None:
-            async with factory() as session:
-                await release(session, lease_id=lease_id)
-
     settlement = SettlementQueue(
         LedgerSettlementSink(factory), SettlementSettings(), now=lambda: datetime.now(UTC)
     )
     pool = LeasePool(
-        Ledger(),
+        SessionLedger(factory),
         PoolSettings(
             pep_id=settings.pep_id,
             lease_size=settings.lease_size,

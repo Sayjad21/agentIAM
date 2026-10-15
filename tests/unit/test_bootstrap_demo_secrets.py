@@ -151,8 +151,10 @@ class TestGenerate:
         """Whoever the demo lets pay must be senior, or the forbid refuses every payment.
 
         `payment_api` is `critical` and the bundle forbids critical resources to non-seniors.
-        The payer lineage is exactly who `seed_demo` gives `payment:initiate` to.
+        The payer lineage is exactly who `seed_demo` gives `payment:initiate` to, plus the
+        siblings `demo_concurrency` mints, which only ever pay.
         """
+        from scripts.demo_concurrency import SIBLINGS
         from scripts.seed_demo import _CHILDREN, _DESCENDANTS
 
         bootstrap_demo_secrets.main(["--out", str(tmp_path)])
@@ -160,6 +162,7 @@ class TestGenerate:
 
         payers = {name for name, _, scopes, _ in _CHILDREN if "payment:initiate" in scopes}
         payers |= {name for _, name, _, scopes, _ in _DESCENDANTS if "payment:initiate" in scopes}
+        payers |= {name for name, _ in SIBLINGS}
         assert {path.rsplit("/", 1)[-1] for path in roles} == payers
         assert set(roles.values()) == {"senior"}
 

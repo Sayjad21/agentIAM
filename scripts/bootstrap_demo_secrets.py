@@ -77,6 +77,10 @@ ROLE_ASSIGNMENTS: Final[dict[str, str]] = {
     "agt-treasury": "senior",
     "agt-treasury/agt-reconciler": "senior",
     "agt-treasury/agt-bulk-buyer": "senior",
+    # `scripts/demo_concurrency.py`: three siblings that only ever pay, one level down.
+    "agt-supplier-a": "senior",
+    "agt-supplier-b": "senior",
+    "agt-supplier-c": "senior",
 }
 
 DEFAULT_OUT: Final = _REPO_ROOT / "deploy" / "demo-secrets"

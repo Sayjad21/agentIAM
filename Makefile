@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down demo-up demo-seed demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
+.PHONY: help install up down demo-up demo-seed demo-conc demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
         test-integration \
         test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
         benchmarks evidence
@@ -31,6 +31,18 @@ demo-up: ## Build and start the full demo stack (control plane, PEP, tools) and 
 # `--no-deps` because everything it needs is already up by the time you run this.
 demo-seed: ## Drive the demo scenario through a running stack, so the console has content (T-057)
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080
+
+# The sibling race, live (`scripts/demo_concurrency.py`). Every run is a fresh mandate —
+# one run spends the pool — so: seed a new one, recreate the three PEPs bound to it, fire.
+# Builds first, profile included: a stale `bootstrap` image writes a role map without the
+# siblings, and every payment is then refused by policy rather than by the pool. The `up`
+# is a no-op on a running, current stack and brings a cold one up.
+demo-conc: ## Three siblings, three PEPs, one pool, all at once: show the ledger holds the total
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile conc build
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --wait
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile conc run --rm seed-conc python scripts/demo_concurrency.py --out /secrets --new
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile conc up -d --wait --no-deps --force-recreate pep-conc-a pep-conc-b pep-conc-c
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml --profile conc run --rm --no-deps seed-conc python scripts/demo_concurrency.py --drive
 
 # Edits one audit record directly so "Verify chain" can be shown failing, then puts it back.
 # Runs in the seed container for the same reason demo-seed does: it has the DSN.

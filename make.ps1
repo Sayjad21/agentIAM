@@ -16,7 +16,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-down', 'demo-reset',
+    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-conc', 'demo-down', 'demo-reset',
                  'demo-tamper', 'demo-untamper',
                  'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
@@ -66,6 +66,7 @@ switch ($Target) {
             'security'         = 'Run bandit, pip-audit, the SBOM check, and the secret-scan test'
             'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
             'demo-seed'        = 'Drive the demo scenario through a running stack (T-057)'
+            'demo-conc'        = 'Three siblings, three PEPs, one pool, all at once'
             'demo-reset'       = 'Wipe all demo data and bring the stack back up empty'
             'demo-tamper'      = 'Edit one audit record so Verify chain turns red (demo only)'
             'demo-untamper'    = 'Restore the record demo-tamper edited'
@@ -178,6 +179,19 @@ switch ($Target) {
                       'python', 'scripts/seed_demo.py', '--drive',
                       '--tokens', '/secrets/demo-tokens.json',
                       '--pep-url', 'http://pep:8080')
+    }
+    'demo-conc' {
+        # The sibling race, live. Every run is a fresh mandate - one run spends the pool -
+        # so: seed a new one, recreate the three PEPs bound to it, then fire.
+        $compose = @('docker', 'compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.demo.yml')
+        Invoke-Step ($compose + @('--profile', 'conc', 'build'))
+        Invoke-Step ($compose + @('up', '-d', '--wait'))
+        Invoke-Step ($compose + @('--profile', 'conc', 'run', '--rm', 'seed-conc',
+                                  'python', 'scripts/demo_concurrency.py', '--out', '/secrets', '--new'))
+        Invoke-Step ($compose + @('--profile', 'conc', 'up', '-d', '--wait', '--no-deps',
+                                  '--force-recreate', 'pep-conc-a', 'pep-conc-b', 'pep-conc-c'))
+        Invoke-Step ($compose + @('--profile', 'conc', 'run', '--rm', '--no-deps', 'seed-conc',
+                                  'python', 'scripts/demo_concurrency.py', '--drive'))
     }
     'benchmarks' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_benchmark_results.py') }
     'evidence' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_evidence_pack.py') }

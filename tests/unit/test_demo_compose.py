@@ -45,6 +45,10 @@ class TestComposeFile:
             "controlplane",
             "pep",
             "ollama",
+            "seed-conc",
+            "pep-conc-a",
+            "pep-conc-b",
+            "pep-conc-c",
         }
 
     def test_it_is_an_overlay_not_a_standalone_stack(self) -> None:

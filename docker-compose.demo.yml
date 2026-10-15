@@ -225,6 +225,83 @@ services:
       retries: 30
       start_period: 3s
 
+  # ---- The sibling race, live: `make demo-conc` (`scripts/demo_concurrency.py`) ----------
+  #
+  # Opt-in, like `ollama`: NFR-8 is measured against the default bring-up. Three more PEPs,
+  # one per sibling agent, all bound to one small pool and sharing one ledger — a single
+  # PEP would serialize the race in its own process and prove nothing about the ledger.
+  # The mandate is per run (the pool is spent by one), so the PEPs read its id from the
+  # file `seed-conc` writes rather than from a constant like `pep` does. No host ports:
+  # the driver runs inside this network.
+  seed-conc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["conc"]
+    volumes:
+      - demo-secrets:/secrets
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
+    command: ["python", "scripts/demo_concurrency.py", "--out", "/secrets"]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
+  pep-conc-a: &pep-conc
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["conc"]
+    volumes:
+      - demo-secrets:/secrets:ro
+    environment: &pep-conc-env
+      AGENTIAM_PEP_UPSTREAM_BASE_URL: http://tools:8081
+      AGENTIAM_PEP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
+      AGENTIAM_PEP_REDIS_URL: redis://redis:6379/0
+      AGENTIAM_PEP_CONTROL_PLANE_URL: http://controlplane:8000
+      AGENTIAM_PEP_ID: pep-conc-a
+      # `demo_concurrency.LEASE_SIZE`; the test pins the two together. Small enough that
+      # the three leases primed at boot leave most of the pool to be raced for.
+      AGENTIAM_PEP_LEASE_SIZE: "2000.0000"
+      AGENTIAM_PEP_POLICY_BUNDLE_PATH: /secrets/policy_bundle.json
+      AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH: /secrets/policy_bundle.sig
+      AGENTIAM_PEP_ROUTES_PATH: /secrets/routes.json
+      AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH: /secrets/role_assignments.json
+    command: >
+      sh -c "export AGENTIAM_PEP_ROOT_PUBLIC_KEYS=$$(cat /secrets/root_public_key.hex) &&
+             export AGENTIAM_PEP_POLICY_PUBLIC_KEY=$$(cat /secrets/policy_public_key.hex) &&
+             export AGENTIAM_PEP_MANDATE_ID=$$(cat /secrets/concurrency/mandate_id) &&
+             python scripts/pep_service.py --host 0.0.0.0 --port 8080"
+    depends_on:
+      seed-conc:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      tools:
+        condition: service_healthy
+      controlplane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  pep-conc-b:
+    <<: *pep-conc
+    environment:
+      <<: *pep-conc-env
+      AGENTIAM_PEP_ID: pep-conc-b
+
+  pep-conc-c:
+    <<: *pep-conc
+    environment:
+      <<: *pep-conc-env
+      AGENTIAM_PEP_ID: pep-conc-c
+
   # Opt-in — see the file header. `docker compose --profile llm up`.
   ollama:
     image: ollama/ollama:0.5.4
