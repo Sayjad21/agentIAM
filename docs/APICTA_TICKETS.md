@@ -195,7 +195,7 @@ Then STATUS.md §3: delete the "Revoking an agent from the console" row; `MASTER
 
 ## APICTA-01 — Policy publication to the PEP, and a template fallback for the compiler
 
-- **Status:** TODO
+- **Status:** IN_PROGRESS — Part A done (spec 05 §5.7, ADR-073); B, C, D to go
 - **Maps to:** gap 26; T-031 (deferred, reopened here); STATUS.md §3 "Policy Activated
   Successfully!" row
 - **Parts:** A (spec) → B (control plane) → C (PEP) → D (fallback). One sitting each.
