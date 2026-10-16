@@ -3594,6 +3594,42 @@ mints fresh blocks that no revocation names.
 
 ---
 
+## The APICTA sprint (`APICTA_TICKETS.md`)
+
+### APICTA-07 · Drift off the event loop, and a bound chosen by measurement
+
+Gap 22 had been pinned by a chaos test since T-052: a hung embedding model stalled every
+request in the PEP, because `decide()` step 6 called a synchronous `httpx.Client` from the event
+loop. The ticket as first written said "wrap the call in `asyncio.wait_for(…, 0.12)`". Two
+things in the code made that insufficient.
+
+**`decide()` cannot await.** It is the pure core, and its purity is a test. So the oracle now
+has a synchronous face that never does I/O — score cache, rule cases, held vectors, or
+`ScoreNotReady` — and an async `assess()`. The pipeline runs `decide()` with the oracle wrapped
+to record a miss, awaits `assess()` only if step 6 actually missed, and decides again. The
+obvious one-pass alternative, scoring before `decide()`, would have made every request on a
+drift route call the model, including the ones steps 3-5 refuse: an amplifier for anyone
+holding a token.
+
+**A timeout that cancels never warms the cache.** With the fetch cancelled at the bound, a model
+slower than the bound would time out on every request for as long as it stayed slow. Fetches
+are shielded and finish in the background, single-flight per text.
+
+**The bound was measured, not taken from the ticket.** `nomic-embed-text` on the development
+laptop, CPU only (the GPU driver was mismatched that day): uncached warm embeddings p50 ~7 ms,
+p99 8-10 ms over three runs of 200; cold 2.8 s; occasional stalls of 4.7-8.5 s. So 120 ms is
+over ten times the warm p99 — it does not silently disable drift — and it is precisely the
+bound that keeps those stalls off the request.
+
+Each guard was removed in turn and a test went red: the shield, the second pass, single-flight,
+the bound. CH-8 now asserts the fix rather than the defect: an unreachable model costs p99
+14 ms (was 6,052 ms); a black-holed one p99 128 ms against an 8 ms baseline, nine requests
+three at a time in 0.4 s, all allowed. Also found while there: CH-8's "a closed port times out
+after ~3 s" is a Windows fact — on Fedora the refusal is immediate — and every demo route has
+drift `off`, so none of this was visible in the demo either way.
+
+---
+
 ## What the numbers looked like at T-033
 
 The snapshot the entries above built up to, left as it was written rather than corrected in
@@ -3656,6 +3692,7 @@ are kept here with their original findings. Open gaps stay in `STATUS.md` §4.
 | ~~19a-partial~~ | ~~**Measured on Gemini 2.5 Flash, leak-free prompt: 17/30 (57%) — or 17 of the 19 that got an answer (89%).**~~ — superseded by the clean run above; that one was throttled at 11 of 30. Both numbers are stated because either alone misleads. Full breakdown: **passed 17 · wrong decision 2 · unparseable Cedar 0 · asked for clarification 0 · errors/timeouts 11**; latency median 7.6 s. The 11 errors are rate-limit exhaustion, not compiler failures — Gemini's free tier throttled harder than the 15 s pacing assumed | **The two failure classes that dominated are gone.** Unparseable Cedar 8 → 0 (teaching `&&`/`||` and that only `context.amount` is a decimal); clarification refusals 23 → 0. What remains is 2 genuinely wrong policies out of 19 answered. Beat 5 is demonstrable | Lower `PACING_S` for Gemini, or use a paid tier, then re-measure for a clean 30/30-attempted number. Prompt work should target the 2 wrong cases, not the throttle |
 | ~~19~~ | **Rebuilt, and the number moved 0% → 43% on the same local model.** Dataset v2 evaluates against AgentIAM's own entity model through the shared `evaluate_case`, so a case is won by generalising (`principal.role == "senior"`) rather than by guessing an id, and it is **self-validating**: `evaluate_compiler.py --validate` scores the reference policies with no model at all and must hit 30/30 before any run is worth starting. The prompt now teaches the fixed schema and the exact Cedar mistakes that were measured. Result on `qwen2.5:7b-instruct-q4_0`: **passed 13 (43%) · wrong 7 · unparseable 8 · asked for clarification 0 · errors 2**; latency median 4.4 s. **Refusals went 23 → 0.** This is the documented *local* baseline for the ADR-040 migration | Beat 5 is demonstrable on the local model for the first time, though 43% is not good enough to put in front of a judge unrehearsed. Remaining failures are Cedar-syntax slips, several of them a missing trailing `;` on an otherwise-correct policy | Hosted inference is now the prototype default (ADR-040). Re-measure on Groq; the gap between the two numbers is what the migration back to local will have to close |
 | ~~19-original~~ | ~~**The NL→Cedar compiler scores 0/30 — but the dataset cannot be passed.**~~ — kept for the record, because the diagnosis is the useful part. First real measurement, now the harness works: **passed 0 · wrong decision 4 · unparseable Cedar 2 · asked for clarification 23 · timeout 1**; latency median 25.9 s, max 300.6 s. Three independent defects, established by probe: **(a)** the ambiguity instruction over-fires, refusing 77% of the corpus on prompts as plain as *"Managers can approve expenses"*; **(b)** the model's Cedar is wrong in a small fixed way — `Resource::*` for an unconstrained resource, `resource in Expense` where Cedar wants `resource is Expense`, conditions in the scope instead of a `when` clause (a narrowed prompt turned all 6 sampled refusals into compile attempts, but only 1 of 6 parsed); **(c)** — the root cause — **the dataset is not a valid instrument** | **Fixing the compiler cannot fix this.** Of 30 cases the positive principal id appears verbatim in the English in only **10**; **13** need an arbitrary suffix guessed (*"Admins"*→`admin`, *"HR"*→`hr_rep`) and **7** name an id the prompt never mentions (`alice`, `manager1`, `guest`). So ≤10/30 is the ceiling for *any* compiler — and reaching it requires emitting `principal == User::"manager1"`, a policy about one named person, which is the wrong generalisation. The right role-based policy cannot work either: the harness passes `entities=[]`, so `principal.role` and ownership do not exist. The 25.9 s median is also flattered by the refusals, since a refusal is a short generation — real compilations took 53–242 s against beat 5's 90 s budget | **Rebuild the instrument before touching the prompt.** Ids derivable from the prompt, entities supplied so role-based policies are expressible, and expectations that reward generalisation rather than id-guessing. Then re-measure, then decide on T-031. Prompt work against the current dataset optimises toward a target that is both unreachable and wrong |
+| ~~22~~ | **A black-holed Ollama stalls the event loop.** `EmbeddingClient` holds a *synchronous* `httpx.Client` and `decide()` step 6 calls it from the loop, so an uncached drift score against a hung model blocks every concurrent request for the full timeout (2 s by default). Measured in CH-8; a *refused* Ollama costs nothing, which is why the fast-failure case alone reports "no hot-path impact" for a system that has plenty | Outcomes stay correct — spec 09 §5 fails open — but tail latency under a hung model is bounded by the timeout, not by the request. ADR-037 already noted the synchronous shape; CH-8 puts a number on it | Make `EmbeddingClient` async, or move scoring off the loop. Pinned by `test_a_black_holed_ollama_stalls_the_event_loop` so a fix turns it red **Closed by APICTA-07** (ADR-071): the request waits at most 120 ms and never blocks the loop; CH-8 black-holed p99 128 ms. |
 
 ### Correction to the T-019 record
 

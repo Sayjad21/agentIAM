@@ -37,6 +37,7 @@ from agentiam_core.models import (
     RequestContext,
 )
 from agentiam_core.tokens import verify
+from agentiam_pep.drift import AssessingDriftOracle, ScoreNotReady
 from agentiam_pep.emitter import AuditBufferFullError, current_trace_id
 from agentiam_pep.errors import ReservationInsufficientError
 from agentiam_pep.extractor import ExtractionError, extract
@@ -62,6 +63,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = ["Authorized", "Pipeline", "PipelineSettings", "Refused", "status_for"]
+
+
+class _DriftMissRecorder:
+    """Hands `decide()` the drift oracle and notes whether step 6 needed the model.
+
+    `decide()` is pure, so it cannot wait for an embedding. Wrapping the oracle for a first
+    pass tells `authorize()` whether step 6 was reached *and* missed the cache — the one case
+    worth awaiting the model for. A request refused at steps 3-5 never reaches step 6, so it
+    never costs an embedding: scoring before `decide()` would let any token holder make the PEP
+    call the model with requests that are refused anyway.
+    """
+
+    def __init__(self, oracle: DriftOracle) -> None:
+        """Wrap `oracle`; nothing has missed yet."""
+        self._oracle = oracle
+        self.missed = False
+
+    def score_for(self, context: RequestContext) -> Decimal | None:
+        try:
+            return self._oracle.score_for(context)
+        except ScoreNotReady:
+            self.missed = True
+            raise
+
 
 #: Spec 09 §11. Anything absent from this map is a bug rather than a default, so `status_for`
 #: raises rather than guessing — a reason code with no defined status would otherwise ship as
@@ -188,7 +213,7 @@ class Pipeline:
         settings: PipelineSettings,
         now: Callable[[], datetime],
         caveats_for: Callable[[VerifiedToken], Sequence[Caveat]] | None = None,
-        drift_oracle: DriftOracle | None = None,
+        drift_oracle: DriftOracle | AssessingDriftOracle | None = None,
         features: FeatureExtractor | None = None,
         escalation_sink: EscalationSink | None = None,
         settlement: SettlementQueue | None = None,
@@ -208,6 +233,14 @@ class Pipeline:
         self._features = features
         self._escalation_sink = escalation_sink
         self._settlement = settlement
+
+    def drift_outcomes(self) -> dict[str, int]:
+        """How drift assessments that needed the model ended, for `/metrics`.
+
+        Empty when the oracle is absent or never needs I/O.
+        """
+        outcomes = getattr(self._drift_oracle, "outcomes", None)
+        return dict(outcomes) if outcomes is not None else {}
 
     def request_span(self) -> AbstractContextManager[Span | None]:
         """The whole-request span wrapping `authorize()`, `settle()`, and the upstream call.
@@ -302,15 +335,41 @@ class Pipeline:
         # token's effective authority. Reading it costs a block-source parse, and the comment
         # above is about exactly this: resolve once, carry it.
         caveats = self._caveats_for(token)
+        policy = self._policy.bound(principal)
+        recorder = (
+            _DriftMissRecorder(self._drift_oracle) if self._drift_oracle is not None else None
+        )
         decision = decide(
             token,
             context,
             caveats=caveats,
             revocation=self._revocation,  # type: ignore[arg-type]
-            policy=self._policy.bound(principal),
+            policy=policy,
             budget=self._pool,
-            drift=self._drift_oracle,
+            drift=recorder,
         )
+        if (
+            recorder is not None
+            and recorder.missed
+            and isinstance(self._drift_oracle, AssessingDriftOracle)
+        ):
+            # Step 6 needed the model. Wait for it — boundedly, and without blocking the loop
+            # — then decide again with the answer in the oracle's cache. A timeout leaves the
+            # cache empty, the second pass's step 6 fails open, and the request goes on
+            # unassessed (spec 09 §5). Deciding twice costs one more pure `decide()`, paid only
+            # on a cache miss; the alternative, threading an await through `decide()`, would
+            # make the core impure. The repeated `budget.check()` is a read: its one side
+            # effect, scheduling a top-up on refusal, is single-flight.
+            await self._drift_oracle.assess(context)
+            decision = decide(
+                token,
+                context,
+                caveats=caveats,
+                revocation=self._revocation,  # type: ignore[arg-type]
+                policy=policy,
+                budget=self._pool,
+                drift=self._drift_oracle,
+            )
 
         # --- an escalating outcome opens a queue entry before it is recorded --------
         escalation_id: uuid.UUID | None = None

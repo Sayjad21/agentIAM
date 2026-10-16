@@ -91,6 +91,42 @@ single byte was sent. At p95 the construction alone approaches the timeout.
 `EmbeddingClient` therefore holds one client for the process. That is what makes the 83 ms
 figure, and the 17.8 ms warm single-embedding figure above, reachable at all.
 
+### 4.3 A request waits a bounded time for the model, and never blocks the loop — APICTA-07
+
+Until APICTA-07 the shared client was a *synchronous* `httpx.Client`, called by `decide()` step
+6 from the event loop. A hung model therefore blocked **every** concurrent request for the
+client's full timeout — CH-8 measured p99 6,066 ms against a 2 s timeout (STATUS gap 22). The
+contract now:
+
+1. **`decide()` never does I/O for drift.** `RuleBasedDriftOracle.score_for()` answers from the
+   score cache, the two rule cases (§2's identical and subset intents), or vectors already held,
+   and otherwise raises `ScoreNotReady` — an `OracleUnavailable`, so a caller that hands the
+   oracle straight to `decide()` gets §2.1's fail-open, not a blocked loop.
+2. **The pipeline decides twice on a miss.** It runs `decide()` with the oracle wrapped to
+   record whether step 6 missed. Only then does it await `assess()`, bounded by
+   `assess_timeout_s`, and run `decide()` again. A request refused at steps 3-5 never reaches
+   step 6 and never costs an embedding, which keeps the model from being an amplifier for
+   refused traffic.
+3. **The bound is `AGENTIAM_PEP_DRIFT_EMBED_TIMEOUT_MS`, default 120 ms**, measured against
+   `nomic-embed-text` on the development laptop (CPU): an uncached warm embedding is p50 ~7 ms
+   and p99 8-10 ms across three runs of 200, a cold one 2.8 s, with occasional stalls of
+   4.7-8.5 s. The default is over ten times the warm p99. Past it, the score is `None` —
+   *not assessed* — and the request proceeds (§2.1).
+4. **A fetch that outlives the bound is not cancelled.** It is shielded, finishes in the
+   background within the client's own timeout, and fills the cache, so a slow model costs one
+   request its score rather than every later request a timeout. Fetches are single-flight per
+   text.
+5. **Features read the cache only.** The record is written synchronously, so f1 and f2 use
+   vectors already held; a missing vector is fetched in the background and the feature is
+   absent on this record (§5.3's *not computed*).
+6. **The warm-up runs in the background.** A cold model load no longer holds the PEP's startup.
+
+Measured after the change (CH-8, `docs/benchmarks/chaos-results.md`): an unreachable model
+costs p99 14 ms, and a black-holed one p99 128 ms against an 8 ms baseline — nine requests
+three at a time in 0.4 s, all allowed. `agentiam_pep_drift_assessments_total{outcome}` on the
+PEP's `/metrics` counts `fetched`, `timeout` and `error`; a rising `timeout` rate means drift is
+going unassessed.
+
 ---
 
 ## 5. Features (T-033)

@@ -2,13 +2,13 @@
   "scenario": "CH-08-compiler",
   "title": "Ollama down \u2014 the NL compiler",
   "expected": "typed error inside the timeout; template fallback is unimplemented",
-  "run_id": "8baf6cd0-ef19-4bac-8cf0-01a773439d31",
-  "started_at": "2026-08-18T15:49:14.703411+00:00",
-  "duration_s": 5.328,
+  "run_id": "e23a97b9-0b05-4be9-94cf-075a8acc24b9",
+  "started_at": "2026-10-16T18:28:29.926410+00:00",
+  "duration_s": 0.044,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 17,
-    "held": 17,
+    "samples": 1,
+    "held": 1,
     "violated": 0,
     "unavailable": 0,
     "violations": [],
@@ -20,18 +20,18 @@
       "event": "scenario started"
     },
     {
-      "t_s": 5.325,
+      "t_s": 0.016,
       "event": "scenario ended"
     },
     {
-      "t_s": 5.325,
+      "t_s": 0.016,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "warm_returned": false,
-    "warm_s": 2.576,
-    "generate_failed_after_s": 2.749,
+    "warm_s": 0.009,
+    "generate_failed_after_s": 0.007,
     "generate_error": "OllamaError",
     "final_sweep_readable": true
   },

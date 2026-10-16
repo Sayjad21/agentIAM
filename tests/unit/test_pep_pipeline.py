@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from agentiam_core.decision import DriftOracle
 from agentiam_core.errors import ReasonCode
 from agentiam_core.escalation import Escalation, request_escalation
 from agentiam_core.hashing import hash_object
@@ -43,7 +44,7 @@ from agentiam_core.models import (
 from agentiam_core.tokens import RootKeySet, VerifiedToken, generate_keypair, mint_root
 from agentiam_pep.app import create_app
 from agentiam_pep.config import PepSettings
-from agentiam_pep.drift import FeatureExtractor
+from agentiam_pep.drift import AssessingDriftOracle, FeatureExtractor
 from agentiam_pep.emitter import BackPressure, DecisionEmitter, EmitterSettings
 from agentiam_pep.errors import ReservationInsufficientError
 from agentiam_pep.extractor import RouteTable
@@ -245,7 +246,7 @@ async def a_pipeline(
     revoked: list[str] | None = None,
     policy_source: str = POLICY,
     granted: Decimal = Decimal(1000),
-    drift: FakeDrift | None = None,
+    drift: DriftOracle | AssessingDriftOracle | None = None,
     features: FeatureExtractor | None = None,
     caveats: tuple[Caveat, ...] = (),
     escalation_sink: FakeEscalationSink | None = None,

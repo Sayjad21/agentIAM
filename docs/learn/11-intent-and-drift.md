@@ -124,16 +124,18 @@ timeout — the hot path's 2 s could never complete a cold start. `warm()` retur
 never raises: startup must not fail because a model is slow, and an unwarmed model just pays
 the cost on its first scored request instead (ADR-037).
 
-### A synchronous client on an async event loop
+### A synchronous client on an async event loop — fixed
 
-The embedding client holds a **synchronous** HTTP client and is called from the event loop. A
-hung model therefore blocks *every concurrent request* for the full timeout.
+The embedding client used to hold a **synchronous** HTTP client, called from inside `decide()`
+on the event loop. A hung model therefore blocked *every concurrent request* for the full 2 s
+timeout — the chaos suite measured p99 6,066 ms (CH-8, STATUS gap 22).
 
-A *refused* connection costs nothing — which is why the fast-failure case reports no hot-path
-impact for a system that has plenty. Measured in the chaos suite as CH-8, and it remains an
-**open gap**, pinned by a test that will turn red when it is fixed. It is written down rather
-than hidden: outcomes stay correct because drift fails open, but tail latency under a hung
-model is bounded by the timeout, not by the request.
+The fix (APICTA-07, spec 06 §4.3) keeps `decide()` pure. The oracle answers only from what it
+already holds and signals a miss; the pipeline then waits for the model **at most 120 ms**
+(measured to be over ten times a warm embedding's p99), decides again, and lets a slower fetch
+finish in the background so the next request finds it cached. A request refused before step 6
+never triggers an embedding at all. CH-8 now measures p99 128 ms with the model black-holed,
+and outcomes are unchanged because drift fails open.
 
 ### The score was computed and thrown away
 

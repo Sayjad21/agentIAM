@@ -2,20 +2,20 @@
   "scenario": "CH-01",
   "title": "Kill Postgres for 30 s",
   "expected": "PEPs spend leases, then fail closed; recovery is clean; invariant holds",
-  "run_id": "757cecd5-ff81-4e1b-999c-cc254b8587cd",
-  "started_at": "2026-08-18T15:47:16.309315+00:00",
-  "duration_s": 31.922,
+  "run_id": "fc8c7ec8-8518-4d3d-bb15-28cae02ead6a",
+  "started_at": "2026-10-16T18:26:05.753541+00:00",
+  "duration_s": 31.686,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 14,
+    "samples": 125,
     "held": 3,
     "violated": 0,
-    "unavailable": 11,
+    "unavailable": 122,
     "violations": [],
     "unavailable_reasons": [
       "InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: connection is closed\n[SQL: \n    SELECT\n        b.id  ",
-      "ConnectionError: unexpected connection_lost() call",
-      "ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection"
+      "OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 34675, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 34675)",
+      "ConnectionResetError: [Errno 104] Connection reset by peer"
     ]
   },
   "timeline": [
@@ -24,27 +24,27 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.068,
+      "t_s": 0.037,
       "event": "stopping postgres"
     },
     {
-      "t_s": 0.562,
+      "t_s": 0.953,
       "event": "postgres stopped"
     },
     {
-      "t_s": 30.955,
+      "t_s": 31.019,
       "event": "starting postgres"
     },
     {
-      "t_s": 31.791,
-      "event": "postgres accepting connections after 0.6 s"
+      "t_s": 31.586,
+      "event": "postgres accepting connections after 0.3 s"
     },
     {
-      "t_s": 31.918,
+      "t_s": 31.684,
       "event": "scenario ended"
     },
     {
-      "t_s": 31.918,
+      "t_s": 31.684,
       "event": "final sweep"
     }
   ],
@@ -52,11 +52,11 @@
     "leased_before_outage": "300.0000",
     "local_remaining_at_cut": "200.0000",
     "committed_before_outage": "0.0000",
-    "outage_s": 30.39,
+    "outage_s": 30.07,
     "spent_during_outage": "200.0000",
     "served_during_outage": 8,
     "refused_during_outage": 6,
-    "recovery_s": 0.58,
+    "recovery_s": 0.3,
     "leased_after_recovery": "300.0000",
     "acquire_failures": 1,
     "final_sweep_readable": true
@@ -73,10 +73,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 7.294,
-        "p99": 14.372,
-        "max": 14.372,
-        "mean": 8.228
+        "p50": 3.489,
+        "p99": 7.575,
+        "max": 7.575,
+        "mean": 4.216
       }
     },
     {
@@ -93,10 +93,10 @@
       },
       "errors": [],
       "latency_ms": {
-        "p50": 4.536,
-        "p99": 8.859,
-        "max": 8.859,
-        "mean": 4.886
+        "p50": 1.72,
+        "p99": 3.646,
+        "max": 3.646,
+        "mean": 1.85
       }
     },
     {
@@ -110,10 +110,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 2.899,
-        "p99": 3.313,
-        "max": 3.313,
-        "mean": 2.965
+        "p50": 1.79,
+        "p99": 2.891,
+        "max": 2.891,
+        "mean": 2.032
       }
     }
   ],

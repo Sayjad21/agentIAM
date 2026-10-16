@@ -53,7 +53,7 @@ fallback) and T-059 (submission package).
 
 | Ticket | Status |
 |---|---|
-| APICTA-07 | TODO |
+| APICTA-07 | DONE — verified locally; CI pending (Actions billing block) |
 | APICTA-04 | TODO |
 | APICTA-01 | TODO |
 | APICTA-03 | TODO |
@@ -70,7 +70,8 @@ commit.
 
 ## APICTA-07 — Drift scoring off the event loop, with a bounded timeout
 
-- **Status:** TODO
+- **Status:** DONE (ADR-071). Local: `make check`, `make test-integration`, e2e and `make chaos`
+  green. CI not yet run
 - **Maps to:** gap 22; STATUS.md §3 "Drift detection" row (partly)
 
 **Problem statement.**

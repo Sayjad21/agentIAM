@@ -42,6 +42,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Histogram
 from prometheus_client import generate_latest as render_metrics
+from prometheus_client.core import CounterMetricFamily
+from prometheus_client.registry import Collector
 
 from agentiam_core.errors import ReasonCode
 from agentiam_pep.config import PepSettings
@@ -50,7 +52,7 @@ from agentiam_pep.pipeline import Authorized, Refused
 from agentiam_pep.tracing import configure_tracing
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
 
     from starlette.types import Lifespan
 
@@ -79,6 +81,32 @@ def _build_metrics(registry: CollectorRegistry) -> tuple[Counter, Histogram]:
         registry=registry,
     )
     return requests, latency
+
+
+class _DriftOutcomes(Collector):
+    """`agentiam_pep_drift_assessments_total{outcome}`, read from the pipeline on scrape.
+
+    A collector rather than a `Counter` the pipeline increments, because the counts live on
+    the drift oracle and the oracle knows nothing about Prometheus. Only assessments that
+    needed the model are counted: `fetched`, `timeout` (the bound passed, APICTA-07) and
+    `error`. A rising `timeout` rate is the signal that the bound is too tight for the model
+    actually deployed — or that the model is struggling — and that drift is going unassessed.
+    """
+
+    def __init__(self, pipeline: Pipeline) -> None:
+        """Read `pipeline.drift_outcomes()` at every scrape."""
+        self._pipeline = pipeline
+
+    def collect(self) -> Iterator[CounterMetricFamily]:
+        family = CounterMetricFamily(
+            "agentiam_pep_drift_assessments",
+            "Drift assessments that needed the embedding model, by outcome.",
+            labels=["outcome"],
+        )
+        outcomes = self._pipeline.drift_outcomes()
+        for outcome in ("fetched", "timeout", "error"):
+            family.add_metric([outcome], outcomes.get(outcome, 0))
+        yield family
 
 
 def create_app(
@@ -112,6 +140,8 @@ def create_app(
     enforcing = pipeline is not None
     registry = CollectorRegistry()
     requests_total, upstream_latency = _build_metrics(registry)
+    if pipeline is not None:
+        registry.register(_DriftOutcomes(pipeline))
 
     app = FastAPI(
         title="AgentIAM PEP",

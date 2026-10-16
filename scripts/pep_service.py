@@ -247,6 +247,10 @@ class ServiceSettings:
     #: Where `RuleBasedDriftOracle` reaches an embedding model. `None` disables drift
     #: entirely — a legitimate configuration, not a degraded one (spec 06 §2.1).
     ollama_url: str | None = None
+    #: How long one request may wait for the embedding model before its drift score is
+    #: "not assessed" (APICTA-07). `None` keeps `drift.DEFAULT_ASSESS_TIMEOUT_S`, which is
+    #: measured; see its comment. Read from `AGENTIAM_PEP_DRIFT_EMBED_TIMEOUT_MS`.
+    drift_embed_timeout_ms: float | None = None
 
     @classmethod
     def from_env(cls) -> ServiceSettings:
@@ -288,6 +292,7 @@ class ServiceSettings:
             # dataclass default, and no deployment could change it.
             default_role=os.environ.get(f"{ENV_PREFIX}DEFAULT_ROLE", "").strip() or DEFAULT_ROLE,
             ollama_url=os.environ.get(f"{ENV_PREFIX}OLLAMA_URL", "").strip() or None,
+            drift_embed_timeout_ms=_optional_positive_float(f"{ENV_PREFIX}DRIFT_EMBED_TIMEOUT_MS"),
             # Every other setting here reads an override and this one did not, so the
             # 5,000 default was the hard ceiling on any single payment a deployed PEP
             # could authorize — a request larger than the lease is refused with
@@ -562,7 +567,7 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_core.models import BudgetDimension
     from agentiam_core.tokens import RootKeySet
     from agentiam_pep.app import create_app
-    from agentiam_pep.drift import RuleBasedDriftOracle
+    from agentiam_pep.drift import DEFAULT_ASSESS_TIMEOUT_S, RuleBasedDriftOracle
     from agentiam_pep.emitter import DecisionEmitter, EmitterSettings
     from agentiam_pep.extractor import RouteTable
     from agentiam_pep.pipeline import Pipeline, PipelineSettings
@@ -599,7 +604,16 @@ def build_service(settings: ServiceSettings) -> Service:
     )
 
     drift_oracle = (
-        RuleBasedDriftOracle(base_url=settings.ollama_url) if settings.ollama_url else None
+        RuleBasedDriftOracle(
+            base_url=settings.ollama_url,
+            assess_timeout_s=(
+                settings.drift_embed_timeout_ms / 1000
+                if settings.drift_embed_timeout_ms is not None
+                else DEFAULT_ASSESS_TIMEOUT_S
+            ),
+        )
+        if settings.ollama_url
+        else None
     )
 
     def principal_for(token: VerifiedToken) -> AgentPrincipal:
@@ -732,20 +746,23 @@ def build_service(settings: ServiceSettings) -> Service:
                     "refused until a top-up succeeds",
                     BudgetDimension.SPEND_BDT.value,
                 )
+        warm_up = None
         if drift_oracle is not None:
-            # `EmbeddingClient.warm()` is synchronous and can take up to 60 s cold
-            # (ADR-037 measured 14,244 ms for the embedding call alone) — run it off the
-            # loop via `asyncio.to_thread` (ADR-012's established primitive for exactly
-            # this) rather than block every other request during startup. A failed
-            # warm-up is not fatal: `warm()` returns a bool and never raises, and an
-            # unwarmed model just pays the cost on the first scored request instead
-            # (spec 06 §2.1 — drift fails open, never the process).
+            # In the background, not awaited: a cold model load can take a minute (ADR-037
+            # measured 14,244 ms for the embedding call alone), and the PEP is ready to
+            # serve without it — drift fails open until the model answers (spec 06 §2.1).
+            # Awaiting it here used to hold startup, and `make demo-up`'s cold start, hostage
+            # to an advisory heuristic. `warm()` never raises.
             import asyncio
 
-            await asyncio.to_thread(drift_oracle.embeddings.warm)
+            warm_up = asyncio.get_running_loop().create_task(drift_oracle.embeddings.warm())
         try:
             yield
         finally:
+            if warm_up is not None:
+                warm_up.cancel()
+            if drift_oracle is not None:
+                await drift_oracle.embeddings.aclose()
             await revocation.aclose()
             await settlement.aclose()
             await pool.aclose()

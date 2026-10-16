@@ -163,9 +163,9 @@ and model training beyond a small classifier.
 | | |
 |---|---|
 | **Tickets** | 48 of the 52 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 9 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
-| **Tests** | 2,950 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,645 |
+| **Tests** | 2,955 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,650 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 70 in `DECISIONS.md` |
+| **ADRs** | 71 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -224,7 +224,6 @@ Summarised from [`STATUS.md`](STATUS.md) §4, which has the impact and the fix f
 | 28 | Agent roles are a static JSON file read at boot |
 | 7 | `budgets.mandate_id` has no foreign key; there is no `mandates` table |
 | 21 | A partitioned PEP cannot shut down, and a timeout does not bound it |
-| 22 | A hung Ollama stalls the event loop (synchronous embedding client) |
 | 1 | No PEP-side clock-skew refusal (TM-22's open half) |
 | 8 | `ACQUIRE` does not clamp by `max_fraction` |
 | 6 | Assumption A1 (biscuit scopes block facts) is only partly pinned by a test |
@@ -507,7 +506,7 @@ for it.
 | What to build | [`PLAN.md`](PLAN.md) (§3 architecture, §6 protocols, §21 deferred) |
 | What is left | [`APICTA_TICKETS.md`](APICTA_TICKETS.md) (the sprint), [`STATUS.md`](STATUS.md) §2 and §5 |
 | Status and gaps | [`STATUS.md`](STATUS.md) |
-| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 70 ADRs |
+| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 71 ADRs |
 | Exact protocol contracts | [`specs/`](specs/) 01–10 |
 | Running the stack by hand | [`RUNNING.md`](RUNNING.md) |
 | The presentation script and judge handling | [`DEMO.md`](DEMO.md) |

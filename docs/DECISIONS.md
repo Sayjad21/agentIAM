@@ -4293,3 +4293,63 @@ full TTL — the same failure `aclose()`'s own docstring gives for not draining.
 `scripts/serve_pep.py` starts it too. ADR-062 is why: `performance.md`'s NFR-2 figure is a
 claim about the PEP we deploy, measured through that harness, and a run longer than one TTL
 would otherwise measure a pool that only replaces its lease when a request is refused.
+
+---
+
+## ADR-071 — Drift is scored outside `decide()`, with a bounded wait and a second pass
+
+**Status:** accepted · **Closes:** `STATUS.md` gap 22 · **Ticket:** APICTA-07 ·
+**Relates to:** ADR-037, spec 06 §4.3, spec 09 §5, CH-8
+
+### Context
+
+`decide()` is pure and synchronous, and step 6 called the drift oracle inline. The oracle's
+`EmbeddingClient` held a synchronous `httpx.Client` (ADR-037 chose one shared client and noted
+the shape), so an uncached request against a hung model blocked the event loop — every
+concurrent request — for the client's full 2 s timeout. CH-8 measured p99 6,066 ms with all
+requests still allowed.
+
+Making the client async is not enough on its own: `decide()` cannot `await`, and making it
+`async` would put I/O into the correctness core, which the purity test forbids.
+
+### Decision
+
+1. **The oracle has two faces.** `score_for()` is synchronous and does no I/O: score cache,
+   the two rule cases, or vectors already held; otherwise it raises `ScoreNotReady`, a
+   subclass of `OracleUnavailable`, so a caller that skips the async path fails open rather
+   than blocking. `assess()` is async and waits at most `assess_timeout_s` for the model.
+2. **The pipeline decides twice on a miss.** The first `decide()` runs with the oracle wrapped
+   to record whether step 6 missed. Only then does the pipeline await `assess()` and decide
+   again. Decisions that do not reach step 6 never cost an embedding.
+3. **A fetch that outlives the bound is shielded, not cancelled**, and fills the cache when it
+   finishes. Fetches are single-flight per text. `aclose()` cancels whatever is still in flight.
+4. **`FeatureExtractor` reads the cache only** and prefetches misses in the background. The
+   record is written synchronously, and a feature is observational (spec 06 §5.3).
+5. **The warm-up runs in the background** of the PEP's lifespan rather than holding startup.
+6. **The bound defaults to 120 ms** (`AGENTIAM_PEP_DRIFT_EMBED_TIMEOUT_MS`), measured: warm
+   uncached embeddings p99 8-10 ms on the development laptop (CPU), cold 2.8 s, rare stalls of
+   4.7-8.5 s.
+
+### Alternatives rejected
+
+- **Score before `decide()`.** One pass, but every request on a drift route — including those
+  refused at steps 3-5 — would make the PEP call the model. Any token holder could use refused
+  requests to load it. It also changes when drift is consulted relative to spec 09's order.
+- **Cancel on timeout.** Simpler, but the cache never fills while the model is slower than the
+  bound, so every request would time out for as long as the slowness lasted.
+- **`asyncio.to_thread` around the synchronous client.** Unblocks the loop but still makes the
+  request wait the full client timeout, and spends a thread per stalled call.
+
+### Consequences
+
+- On a drift-cache miss, a request pays one extra pure `decide()` (~0.3 ms) plus at most the
+  bound. Steady state — cache hits — is one pass. The repeated `budget.check()` is a read whose
+  one side effect, scheduling a top-up on refusal, is single-flight.
+- The first request for a new action text may be unassessed if the model is slower than the
+  bound; the next one is scored. The timed-out count is visible as
+  `agentiam_pep_drift_assessments_total{outcome="timeout"}`.
+- Measured after the change, CH-8: unreachable model p99 14 ms (was 6,052 ms); black-holed
+  model p99 128 ms against an 8 ms baseline, nine requests three at a time in 0.4 s. Both
+  drift scenarios now assert the absence of the stall against a same-run baseline.
+- Every guard was removed in turn and a test went red: the shield, the second pass,
+  single-flight, and the bound.

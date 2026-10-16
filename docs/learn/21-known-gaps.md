@@ -105,8 +105,6 @@ Honest housekeeping.
   configuration line fixes it.
 - **Mutation testing never run.** Coverage says the lines executed; mutation says the assertions
   bite. Specified, not done.
-- **A synchronous embedding client on the event loop.** A hung model blocks concurrent requests
-  for the full timeout. Pinned by a chaos test that turns red when it is fixed.
 - **A1 re-verification is manual.** The security rests on biscuit scoping block facts a
   particular way, and nothing fails automatically if a library upgrade changes it. It should be
   a test.
