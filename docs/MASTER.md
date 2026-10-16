@@ -168,6 +168,10 @@ and model training beyond a small classifier.
 | **ADRs** | 70 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
+The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
+what the audit below found — policy publication, multi-mandate leases, escalation delivery, a
+real LLM agent, console revocation, MCP, drift off the event loop, and a two-machine load test.
+
 An audit of the running system on 2026-10-16 found several things the console and docs present
 as working that are not connected to anything. [`STATUS.md`](STATUS.md) §3 lists them; §8 below
 repeats the ones that affect the demo.
@@ -501,7 +505,7 @@ for it.
 | For | Read |
 |---|---|
 | What to build | [`PLAN.md`](PLAN.md) (§3 architecture, §6 protocols, §21 deferred) |
-| What is left | [`STATUS.md`](STATUS.md) §2 (tickets) and §5 (follow-ups) |
+| What is left | [`APICTA_TICKETS.md`](APICTA_TICKETS.md) (the sprint), [`STATUS.md`](STATUS.md) §2 and §5 |
 | Status and gaps | [`STATUS.md`](STATUS.md) |
 | Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 70 ADRs |
 | Exact protocol contracts | [`specs/`](specs/) 01–10 |

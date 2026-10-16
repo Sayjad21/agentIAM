@@ -12,7 +12,7 @@ Every document in this repository, what it is for, and when to read it.
 | See what is built, what is left, and what is known to be wrong | [`STATUS.md`](STATUS.md) |
 | Bring the stack up and drive it | [`RUNNING.md`](RUNNING.md) |
 | Learn the project from scratch | [`learn/00-start-here.md`](learn/00-start-here.md) |
-| Pick up the next piece of work | [`STATUS.md`](STATUS.md) §2 and §5 → [`PLAN.md`](PLAN.md) §9 for the ticket → its spec → [`ENGINEERING-RULES.md`](ENGINEERING-RULES.md) for the loop |
+| Pick up the next piece of work | [`APICTA_TICKETS.md`](APICTA_TICKETS.md) — the current sprint, in order. Then [`STATUS.md`](STATUS.md) §5 and `PLAN.md` §9 |
 
 ---
 
@@ -104,4 +104,4 @@ contribution. Its README gives the reading order.
 `JOURNAL.md` → `DECISIONS.md` → the specs
 
 **To build the next ticket:**
-`STATUS.md` → `PLAN.md` §9 for the ticket → its specs → `ENGINEERING-RULES.md` for the loop
+`APICTA_TICKETS.md` → the specs it cites → `ENGINEERING-RULES.md` for the loop

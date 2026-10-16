@@ -47,6 +47,10 @@ reader (gap 2), the tool catalogue and per-path roles (ADR-069), lease renewal o
 
 ### Remaining
 
+**The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md)** — eight tickets, in order,
+that wire up the rows of §3 before APICTA. Its status table is the live record of that work;
+this page is updated as each ticket closes a gap.
+
 | Ticket | State |
 |---|---|
 | **T-057** Demo scenario scripting | **Partly done.** `make demo-seed` (paced 138-call scenario over a 14-agent tree, one refusal per enforcement layer), `make demo-conc` (three-PEP sibling race), `make demo-tamper` / `demo-untamper`, `make demo-reset`. Not met: `PLAN.md`'s "all 8 beats scripted, each individually runnable" — beats 1, 4, 5, 6 and 7 cannot be shown as written today (`MASTER.md` §7.8) |
