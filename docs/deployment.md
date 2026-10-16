@@ -165,25 +165,18 @@ default is correct as shipped; do not raise it "to be safe" without re-reading t
 section, since a longer grace period only makes a stuck rollout take longer to resolve
 without protecting anything.
 
-**A `SIGKILL` mid-rollback does not lose money — but does not automatically get it back
-either, and this project's own record of that fact turned out to be wrong.** CH-4's own
-docstring reads *"the money is safe either way ... what is lost is availability on
-restart"*, resting on *"the lease expires and `REAP` reclaims it."* Checking that claim
-while writing this runbook found it is true only inside the chaos harness, which advances
-an injected clock and calls `agentiam_controlplane.db.ledger.reap()` directly to observe
-reclamation (`tests/chaos/pepstack.py`'s own docstring says as much). **Grepping every
-non-test call site of `reap()` found none** — not in `scripts/pep_service.py`, not in
-`scripts/serve_pep.py`, not in either compose file, not in `deploy/k3s/`. Spec 04's own
-pseudocode prescribes `REAP() # background, every TTL/4`; nothing in this codebase runs
-it on a schedule. Recorded as new gap 27 (§3 of `STATUS.md`) — found here, not fixed here,
-since a scheduled reaper is a money-hot-path addition needing its own design (where it
-runs, how concurrent instances avoid duplicate work) and deserves its own ticket, the same
-posture T-056 Part 1 took with gap 25.
+**A `SIGKILL` mid-rollback does not lose money, and the lease comes back on its own.** A
+lease stranded by a force-killed pod stays `leased` until its TTL passes — reachable by nobody,
+but not lost, since `committed` (what was actually spent, per ADR-049) is unaffected. The
+control plane's lifespan then reclaims it: `reap()` runs every
+`AGENTIAM_CONTROLPLANE_REAPER_INTERVAL_S` seconds (default 15, spec 04 §4.6's TTL/4). It lives
+in the control plane rather than the PEP because a PEP that died cannot reap its own lease.
 
-**What this means for a rollback today:** a lease stranded by a `SIGKILL`ed pod stays
-`leased` in the ledger — reachable by nobody, but not lost either, since `committed` (what
-was actually spent, per ADR-049) is unaffected — until someone runs `reap()`. Do it by
-hand after any rollback that force-killed a pod:
+This was not always true. When this runbook was first written, grepping every non-test call
+site of `reap()` found none — only the chaos harness called it, against an injected clock —
+so this section prescribed running it by hand (gap 27, closed since; see `JOURNAL.md`). The
+manual invocation is still useful if the reaper is disabled (`..._REAPER_INTERVAL_S=0`, for a
+deployment that runs `reap()` some other way, such as a k8s `CronJob`):
 
 ```bash
 uv run python -c "
@@ -204,9 +197,9 @@ asyncio.run(main())
 "
 ```
 
-Confirm it worked the way T-052's own invariant sidecar does: the budget dashboard
-(T-047, `console/budgets.html`) should show the pre-rollback total once this runs, not
-before.
+Confirm recovery the way T-052's invariant sidecar does: the budget dashboard
+(`console/budgets.html`) should show the pre-rollback total once the lease's TTL has passed
+and one reaper sweep has run.
 
 ### 2.4 Rollback checklist
 
@@ -220,6 +213,6 @@ before.
 3. Roll back the image (§2.1). Do not raise `terminationGracePeriodSeconds` past the
    shipped default while doing this (§2.3).
 4. Watch `kubectl rollout status` / `docker compose ps` to completion.
-5. If any pod was `SIGKILL`ed rather than exiting cleanly, run `reap()` by hand (§2.3,
-   gap 27) — nothing does this automatically yet — then check the budget dashboard shows
-   the pre-incident total.
+5. If any pod was `SIGKILL`ed rather than exiting cleanly, wait one lease TTL plus one
+   reaper sweep (§2.3), then check the budget dashboard shows the pre-incident total. If
+   the reaper is disabled, run `reap()` by hand.

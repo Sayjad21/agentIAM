@@ -6,7 +6,7 @@ This file exists because a gap you have written down is a **known limitation**, 
 undocumented is a lie by omission. A reviewer who finds one you did not mention stops believing
 the rest of the documentation — and they are right to.
 
-The authoritative lists are [`docs/STATUS.md`](../STATUS.md) §3 and [`docs/TODO.md`](../TODO.md).
+The authoritative lists are [`docs/STATUS.md`](../STATUS.md) §3–§5.
 This is the plain-language version.
 
 ---
@@ -159,5 +159,5 @@ Good next steps:
 - **Run it.** [`docs/RUNNING.md`](../RUNNING.md) — every surface with the output it should print.
 - **Read one function.** `decide()` in `packages/agentiam-core/src/agentiam_core/decision.py` is
   the whole authorization model in one place.
-- **Pick an open item.** [`docs/TODO.md`](../TODO.md) — each entry says what to do, where to
+- **Pick an open item.** [`docs/STATUS.md`](../STATUS.md) §5 — each entry says what to do, where to
   look, and what "done" means.

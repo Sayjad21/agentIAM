@@ -221,7 +221,7 @@ also an *enforcement* one, and that is not currently stated anywhere.
 
 **Fixed, and it needed no parser.** The original assessment here said this was blocked on
 the Datalog→caveat parser of `STATUS.md` gap 2. That was wrong, and the investigation for
-`TODO.md` item 1 is what showed it: the caveats compile to `check if` / `reject if`
+Fix-queue item 1 (`JOURNAL.md`) is what showed it: the caveats compile to `check if` / `reject if`
 statements that already live inside the token, and biscuit evaluates them natively once the
 request facts are supplied. `verify()` reads facts back out and deliberately never calls
 `authorize()`, so nothing ever evaluated them.
@@ -322,11 +322,11 @@ so **nothing is drawn, no error is shown, and the status indicator still reads
 instead of hiding it. That alone was not enough: driving the real page under a browser
 found two further bugs that had kept it from ever rendering a node —
 `d3.linkHorizontal()`'s accessors were dereferenced twice and threw before the node join,
-and a cancelled transition left every node at `opacity: 0`. See `TODO.md` item 15; the
+and a cancelled transition left every node at `opacity: 0`. See fix-queue item 15 in `JOURNAL.md`; the
 tree now draws root → three siblings → depth 2 → depth 3.
 
 What remains is *labelling*: the nodes read `agt-depth-N` and their roles read `UNKNOWN`,
-which still needs the gap 2 parser (`TODO.md` item 4).
+which still needs the gap 2 parser (fix-queue item 4 in `JOURNAL.md`).
 
 ### Finding 4 — Single payments are capped at the hardcoded lease size (Medium, open)
 
