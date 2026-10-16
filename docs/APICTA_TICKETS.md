@@ -55,7 +55,7 @@ fallback) and T-059 (submission package).
 |---|---|
 | APICTA-07 | DONE — verified locally; CI pending (Actions billing block) |
 | APICTA-04 | DONE — verified locally and live on the demo stack; CI pending |
-| APICTA-01 | IN_PROGRESS — Part A (spec) done; B, C, D to go |
+| APICTA-01 | IN_PROGRESS — Parts A (spec) and B (control plane) done; C, D to go |
 | APICTA-03 | TODO |
 | APICTA-05 | TODO |
 | APICTA-02 | TODO |
@@ -195,12 +195,16 @@ Then STATUS.md §3: delete the "Revoking an agent from the console" row; `MASTER
 
 ## APICTA-01 — Policy publication to the PEP, and a template fallback for the compiler
 
-- **Status:** IN_PROGRESS — Part A done (spec 05 §5.7, ADR-073); B, C, D to go
+- **Status:** IN_PROGRESS — Parts A and B done (spec 05 §5.7, ADR-073 and its addendum); C, D to go
 - **Maps to:** gap 26; T-031 (deferred, reopened here); STATUS.md §3 "Policy Activated
   Successfully!" row
 - **Parts:** A (spec) → B (control plane) → C (PEP) → D (fallback). One sitting each.
 - **Part A: DONE** — spec 05 §5.7 and the §5.3 amendment, ADR-073. Parts B and C implement
   §5.7 as written; where this ticket and the spec differ, the spec wins.
+- **Part B: DONE** — see ADR-073's addendum. Verified live on a pre-APICTA-01 demo volume:
+  bootstrap added the key without rotating the root, the boot bundle imported as serial 1,
+  anonymous/non-approver/failing activations answered 401/403/409, a passing one published
+  serial 2 and Redis carried `{"event": "policy:reload", "serial": 2}`, rollback published 3.
 
 **Problem statement.**
 `POST /policy/activate` (`packages/agentiam-controlplane/src/agentiam_controlplane/app.py:708`)
@@ -261,6 +265,9 @@ signing, not `max(serial)+1`, which two concurrent activations would collide on.
   cannot refresh for longer than that refuses, as spec 05 says. (Staleness belongs to the
   cache, not to any token caveat; no caveat names a bundle.)
 - `/readyz`: add `cache.status()`.
+- `deploy/k3s/`: mount `bundle_signing_key.hex` into the control plane and set the three
+  `AGENTIAM_CONTROLPLANE_{BUNDLE_SIGNING_KEY,POLICY_BUNDLE,POLICY_BUNDLE_SIG}_PATH` variables
+  (Part B wired only the compose stack; a k3s control plane answers activation with 503).
 
 **Part D — template fallback (T-031).**
 - `nl_compiler/templates.py` (new): deterministic matchers for the demo's policy shapes — a

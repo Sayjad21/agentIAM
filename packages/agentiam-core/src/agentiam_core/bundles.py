@@ -20,7 +20,10 @@ signed, which is the part a library cannot decide for you.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from cryptography.exceptions import InvalidSignature
@@ -34,11 +37,15 @@ from agentiam_core.hashing import canonical_json
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from datetime import datetime
 
 __all__ = [
     "BundleSignatureError",
+    "BundleWireError",
     "PolicyBundle",
+    "bundle_file_payload",
+    "bundle_from_file",
+    "bundle_from_wire",
+    "bundle_to_wire",
     "public_key_from_hex",
     "public_key_to_hex",
     "sign_bundle",
@@ -152,3 +159,121 @@ def public_key_from_hex(text: str) -> Ed25519PublicKey:
     if len(raw) != 32:
         raise BundleSignatureError(f"policy key is {len(raw)} bytes; an Ed25519 public key is 32")
     return Ed25519PublicKey.from_public_bytes(raw)
+
+
+class BundleWireError(AgentIAMError):
+    """A bundle fetched from the control plane is not in the shape `bundle_to_wire` writes.
+
+    Raised before verification, because a payload that cannot be read back into the exact
+    fields that were signed cannot be verified at all. A PEP treats it as it treats a bad
+    signature: refuse it, count it, keep serving what it has (spec 05 §5.3).
+    """
+
+    reason_code = ReasonCode.POLICY_DENIED
+
+
+def bundle_to_wire(bundle: PolicyBundle, signature: bytes) -> dict[str, Any]:
+    """The JSON object the control plane serves for a bundle — spec 05 §5.7.3.
+
+    Every signed field, plus the detached signature in base64. `created_at` is ISO 8601 with
+    its offset: canonical JSON refuses a naive instant, so a timestamp that lost its offset in
+    transit could never verify.
+    """
+    return {
+        "serial": bundle.serial,
+        "version": bundle.version,
+        "cedar_source": bundle.cedar_source,
+        "entity_schema": bundle.entity_schema,
+        "created_at": None if bundle.created_at is None else bundle.created_at.isoformat(),
+        "tools": None if bundle.tools is None else dict(bundle.tools),
+        "signature": base64.b64encode(signature).decode("ascii"),
+    }
+
+
+def bundle_from_wire(data: Mapping[str, Any]) -> tuple[PolicyBundle, bytes]:
+    """Read back what `bundle_to_wire` wrote. Verification is the caller's next step.
+
+    Strict on purpose: every field must be present with its own type. A lenient reader that
+    defaulted a missing `tools` to `None` would turn "the catalogue was lost in transit" into
+    "this bundle has no catalogue", which verifies as a different bundle rather than failing.
+
+    Raises:
+        BundleWireError: A field is missing, mistyped, or unreadable.
+    """
+    if not isinstance(data, dict):
+        raise BundleWireError("a bundle on the wire must be a JSON object")
+
+    def field(name: str) -> object:
+        if name not in data:
+            raise BundleWireError(f"bundle field {name!r} is missing")
+        return data[name]
+
+    serial = field("serial")
+    if not isinstance(serial, int) or isinstance(serial, bool) or serial < 0:
+        raise BundleWireError(f"bundle field 'serial' must be a non-negative integer: {serial!r}")
+    version = field("version")
+    if not isinstance(version, str):
+        raise BundleWireError("bundle field 'version' must be a string")
+    cedar_source = field("cedar_source")
+    if not isinstance(cedar_source, str):
+        raise BundleWireError("bundle field 'cedar_source' must be a string")
+    entity_schema = field("entity_schema")
+    if entity_schema is not None and not isinstance(entity_schema, str):
+        raise BundleWireError("bundle field 'entity_schema' must be a string or null")
+    tools = field("tools")
+    if tools is not None and not isinstance(tools, dict):
+        raise BundleWireError("bundle field 'tools' must be an object or null")
+
+    raw_created = field("created_at")
+    created_at: datetime | None = None
+    if raw_created is not None:
+        if not isinstance(raw_created, str):
+            raise BundleWireError("bundle field 'created_at' must be an ISO 8601 string or null")
+        try:
+            created_at = datetime.fromisoformat(raw_created)
+        except ValueError as exc:
+            raise BundleWireError(f"bundle field 'created_at' is not ISO 8601: {exc}") from exc
+        if created_at.tzinfo is None:
+            raise BundleWireError("bundle field 'created_at' has no UTC offset")
+
+    raw_signature = field("signature")
+    if not isinstance(raw_signature, str):
+        raise BundleWireError("bundle field 'signature' must be a base64 string")
+    try:
+        signature = base64.b64decode(raw_signature, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise BundleWireError(f"bundle field 'signature' is not base64: {exc}") from exc
+
+    bundle = PolicyBundle(
+        version=version,
+        cedar_source=cedar_source,
+        serial=serial,
+        entity_schema=entity_schema,
+        created_at=created_at,
+        tools=tools,
+    )
+    return bundle, signature
+
+
+def bundle_file_payload(bundle: PolicyBundle) -> dict[str, Any]:
+    """The JSON a deployment's boot bundle file holds: the wire form without the signature.
+
+    The signature lives beside it in its own file (`AGENTIAM_PEP_POLICY_BUNDLE_SIG_PATH`). One
+    format for the file and the wire means one reader, so the PEP and the control plane cannot
+    disagree about which fields were signed — they did once, over `created_at` (APICTA-01).
+    """
+    payload = bundle_to_wire(bundle, b"")
+    del payload["signature"]
+    return payload
+
+
+def bundle_from_file(payload: Mapping[str, Any], signature: bytes) -> PolicyBundle:
+    """Read a boot bundle file back. Verification is the caller's next step.
+
+    Raises:
+        BundleWireError: The file is not in the `bundle_file_payload` shape.
+    """
+    if not isinstance(payload, dict):
+        raise BundleWireError("a bundle file must hold a JSON object")
+    bundle, _ = bundle_from_wire(payload | {"signature": base64.b64encode(signature).decode()})
+    return bundle

@@ -66,6 +66,41 @@
     </div>
 </section>
 
+<section class="results-section" id="bundle-history">
+    <h2>Published bundles</h2>
+    {% if not can_publish %}
+    <p class="dim">Publication is not configured on this control plane, so activating cannot reach
+        any PEP. It needs a database and a bundle-signing key (spec 05 §5.7.2).</p>
+    {% endif %}
+    {% if bundles %}
+    <p class="dim">The newest serial is what every connected PEP enforces. Rolling back publishes an
+        earlier bundle again under a new serial &mdash; a PEP refuses an old serial as a rollback attack.
+        Activating and rolling back both need a signed-in approver.</p>
+    <table class="grid">
+        <thead><tr><th>Serial</th><th>Version</th><th>Activated by</th><th>When</th><th>From</th><th></th></tr></thead>
+        <tbody>
+        {% for b in bundles %}
+        <tr>
+            <td class="mono">{{ b.serial }}</td>
+            <td class="mono">{{ b.version }}</td>
+            <td class="mono">{{ b.activated_by }}</td>
+            <td class="dim">{{ b.activated_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</td>
+            <td class="dim">{% if b.source_serial %}rollback to {{ b.source_serial }}{% elif b.nl_digest %}English <span class="mono">{{ b.nl_digest }}</span>{% else %}Cedar{% endif %}</td>
+            <td>{% if not loop.first %}
+                <form hx-post="/policy/republish" hx-target="#results-container" style="margin:0">
+                    <input type="hidden" name="serial" value="{{ b.serial }}">
+                    <button type="submit" class="btn">Roll back to this</button>
+                </form>
+            {% else %}<span class="dim">current</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% elif can_publish %}
+    <p class="dim">Nothing published yet.</p>
+    {% endif %}
+</section>
+
 <script>
     function updateCedarGutter() {
         const editor = document.getElementById('cedar-editor');
@@ -94,6 +129,18 @@
     // Also update gutter when HTMX swaps in new content
     document.body.addEventListener('htmx:afterSwap', () => {
         updateCedarGutter();
+    });
+
+    // HTMX 1.9 swaps only 2xx/3xx responses into the page, so every refusal the server explains
+    // — 409 for a policy that fails the corpus, 401/403 for a caller who may not activate, 503
+    // when publication is off — was received and thrown away, and the button appeared to do
+    // nothing. These are answers meant to be read, so show them.
+    const SHOWN_REFUSALS = new Set([400, 401, 403, 404, 409, 503]);
+    document.body.addEventListener('htmx:beforeSwap', (evt) => {
+        if (SHOWN_REFUSALS.has(evt.detail.xhr.status)) {
+            evt.detail.shouldSwap = true;
+            evt.detail.isError = false;
+        }
     });
 </script>
 {% endblock %}

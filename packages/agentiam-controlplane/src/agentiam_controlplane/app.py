@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -24,12 +25,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from agentiam_controlplane.audit_api import build_router as build_audit_router
 from agentiam_controlplane.auth import build_router as build_auth_router
 from agentiam_controlplane.budgets_api import build_router as build_budgets_router
+from agentiam_controlplane.db import policy_bundles as bundle_store
 from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.decisions_api import build_router as build_decisions_router
 from agentiam_controlplane.demo_auth import build_router as build_demo_auth_router
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
 from agentiam_controlplane.metrics_api import build_router as build_metrics_router
-from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
+from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy, statement_digest
+from agentiam_controlplane.policy_api import build_router as build_policy_router
 from agentiam_controlplane.revocations_api import build_router as build_revocations_router
 from agentiam_controlplane.tasks import GRANTABLE_SCOPES, TaskRegistry, TaskRegistryError
 from agentiam_controlplane.tree_api import build_router as build_tree_router
@@ -49,11 +52,13 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from agentiam_controlplane.db.policy_bundles import PolicyPublisher
     from agentiam_controlplane.db.revocations import RevocationPublisher
     from agentiam_controlplane.settings import (
         ControlPlaneSettings,
         DemoLoginSettings,
         OIDCSettings,
+        PolicyPublishingSettings,
     )
 
 # Set up paths for templates and static assets
@@ -61,16 +66,9 @@ BASE_DIR = pathlib.Path(__file__).parent / "console"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
-# A mock for the "current" bundle in the database.
-class DummyBundleStore:
-    """Mock for the 'current' bundle in the database."""
-
-    def __init__(self) -> None:
-        """Initialize the store with the default corpus source."""
-        self.current_source = CORPUS_SOURCE
-
-
-store = DummyBundleStore()
+#: The shape `nl_compiler.compiler.statement_digest` emits. Anything else arriving in the
+#: activation form's `nl_digest` field is dropped rather than stored.
+_NL_DIGEST = re.compile(r"[0-9a-f]{16}")
 
 _QUANTUM = Decimal(1).scaleb(-DECIMAL_PLACES)
 
@@ -134,14 +132,16 @@ def evaluate_case(engine: cedarpy.PolicySet, case: PolicyTestCase) -> PolicyVerd
     )
 
 
-def _refuse_activation(detail: str) -> HTMLResponse:
-    """A refused activation — 409, and the current policy untouched.
+def _refuse_activation(detail: str, *, status: int = 409) -> HTMLResponse:
+    """A refused activation, and the current policy untouched.
 
-    409 rather than 400 or 403: the request is well-formed and the caller is permitted;
-    what fails is the *state transition*. ADR-030 sets this out, and spec 05 §5.5 fixes
-    the same status for the PEP-side gate, so the two surfaces answer alike.
+    409 for a policy that fails its gate: the request is well-formed and the caller is
+    permitted; what fails is the *state transition*. ADR-030 sets this out, and spec 05 §5.5
+    fixes the same status for the PEP-side gate, so the two surfaces answer alike. 401/403
+    for a caller who may not activate at all (spec 05 §5.7.1), 503 when publication is not
+    configured. The policy page swaps all of these in; HTMX would otherwise discard them.
     """
-    return HTMLResponse(content=f'<div class="alert danger">{detail}</div>', status_code=409)
+    return HTMLResponse(content=f'<div class="alert danger">{detail}</div>', status_code=status)
 
 
 #: Spec 04 §4.6's own pseudocode: `REAP() # background, every TTL/4`. The PEP's default
@@ -249,6 +249,36 @@ def _reaper_lifespan(
     return lifespan
 
 
+def _startup_lifespan(
+    session_factory: async_sessionmaker[AsyncSession],
+    publishing: PolicyPublishingSettings | None,
+    reaper: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None,
+    now: Callable[[], datetime],
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """Import the deployment's boot bundle, then run the reaper — APICTA-01.
+
+    The import runs before the app serves anything, so the first bundle an operator
+    publishes is numbered past the one every PEP booted from (spec 05 §5.7.3). A boot bundle
+    that does not verify raises here and stops startup: no PEP would accept it either, and a
+    control plane that published past an unverifiable bundle would hide the misconfiguration.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if publishing is not None:
+            async with session_factory() as session:
+                imported = await bundle_store.import_initial_from(session, publishing, now=now())
+            if imported is not None:
+                logger.info("imported the boot policy bundle as serial %d", imported.serial)
+        if reaper is None:
+            yield
+        else:
+            async with reaper(app):
+                yield
+
+    return lifespan
+
+
 def create_app(
     *,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
@@ -259,6 +289,8 @@ def create_app(
     reaper_interval_s: float | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     bdt_per_usd: Decimal | None = None,
+    policy_publishing: PolicyPublishingSettings | None = None,
+    policy_publisher: PolicyPublisher | None = None,
 ) -> FastAPI:
     """Create the FastAPI application for the Control Plane.
 
@@ -297,6 +329,11 @@ def create_app(
 
     `bdt_per_usd` is the console's fixed display rate for the dollar figure shown beside
     every taka amount (`console/money.py`). Display only: nothing is converted.
+
+    `policy_publishing` turns on publication (spec 05 §5.7): with it and a database, an
+    approver's activation is signed and stored, and the lifespan imports the boot bundle.
+    Without it activation answers 503. `policy_publisher` announces each new serial to PEPs;
+    `None` leaves them to their pull.
     """
     from agentiam_controlplane.console.money import DEFAULT_BDT_PER_USD, format_bdt
 
@@ -307,9 +344,14 @@ def create_app(
         Decimal(str(value)), bdt_per_usd=display_rate
     )
 
-    lifespan = (
+    reaper = (
         _reaper_lifespan(session_factory, reaper_interval_s, now)
         if session_factory is not None and reaper_interval_s is not None and reaper_interval_s > 0
+        else None
+    )
+    lifespan = (
+        _startup_lifespan(session_factory, policy_publishing, reaper, now)
+        if session_factory is not None and (policy_publishing is not None or reaper is not None)
         else None
     )
     app = FastAPI(title="AgentIAM Control Plane", lifespan=lifespan)
@@ -360,6 +402,9 @@ def create_app(
                     # that could not tell them apart would read a demo console as secured.
                     "demo_login": demo_login_settings is not None and oidc_settings is None,
                     "revocation_publisher": revocation_publisher is not None,
+                    # Can an approver's activation reach the PEPs (spec 05 §5.7)?
+                    "policy_publishing": session_factory is not None
+                    and policy_publishing is not None,
                 },
             }
         )
@@ -405,6 +450,9 @@ def create_app(
     )
 
     app.include_router(build_tree_router(session_factory=session_factory, now=now))
+    # GET /v1/policy/bundles/{current,serial} — what PEPs fetch (spec 05 §5.7.3).
+    if session_factory is not None:
+        app.include_router(build_policy_router(session_factory=session_factory))
 
     # T-046. Mounted unconditionally, like the tree: both routes answer 503 without a
     # database, which is visibly "not wired" rather than a boot failure.
@@ -577,15 +625,65 @@ def create_app(
             },
         )
 
+    # ---- policy: author, test, activate, roll back ---------------------------------
+    #
+    # The current policy is the newest published bundle (spec 05 §5.7.3). A console built
+    # without a database has no store, so it diffs against the shipped corpus policy and
+    # cannot activate — the T-027 UI, unchanged.
+
+    async def _current_source() -> str:
+        if session_factory is None:
+            return CORPUS_SOURCE
+        async with session_factory() as session:
+            row = await bundle_store.current(session)
+        return row.cedar_source if row is not None else CORPUS_SOURCE
+
+    def _policy_actor(request: Request) -> tuple[str | None, HTMLResponse | None]:
+        """Who is activating, or the refusal to send instead (spec 05 §5.7.1)."""
+        principal = request.session.get("principal_id") if "session" in request.scope else None
+        if not isinstance(principal, str) or not principal:
+            return None, _refuse_activation(
+                "Activating policy requires signing in as an approver. Nothing was published.",
+                status=401,
+            )
+        if escalation_settings is None or principal not in escalation_settings.approvers:
+            return None, _refuse_activation(
+                f"{principal} is not an approver. Nothing was published.", status=403
+            )
+        if session_factory is None or policy_publishing is None:
+            return None, _refuse_activation(
+                "Policy publication is not configured on this control plane (no bundle-signing "
+                "key). Nothing was published.",
+                status=503,
+            )
+        return principal, None
+
     @app.get("/policy", response_class=HTMLResponse)
     async def get_policy_editor(request: Request) -> HTMLResponse:
-        """Render the main Cedar authoring UI."""
+        """Render the main Cedar authoring UI, with the published history beneath it."""
+        bundles: list[dict[str, object]] = []
+        if session_factory is not None:
+            async with session_factory() as session:
+                rows = await bundle_store.history(session)
+            bundles = [
+                {
+                    "serial": r.serial,
+                    "version": r.version,
+                    "activated_by": r.activated_by,
+                    "activated_at": r.activated_at,
+                    "source_serial": r.source_serial,
+                    "nl_digest": r.nl_digest,
+                }
+                for r in rows
+            ]
         return templates.TemplateResponse(
             request=request,
             name="authoring.html",
             context={
                 "active": "policy",
-                "source": store.current_source,
+                "source": await _current_source(),
+                "bundles": bundles,
+                "can_publish": session_factory is not None and policy_publishing is not None,
             },
         )
 
@@ -606,7 +704,7 @@ def create_app(
             )
 
         try:
-            current_engine = cedarpy.PolicySet.from_str(store.current_source)
+            current_engine = cedarpy.PolicySet.from_str(await _current_source())
         except Exception:
             current_engine = None
 
@@ -701,7 +799,7 @@ def create_app(
 
         # 2. Evaluate master corpus
         try:
-            current_engine = cedarpy.PolicySet.from_str(store.current_source)
+            current_engine = cedarpy.PolicySet.from_str(await _current_source())
         except Exception:
             current_engine = None
 
@@ -748,27 +846,28 @@ def create_app(
                 "diffs": diffs,
                 "corpus_passed": corpus_passed,
                 "can_activate": auto_tests_passed and corpus_passed,
+                # Carried to the activation form so the bundle records which English it came
+                # from without ever storing the English (spec 05 §5.7.3).
+                "nl_digest": statement_digest(nl_source),
             },
         )
 
     @app.post("/policy/activate", response_class=HTMLResponse)
-    async def activate_policy(request: Request, source: str = Form("")) -> HTMLResponse:
-        """Commit the new policy bundle — but only if it earns it.
+    async def activate_policy(
+        request: Request, source: str = Form(""), nl_digest: str = Form("")
+    ) -> HTMLResponse:
+        """Publish a policy to every PEP — but only for an approver, and only if it earns it.
 
-        `PLAN.md` §907 and T-030's acceptance criterion both say a policy is *never*
-        activatable while a test fails, and ADR-030 fixes the status as 409. This endpoint
-        previously assigned the source and returned 200 unconditionally: `can_activate` was
-        computed for the template, so the gate lived in the UI and any direct POST walked
-        straight past it — unparseable Cedar included.
-
-        The gate here mirrors `agentiam_pep.activation.activate_bundle`: parse, then the
-        full corpus, and the previous policy keeps serving on refusal (spec 05 §5.5). It
-        cannot *call* that function yet, because that path also verifies an Ed25519
-        signature and a monotonic serial, and the console has no bundle signing — the store
-        is still a stub. Those two gates arrive with real bundle publication; the corpus
-        gate is the one that has something to check today, and it is the one that was
-        missing.
+        Who first (spec 05 §5.7.1): this answered 200 to a request with no session at all,
+        which was harmless while it wrote a stub and is not now that it reaches every PEP.
+        Then the gate `PLAN.md` §907, T-030 and ADR-030 require: parse, then the full corpus,
+        409 on any failure, the previous policy still serving (spec 05 §5.5). Then sign,
+        store and announce (§5.7.3).
         """
+        actor, refusal = _policy_actor(request)
+        if actor is None or session_factory is None or policy_publishing is None:
+            return refusal or _refuse_activation("Publication is unavailable.", status=503)
+
         try:
             candidate_engine = cedarpy.PolicySet.from_str(source)
         except Exception as exc:
@@ -786,11 +885,54 @@ def create_app(
                 f"&mdash; {failed}{more}. The previous policy is still serving."
             )
 
-        store.current_source = source
+        async with session_factory() as session:
+            row = await bundle_store.publish(
+                session,
+                cedar_source=source,
+                signing_key=policy_publishing.signing_key,
+                activated_by=actor,
+                now=now(),
+                nl_digest=nl_digest if _NL_DIGEST.fullmatch(nl_digest) else None,
+                publisher=policy_publisher,
+            )
         return HTMLResponse(
             content=(
-                f'<div class="alert success">Policy Activated Successfully! '
-                f"{summary.passed}/{summary.total} corpus tests passed.</div>"
+                f'<div class="alert success">Published as <strong>{row.version}</strong> '
+                f"(serial {row.serial}). {summary.passed}/{summary.total} corpus tests passed. "
+                f"Connected PEPs load it on their next sync.</div>"
+            ),
+            status_code=200,
+        )
+
+    @app.post("/policy/republish", response_class=HTMLResponse)
+    async def republish_policy(request: Request, serial: str = Form("")) -> HTMLResponse:
+        """Roll back by publishing an earlier bundle again, as a new serial (spec 05 §5.7.3).
+
+        No corpus run: the bundle being re-published already passed it when it was first
+        activated, and the corpus is part of the code, not of the bundle.
+        """
+        actor, refusal = _policy_actor(request)
+        if actor is None or session_factory is None or policy_publishing is None:
+            return refusal or _refuse_activation("Publication is unavailable.", status=503)
+        if not serial.isdigit():
+            return _refuse_activation("Choose a published serial to roll back to.", status=400)
+        try:
+            async with session_factory() as session:
+                row = await bundle_store.republish(
+                    session,
+                    source_serial=int(serial),
+                    signing_key=policy_publishing.signing_key,
+                    activated_by=actor,
+                    now=now(),
+                    publisher=policy_publisher,
+                )
+        except bundle_store.BundleNotFound:
+            return _refuse_activation(f"No bundle has serial {serial}.", status=404)
+        return HTMLResponse(
+            content=(
+                f'<div class="alert success">Rolled back: serial {serial} re-published as '
+                f"<strong>{row.version}</strong> (serial {row.serial}). Connected PEPs load it "
+                f"on their next sync.</div>"
             ),
             status_code=200,
         )
@@ -962,6 +1104,7 @@ def create_app_from_env() -> FastAPI:
         ControlPlaneSettings,
         DemoLoginSettings,
         OIDCSettings,
+        PolicyPublishingSettings,
     )
 
     settings = ControlPlaneSettings.from_env()
@@ -990,12 +1133,17 @@ def create_app_from_env() -> FastAPI:
 
     redis_url = os.environ.get("AGENTIAM_CONTROLPLANE_REDIS_URL")
     revocation_publisher = None
+    policy_publisher = None
     if redis_url:
         from redis.asyncio import Redis
 
+        from agentiam_controlplane.db.policy_bundles import RedisPolicyPublisher
         from agentiam_controlplane.db.revocation_publisher import RedisRevocationPublisher
 
-        revocation_publisher = RedisRevocationPublisher(Redis.from_url(redis_url))
+        # One client, two channels: the same "one pool for the process" reasoning.
+        redis_client = Redis.from_url(redis_url)
+        revocation_publisher = RedisRevocationPublisher(redis_client)
+        policy_publisher = RedisPolicyPublisher(redis_client)
 
     return create_app(
         session_factory=session_factory,
@@ -1014,6 +1162,8 @@ def create_app_from_env() -> FastAPI:
         # service's, and a PEP that died is exactly the one that cannot reap its own lease.
         reaper_interval_s=_reaper_interval_s(),
         bdt_per_usd=_bdt_per_usd(),
+        policy_publishing=PolicyPublishingSettings.from_env(),
+        policy_publisher=policy_publisher,
     )
 
 

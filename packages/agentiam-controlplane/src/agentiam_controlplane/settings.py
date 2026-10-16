@@ -20,9 +20,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Final
 
 from biscuit_auth import Algorithm, PrivateKey, PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 #: Prefix for every environment variable this reads.
 ENV_PREFIX: Final = "AGENTIAM_CONTROLPLANE_"
@@ -167,6 +169,64 @@ class ControlPlaneSettings:
             ),
             root_public_key=root_public_key,
             pep_url=os.environ.get(f"{ENV_PREFIX}PEP_URL", "http://pep:8080").rstrip("/"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyPublishingSettings:
+    """What publishing policy to the PEPs needs — APICTA-01, spec 05 §5.7.2.
+
+    The bundle-signing key is **not** the root token key: the root key mints tokens, this one
+    can only change organization policy, and a console that holds both should not be able to
+    turn a stolen policy key into a stolen identity. `initial_bundle_*` name the signed bundle
+    every PEP boots from, which the control plane imports as its first row so the serials it
+    publishes continue past it.
+    """
+
+    signing_key: Ed25519PrivateKey
+    initial_bundle_path: Path | None = None
+    initial_bundle_sig_path: Path | None = None
+
+    @classmethod
+    def from_env(cls) -> PolicyPublishingSettings | None:
+        """Build from `AGENTIAM_CONTROLPLANE_BUNDLE_SIGNING_KEY_PATH` and the bundle paths.
+
+        Returns:
+            `None` when no signing key is configured — publication is off, and activation
+            answers 503 saying so rather than pretending to have published.
+
+        Raises:
+            ValueError: The key file is unreadable or is not 32 bytes of hex, or only one of
+                the two initial-bundle paths is set.
+        """
+        key_path = os.environ.get(f"{ENV_PREFIX}BUNDLE_SIGNING_KEY_PATH", "").strip()
+        if not key_path:
+            return None
+        try:
+            key_hex = Path(key_path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ValueError(f"{ENV_PREFIX}BUNDLE_SIGNING_KEY_PATH is unreadable: {exc}") from exc
+        try:
+            key_bytes = bytes.fromhex(key_hex)
+        except ValueError as exc:
+            raise ValueError(f"{ENV_PREFIX}BUNDLE_SIGNING_KEY_PATH does not hold hex") from exc
+        if len(key_bytes) != 32:
+            raise ValueError(
+                f"{ENV_PREFIX}BUNDLE_SIGNING_KEY_PATH must hold 32 bytes (64 hex characters), "
+                f"got {len(key_bytes)}"
+            )
+
+        bundle = os.environ.get(f"{ENV_PREFIX}POLICY_BUNDLE_PATH", "").strip()
+        signature = os.environ.get(f"{ENV_PREFIX}POLICY_BUNDLE_SIG_PATH", "").strip()
+        if bool(bundle) != bool(signature):
+            raise ValueError(
+                f"{ENV_PREFIX}POLICY_BUNDLE_PATH and {ENV_PREFIX}POLICY_BUNDLE_SIG_PATH "
+                f"must be set together"
+            )
+        return cls(
+            signing_key=Ed25519PrivateKey.from_private_bytes(key_bytes),
+            initial_bundle_path=Path(bundle) if bundle else None,
+            initial_bundle_sig_path=Path(signature) if signature else None,
         )
 
 

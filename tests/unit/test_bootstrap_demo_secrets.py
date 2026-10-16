@@ -45,6 +45,7 @@ class TestGenerate:
             "policy_bundle.json",
             "policy_bundle.sig",
             "policy_public_key.hex",
+            "bundle_signing_key.hex",
             "routes.json",
             "role_assignments.json",
         ):
@@ -69,7 +70,7 @@ class TestGenerate:
         assert derived == public_hex
 
     def test_the_bundle_verifies_against_the_published_public_key(self, tmp_path: Path) -> None:
-        from agentiam_core.bundles import PolicyBundle, public_key_from_hex, verify_bundle
+        from agentiam_core.bundles import bundle_from_file, public_key_from_hex, verify_bundle
 
         bootstrap_demo_secrets.main(["--out", str(tmp_path)])
 
@@ -77,15 +78,10 @@ class TestGenerate:
         signature = (tmp_path / "policy_bundle.sig").read_bytes()
         public_hex = (tmp_path / "policy_public_key.hex").read_text(encoding="utf-8").strip()
 
-        bundle = PolicyBundle(
-            version=payload["version"],
-            cedar_source=payload["cedar_source"],
-            serial=payload["serial"],
-            # Inside the signature since TODO item 29, and reconstructed here for the same
-            # reason `pep_service.load_policy` reconstructs it: a reader that drops the
-            # catalogue is a reader that verifies a different bundle.
-            tools=payload["tools"],
-        )
+        # The same shared reader `pep_service.load_policy` and the control plane use: a
+        # reader that drops a signed field — the catalogue since TODO item 29, `created_at`
+        # since APICTA-01 — is a reader that verifies a different bundle.
+        bundle = bundle_from_file(payload, (tmp_path / "policy_bundle.sig").read_bytes())
         # Raises on failure (T-025) — reaching the next line is the assertion.
         verify_bundle(bundle, signature, public_key_from_hex(public_hex))
 
@@ -122,7 +118,7 @@ class TestGenerate:
         """`sensitivity` is an authorization input, so editing it on disk must not verify."""
         from agentiam_core.bundles import (
             BundleSignatureError,
-            PolicyBundle,
+            bundle_from_file,
             public_key_from_hex,
             verify_bundle,
         )
@@ -137,12 +133,7 @@ class TestGenerate:
         payload["tools"]["payment_api"]["sensitivity"] = "low"
         with pytest.raises(BundleSignatureError):
             verify_bundle(
-                PolicyBundle(
-                    version=payload["version"],
-                    cedar_source=payload["cedar_source"],
-                    serial=payload["serial"],
-                    tools=payload["tools"],
-                ),
+                bundle_from_file(payload, signature),
                 signature,
                 public_key,
             )
@@ -191,6 +182,74 @@ class TestGenerate:
         target = tmp_path / "nested" / "dir"
         bootstrap_demo_secrets.main(["--out", str(target)])
         assert (target / "root_public_key.hex").exists()
+
+
+class TestTheBundleSigningKey:
+    """APICTA-01: the control plane signs every bundle after the first, so it needs the key.
+
+    Until then bootstrap signed the boot bundle with a key it then discarded, which is why no
+    second bundle could ever be signed (spec 05 §5.7.2).
+    """
+
+    def test_the_key_is_persisted_and_matches_the_published_public_half(
+        self, tmp_path: Path
+    ) -> None:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        from agentiam_core.bundles import public_key_to_hex
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        key = Ed25519PrivateKey.from_private_bytes(
+            bytes.fromhex((tmp_path / "bundle_signing_key.hex").read_text(encoding="utf-8"))
+        )
+        published = (tmp_path / "policy_public_key.hex").read_text(encoding="utf-8")
+        assert public_key_to_hex(key.public_key()) == published
+
+    def test_only_the_owner_can_read_it(self, tmp_path: Path) -> None:
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        assert (tmp_path / "bundle_signing_key.hex").stat().st_mode & 0o777 == 0o600
+
+    def test_a_new_boot_bundle_carries_a_timestamp(self, tmp_path: Path) -> None:
+        import json
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        payload = json.loads((tmp_path / "policy_bundle.json").read_text(encoding="utf-8"))
+        assert payload["created_at"].endswith("+00:00")
+
+    def test_a_volume_from_before_the_key_existed_is_completed_without_rotating_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        """Every demo volume seeded before APICTA-01 is in exactly this state.
+
+        Regenerating it wholesale would rotate the root key and invalidate every token the
+        seeder minted. Only the policy half needs replacing: a new key, the boot bundle
+        re-signed with it, the public half rewritten.
+        """
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        root_before = (tmp_path / "root_private_key.hex").read_text(encoding="utf-8")
+        policy_key_before = (tmp_path / "policy_public_key.hex").read_text(encoding="utf-8")
+        (tmp_path / "bundle_signing_key.hex").unlink()
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+
+        assert (tmp_path / "root_private_key.hex").read_text(encoding="utf-8") == root_before
+        assert (tmp_path / "bundle_signing_key.hex").exists()
+        assert (tmp_path / "policy_public_key.hex").read_text(encoding="utf-8") != policy_key_before
+        self._assert_bundle_verifies(tmp_path)
+
+    @staticmethod
+    def _assert_bundle_verifies(out: Path) -> None:
+        import json
+
+        from agentiam_core.bundles import bundle_from_file, public_key_from_hex, verify_bundle
+
+        payload = json.loads((out / "policy_bundle.json").read_text(encoding="utf-8"))
+        bundle = bundle_from_file(payload, (out / "policy_bundle.sig").read_bytes())
+        verify_bundle(
+            bundle,
+            (out / "policy_bundle.sig").read_bytes(),
+            public_key_from_hex((out / "policy_public_key.hex").read_text(encoding="utf-8")),
+        )
 
 
 class TestIdempotency:

@@ -163,7 +163,7 @@ and model training beyond a small classifier.
 | | |
 |---|---|
 | **Tickets** | 48 of the 52 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 9 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
-| **Tests** | 2,976 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,669 |
+| **Tests** | 3,043 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,707 |
 | **Specs** | 10, all written before their code |
 | **ADRs** | 73 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |

@@ -83,24 +83,19 @@ def _write_bundle(
     """Write a signed bundle + detached signature, returning both paths and the pubkey hex."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    from agentiam_core.bundles import PolicyBundle, public_key_to_hex, sign_bundle
+    from agentiam_core.bundles import (
+        PolicyBundle,
+        bundle_file_payload,
+        public_key_to_hex,
+        sign_bundle,
+    )
 
     private_key = Ed25519PrivateKey.generate()
     bundle = PolicyBundle(version="v1", cedar_source=_CEDAR, serial=1, tools=tools)
     signature = sign_bundle(bundle, private_key)
 
     bundle_path = tmp_path / "bundle.json"
-    bundle_path.write_text(
-        json.dumps(
-            {
-                "version": bundle.version,
-                "cedar_source": bundle.cedar_source,
-                "serial": bundle.serial,
-                "tools": bundle.tools,
-            }
-        ),
-        encoding="utf-8",
-    )
+    bundle_path.write_text(json.dumps(bundle_file_payload(bundle)), encoding="utf-8")
     sig_path = tmp_path / "bundle.sig"
     sig_path.write_bytes(signature)
     return bundle_path, sig_path, public_key_to_hex(private_key.public_key())

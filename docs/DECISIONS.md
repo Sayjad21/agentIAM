@@ -4463,3 +4463,31 @@ means. Four facts were measured before deciding, and two of them changed the des
   `POLICY_BUNDLE_STALE`, which is the behaviour to narrate, not hide.
 - Anyone who can reach the control plane can read the policy. Recorded as spec 05 §8 row 5.
 - One approver can change enforced policy alone. Recorded as spec 05 §8 row 6.
+
+### ADR-073 addendum — Part B as built, and three things it found
+
+**Status:** accepted · **Ticket:** APICTA-01 Part B
+
+Built as specified: `policy_bundles` (migration 0008) and its sequence, `db/policy_bundles.py`
+(publish, republish, import, read), `policy_api.py` (`GET /v1/policy/bundles/current` and
+`/{serial}`), an approver-gated `/policy/activate` and `/policy/republish`, the boot bundle
+imported in the lifespan, `RedisPolicyPublisher` on `agentiam:policy`. Removing each guard in
+turn — the sequence, publish-after-commit, the approver check, catalogue carry-forward, the
+post-import `setval` — turned a test red every time.
+
+1. **One reader for the boot file.** `pep_service.load_policy` rebuilt the bundle field by field
+   and omitted `created_at`; once bootstrap signed a timestamp the PEP would have verified a
+   different bundle and refused to boot. The file is now `bundle_file_payload` (the wire form
+   minus its signature) and both consumers read it with the strict `bundle_from_file` in core.
+2. **Repair, don't rotate.** Bootstrap regenerated everything when any file was missing, so
+   adding the signing key to its file list would have rotated the root key on every existing
+   volume and invalidated every minted token. A volume missing only the signing key now gets
+   the policy half alone. Measured on a real pre-APICTA-01 volume: the old tokens still pay.
+3. **Refusals were invisible.** HTMX 1.9 does not swap 4xx/5xx, so T-026's 409 explanation had
+   never been shown; the policy page now opts the refusals it means back in. Separately, the
+   compile results pasted model output into a JavaScript template literal with `| safe`, where
+   a backtick or `${` would break out of the string; it is emitted with `tojson`, and a test
+   parses the rendered script with Node.
+
+Not done here: the k3s manifests do not mount the signing key, so a k3s control plane answers
+activation with 503 until they do (tracked in APICTA-01 Part C).

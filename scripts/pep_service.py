@@ -315,7 +315,8 @@ def load_policy(settings: ServiceSettings) -> CedarEngine:
 
     from agentiam_core.bundles import (
         BundleSignatureError,
-        PolicyBundle,
+        BundleWireError,
+        bundle_from_file,
         public_key_from_hex,
         verify_bundle,
     )
@@ -329,15 +330,14 @@ def load_policy(settings: ServiceSettings) -> CedarEngine:
     except json.JSONDecodeError as exc:
         raise ServiceConfigError(f"policy bundle is not valid JSON: {exc}") from exc
 
-    bundle = PolicyBundle(
-        version=payload["version"],
-        cedar_source=payload["cedar_source"],
-        serial=int(payload.get("serial", 0)),
-        entity_schema=payload.get("entity_schema"),
-        # Inside the signature, so this is covered by `verify_bundle` below and a tampered
-        # `sensitivity` is a boot failure rather than a silently disarmed forbid.
-        tools=payload.get("tools"),
-    )
+    # The one shared reader (`bundle_from_file`), strict about every signed field — the
+    # catalogue included, so a tampered `sensitivity` is a boot failure rather than a silently
+    # disarmed forbid. It used to rebuild the bundle field by field here, and would have
+    # verified a different bundle the moment bootstrap began signing `created_at`.
+    try:
+        bundle = bundle_from_file(payload, signature)
+    except BundleWireError as exc:
+        raise ServiceConfigError(f"policy bundle file is malformed: {exc}") from exc
 
     try:
         verify_bundle(bundle, signature, public_key_from_hex(settings.policy_public_key_hex))

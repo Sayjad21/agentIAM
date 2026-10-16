@@ -302,10 +302,13 @@ powerful action in the system, and it must not be anonymous.
 | No session | 401, nothing published |
 | A session not in `approvers` | 403, nothing published |
 | An approver, a policy failing the corpus | 409 (§5.5), nothing published |
+| An approver, on a control plane without a signing key | 503, nothing published |
 | An approver, a policy passing | the bundle is published (§5.7.3) and the response names its serial |
 
 The session cookie is `SameSite=Lax`, so a cross-site form cannot activate on an approver's
-behalf.
+behalf. **Every refusal is shown.** HTMX 1.9 swaps only 2xx/3xx responses into the page, so
+until APICTA-01 the console's 409 explanation of a failing corpus was received and discarded —
+the button appeared to do nothing. The policy page now opts 400/401/403/404/409/503 back in.
 
 #### 5.7.2 The signing key
 
@@ -330,9 +333,11 @@ CREATE TABLE policy_bundles (
   version       TEXT NOT NULL,                       -- a label: "bundle-<serial>" by default
   cedar_source  TEXT NOT NULL,
   tools         JSONB,                               -- §5.6; null and {} sign differently
-  created_at    TIMESTAMPTZ NOT NULL,                -- inside the signature, timezone-aware
+  created_at    TIMESTAMPTZ NULL,                    -- inside the signature; NULL only for an
+                                                     -- imported bundle signed without one
   signature     BYTEA NOT NULL,                      -- 64 bytes, Ed25519, §5.1
   activated_by  TEXT NOT NULL,                       -- the session principal, never a body field
+  activated_at  TIMESTAMPTZ NOT NULL,                -- when it was stored (provenance, not signed)
   source_serial BIGINT NULL,                         -- set on a rollback: the serial re-published
   nl_digest     TEXT NULL                            -- sha256[:16] of the English, never the text
 );
@@ -356,10 +361,21 @@ CREATE SEQUENCE policy_bundle_serial;
   `nl_compiler/compiler.py` logs (T-054); `tests/security/test_secret_scanning.py` already
   forbids the text itself in logs.
 
+**One format on disk and on the wire, one reader.** The boot bundle file is
+`agentiam_core.bundles.bundle_file_payload` — the wire form without its signature, which stays
+in its own `.sig` file — and both the PEP (`pep_service.load_policy`) and the control plane's
+importer read it with the same strict `bundle_from_file`. Found while building this: the PEP had
+rebuilt the bundle field by field and omitted `created_at`, so the moment bootstrap began
+signing a timestamp the PEP would have verified a different bundle and refused to boot. A
+volume bootstrapped before APICTA-01 lacks only the signing key; bootstrap replaces just the
+policy half (new key, boot bundle re-signed, public half rewritten) and keeps the root key, so
+the tokens already minted stay valid.
+
 Two read routes serve PEPs and the console, unauthenticated like `GET /v1/revocations`:
-`GET /v1/policy/bundles/current` and `GET /v1/policy/bundles/{serial}`, each returning the
-bundle's fields, `created_at` as an ISO-8601 string with its offset, and the signature in
-base64. **Bundles are integrity-protected, not confidential**: anyone who can reach the control
+`GET /v1/policy/bundles/current` and `GET /v1/policy/bundles/{serial}`, each returning
+`bundle_to_wire`'s fields — `created_at` as ISO-8601 with its offset, the signature in base64 —
+plus an unsigned `provenance` object (`activated_by`, `source_serial`, `nl_digest`) that a PEP
+ignores. **Bundles are integrity-protected, not confidential**: anyone who can reach the control
 plane can read the policy, as anyone can read the revocation list. Measured: the signature
 survives a JSON round trip with a timezone-aware `created_at`, and a naive one fails
 canonicalization (`CanonicalizationError`) rather than verifying, so a transport bug fails

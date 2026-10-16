@@ -3678,6 +3678,34 @@ canonicalization, which is the safe direction). And one reference that had been 
 three documents and these notes turned out to point at a section that does not exist: spec 10
 has no §5.4; `arg_digest` is §7.
 
+### APICTA-01 Part B · Publishing, and the three ways it would have broken the stack
+
+The control-plane half of §5.7: a bundle table with its serial from a sequence, signing and
+announcing on activation, rollback as a new serial, the boot bundle imported at startup, and
+two routes a PEP fetches from. Twenty-nine integration tests passed first time, which proves
+little; removing each guard in turn — the sequence, publish-after-commit, the approver check,
+the catalogue carry-forward, the post-import `setval` — turned one red every time.
+
+What mattered more were three things that would have broken the running stack:
+
+- **The PEP rebuilt its boot bundle by hand and left `created_at` out.** Bootstrap was about to
+  start signing a timestamp; the PEP would then have verified a different bundle and refused to
+  boot. There is now one file format and one reader, in core, used by both sides.
+- **Bootstrap regenerated wholesale on any missing file.** Adding the signing key to its list
+  would have rotated the root key on every existing volume and silently invalidated every token
+  the seeder minted. A volume missing only that key now gets the policy half alone — tried on
+  the actual pre-APICTA-01 demo volume, where the old tokens still paid afterwards.
+- **The console had never shown a refusal.** HTMX 1.9 swaps only 2xx/3xx, so the 409 explaining
+  why a policy failed the corpus — T-026's whole point — was received and thrown away; the
+  button just did nothing. Found by reading the bundled HTMX's swap rule rather than assuming
+  it. In the same file, model output was being pasted into a JavaScript template literal with
+  `| safe`; it is `tojson` now, and the test parses the rendered script with Node because a
+  substring check cannot tell a string from code.
+
+Live, on the demo stack: anonymous 401, Nusrat 403, a failing policy 409, Tanvir's passing
+policy published as serial 2 with its digest and the carried catalogue, Redis carried the event,
+a rollback published serial 3. The PEP does not fetch any of it yet — that is Part C.
+
 ---
 
 ## What the numbers looked like at T-033

@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 #: A statement is user-authored English that may name individuals or amounts. Logging it
 #: verbatim leaks whatever the operator typed into their console (`ENGINEERING-RULES`
 #: rule 10, `PLAN.md` NFR-5). The digest is a correlation handle across the compile
-#: request, its evaluation, and the audit record — same shape as spec 10 §5.4's
-#: ``arg_digest`` for the same reason.
+#: request, its evaluation, and the audit record — the same reason spec 10 §7's
+#: ``arg_digest`` exists. It is also what a published policy bundle records (spec 05 §5.7.3).
 _STATEMENT_DIGEST_BYTES = 8
 
 
-def _statement_digest(statement: str) -> str:
+def statement_digest(statement: str) -> str:
     """A short, stable handle for a natural-language statement, suitable for logs."""
     return hashlib.sha256(statement.encode("utf-8")).hexdigest()[: _STATEMENT_DIGEST_BYTES * 2]
 
@@ -186,7 +186,7 @@ async def compile_nl_to_policy(
 
     logger.info(
         "compiling NL statement (sha256[:16]=%s, length=%d)",
-        _statement_digest(nl_statement),
+        statement_digest(nl_statement),
         len(nl_statement),
     )
     raw_output = await client.generate_structured(prompt=prompt, schema=schema)

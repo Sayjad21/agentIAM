@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Index,
+    LargeBinary,
     Numeric,
     String,
     UniqueConstraint,
@@ -350,3 +352,31 @@ class RevocationRow(Base):
     revoked_by: Mapped[str] = mapped_column(nullable=False)
     revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PolicyBundleRow(Base):
+    """One published policy bundle — APICTA-01, spec 05 §5.7.3.
+
+    `serial` is the primary key and comes from the `policy_bundle_serial` sequence, taken
+    *before* signing because the signature covers it (spec 05 §5.7.3). The signed fields are
+    stored exactly as signed; `activated_by`, `source_serial` and `nl_digest` are provenance
+    and sit outside the signature.
+
+    `created_at` is nullable for one reason: the bundle `bootstrap_demo_secrets.py` signed for
+    every existing deployment carries none, and it is inside the signature, so it cannot be
+    filled in afterwards. Every bundle the control plane publishes has one.
+    """
+
+    __tablename__ = "policy_bundles"
+
+    serial: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    version: Mapped[str] = mapped_column(nullable=False)
+    cedar_source: Mapped[str] = mapped_column(nullable=False)
+    entity_schema: Mapped[str | None] = mapped_column(nullable=True)
+    tools: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    signature: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    activated_by: Mapped[str] = mapped_column(nullable=False)
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_serial: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    nl_digest: Mapped[str | None] = mapped_column(String(16), nullable=True)

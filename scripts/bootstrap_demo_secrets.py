@@ -46,6 +46,7 @@ _FILES: Final = (
     "policy_bundle.json",
     "policy_bundle.sig",
     "policy_public_key.hex",
+    "bundle_signing_key.hex",
     "routes.json",
     "role_assignments.json",
 )
@@ -87,15 +88,15 @@ DEFAULT_OUT: Final = _REPO_ROOT / "deploy" / "demo-secrets"
 
 
 def _is_complete(out: Path) -> bool:
-    return all((out / name).exists() for name in _FILES)
+    return not _missing(out)
+
+
+def _missing(out: Path) -> set[str]:
+    return {name for name in _FILES if not (out / name).exists()}
 
 
 def generate(out: Path) -> None:
     """Write every credential file into `out`. Pure filesystem side effect, no network."""
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-    from agentiam_core.bundles import PolicyBundle, public_key_to_hex, sign_bundle
-    from agentiam_core.corpus import CORPUS_SOURCE, CORPUS_TOOLS
     from agentiam_core.tokens import generate_keypair
     from scripts.serve_pep import ROUTES
 
@@ -105,34 +106,64 @@ def generate(out: Path) -> None:
     (out / "root_private_key.hex").write_text(root.private_key.to_bytes().hex(), encoding="utf-8")
     (out / "root_public_key.hex").write_text(root.public_key.to_bytes().hex(), encoding="utf-8")
 
+    _write_policy(out)
+    (out / "routes.json").write_text(json.dumps(ROUTES), encoding="utf-8")
+    _write_role_assignments(out)
+
+
+def _write_policy(out: Path) -> None:
+    """The policy half: a bundle-signing key, the boot bundle signed with it, its public half.
+
+    The key is **kept** (`bundle_signing_key.hex`, mode 0600) because the control plane signs
+    every bundle after this one (APICTA-01, spec 05 §5.7.2). It used to be discarded once the
+    boot bundle was signed, which is why no second bundle could ever be published. It is a
+    different key from the root token key: one changes policy, the other mints identities.
+    """
+    from datetime import UTC, datetime
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+    )
+
+    from agentiam_core.bundles import (
+        PolicyBundle,
+        bundle_file_payload,
+        public_key_to_hex,
+        sign_bundle,
+    )
+    from agentiam_core.corpus import CORPUS_SOURCE, CORPUS_TOOLS
+
     signing_key = Ed25519PrivateKey.generate()
+    key_path = out / "bundle_signing_key.hex"
+    key_path.write_text(
+        signing_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()).hex(),
+        encoding="utf-8",
+    )
+    key_path.chmod(0o600)
+
     # `tools=` is inside the signature, so the catalogue the policy reads cannot be edited on
     # disk without the bundle failing to verify. Without it every resource fell back to
     # `_UNKNOWN_TOOL` and the bundle's two resource-attribute rules were inert in the
     # deployment while passing in CI — TODO item 29.
     bundle = PolicyBundle(
-        version="demo-1", cedar_source=CORPUS_SOURCE, serial=1, tools=CORPUS_TOOLS
+        version="demo-1",
+        cedar_source=CORPUS_SOURCE,
+        serial=1,
+        tools=CORPUS_TOOLS,
+        created_at=datetime.now(UTC).replace(microsecond=0),
     )
-    signature = sign_bundle(bundle, signing_key)
-
+    # The file is the shared wire form minus the signature, read back by the one shared reader
+    # (`agentiam_core.bundles.bundle_from_file`) on both the PEP and the control plane.
     (out / "policy_bundle.json").write_text(
-        json.dumps(
-            {
-                "version": bundle.version,
-                "cedar_source": bundle.cedar_source,
-                "serial": bundle.serial,
-                "tools": bundle.tools,
-            }
-        ),
-        encoding="utf-8",
+        json.dumps(bundle_file_payload(bundle)), encoding="utf-8"
     )
-    (out / "policy_bundle.sig").write_bytes(signature)
+    (out / "policy_bundle.sig").write_bytes(sign_bundle(bundle, signing_key))
     (out / "policy_public_key.hex").write_text(
         public_key_to_hex(signing_key.public_key()), encoding="utf-8"
     )
-
-    (out / "routes.json").write_text(json.dumps(ROUTES), encoding="utf-8")
-    _write_role_assignments(out)
 
 
 def _write_role_assignments(out: Path) -> None:
@@ -170,6 +201,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         # volume without rotating the keys every token was minted under.
         _write_role_assignments(out)
         print(f"{out}: already bootstrapped (use --force to rotate); role map refreshed")
+        return 0
+
+    if _missing(out) == {"bundle_signing_key.hex"} and not args.force:
+        # Every volume bootstrapped before APICTA-01: complete except for the key nothing used
+        # to keep. Replacing the policy half alone keeps the root key, and so every token the
+        # seeder minted; regenerating wholesale would invalidate them all.
+        _write_policy(out)
+        _write_role_assignments(out)
+        print(f"{out}: added the bundle-signing key and re-signed the boot bundle; root key kept")
         return 0
 
     generate(out)

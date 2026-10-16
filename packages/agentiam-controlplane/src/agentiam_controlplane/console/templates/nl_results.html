@@ -13,7 +13,9 @@
 
 <script>
     // Update the Cedar editor with the generated source
-    document.getElementById('cedar-editor').value = `{{ cedar_source | safe }}`;
+    // `tojson`, not a template literal around `| safe`: model output containing a backtick
+    // or `${` would otherwise end the string and run as script.
+    document.getElementById('cedar-editor').value = {{ cedar_source | tojson }};
 </script>
 
 <h3>Auto-Generated Tests (T-029)</h3>
@@ -142,6 +144,9 @@
     <form hx-post="/policy/activate" hx-target="#results-container">
         <!-- We use the content of the cedar-editor to ensure manual tweaks are captured -->
         <input type="hidden" name="source" id="activate-source-input" value="">
+        {# The digest of the English this came from, so the published bundle can say so without
+           storing the English itself (spec 05 §5.7.3). #}
+        <input type="hidden" name="nl_digest" value="{{ nl_digest }}">
         <button type="submit" class="btn success" onclick="document.getElementById('activate-source-input').value = document.getElementById('cedar-editor').value;">Activate Policy</button>
     </form>
 </div>

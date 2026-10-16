@@ -342,7 +342,16 @@ looks empty, check the API under it before suspecting the page.
 | `/identity-tree?task_id=<task>` | The delegation tree, one node per agent, current minting only | `GET /v1/tree/{task_id}` |
 | `/audit` | The hash-chained ledger | `POST /v1/audit/verify`, `GET /v1/audit/search` |
 | `/escalations` | Pending requests. The approve/deny buttons need a login this stack does not wire — §10 | `GET /v1/escalations` |
-| `/policy` | Cedar authoring, compile and activate | `POST /policy/compile`, `/test`, `/activate` |
+| `/policy` | Cedar authoring, compile, activate, and the published bundle history with rollback. Activating and rolling back need a signed-in approver (Tanvir or Farhana) | `POST /policy/compile`, `/test`, `/activate`, `/republish`; `GET /v1/policy/bundles/current` |
+
+**Publishing policy** (APICTA-01, spec 05 §5.7). Activating signs the policy with the
+bundle-signing key bootstrap wrote, stores it as the next serial and announces it on Redis
+(`agentiam:policy`); the history table under the editor lists every serial, and "Roll back to
+this" re-publishes an earlier one under a new serial. The first row is the boot bundle every PEP
+started from, imported at control-plane startup and recorded as `bootstrap`. Check it with
+`curl -s http://localhost:8000/v1/policy/bundles/current | head -c 200`. **Until APICTA-01 Part C
+lands, PEPs do not yet fetch published bundles** — they still enforce the boot bundle until they
+restart.
 
 The task id is fixed for the demo and printed by the seed script:
 `d0d0d0d0-0000-4000-8000-000000000002`.

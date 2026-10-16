@@ -11,6 +11,7 @@ verify(...)` was meant, and the failure of that typo is accepting every bundle.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import ClassVar
 
@@ -19,7 +20,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agentiam_core.bundles import (
     BundleSignatureError,
+    BundleWireError,
     PolicyBundle,
+    bundle_file_payload,
+    bundle_from_file,
+    bundle_from_wire,
+    bundle_to_wire,
     public_key_from_hex,
     public_key_to_hex,
     sign_bundle,
@@ -208,3 +214,108 @@ class TestKeyEncoding:
     def test_a_wrong_length_key_is_rejected(self, length: int) -> None:
         with pytest.raises(BundleSignatureError, match="32"):
             public_key_from_hex("ab" * length)
+
+
+class TestWireFormat:
+    """The shape the control plane serves and a PEP fetches — APICTA-01, spec 05 §5.7.3.
+
+    One definition here so the two sides cannot disagree. The test that matters is the first:
+    a bundle that has been through real JSON still verifies against the signature made over
+    the original.
+    """
+
+    def test_a_bundle_survives_json_and_still_verifies(self, key: Ed25519PrivateKey) -> None:
+        bundle = a_bundle(tools={"payment_api": {"sensitivity": "critical"}}, serial=7)
+        wire = json.loads(json.dumps(bundle_to_wire(bundle, sign_bundle(bundle, key))))
+        back, signature = bundle_from_wire(wire)
+        assert back == bundle
+        verify_bundle(back, signature, key.public_key())
+
+    def test_an_absent_catalogue_and_an_empty_one_stay_different(
+        self, key: Ed25519PrivateKey
+    ) -> None:
+        # Spec 05 §5.1: null and {} sign differently because they assert different things.
+        options: tuple[dict[str, object] | None, ...] = (None, {})
+        for tools in options:
+            bundle = a_bundle(tools=tools)
+            back, _ = bundle_from_wire(bundle_to_wire(bundle, sign_bundle(bundle, key)))
+            assert back.tools == tools
+
+    def test_a_bundle_signed_without_a_timestamp_round_trips(self, key: Ed25519PrivateKey) -> None:
+        # The bootstrap bundle every existing demo volume holds was signed with none.
+        bundle = a_bundle(created_at=None)
+        back, signature = bundle_from_wire(bundle_to_wire(bundle, sign_bundle(bundle, key)))
+        assert back.created_at is None
+        verify_bundle(back, signature, key.public_key())
+
+    def test_the_timestamp_keeps_its_offset(self, key: Ed25519PrivateKey) -> None:
+        wire = bundle_to_wire(a_bundle(), sign_bundle(a_bundle(), key))
+        assert wire["created_at"] == "2026-08-15T12:00:00+00:00"
+
+    def test_a_timestamp_without_an_offset_is_refused(self, key: Ed25519PrivateKey) -> None:
+        # A naive instant is ambiguous, and canonical JSON refuses to sign one.
+        wire = bundle_to_wire(a_bundle(), sign_bundle(a_bundle(), key))
+        wire["created_at"] = "2026-08-15T12:00:00"
+        with pytest.raises(BundleWireError, match="offset"):
+            bundle_from_wire(wire)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("serial", "7"),
+            ("serial", True),
+            ("serial", -1),
+            ("version", 3),
+            ("cedar_source", None),
+            ("entity_schema", 5),
+            ("tools", ["not", "a", "map"]),
+            ("created_at", 12345),
+            ("created_at", "not a date"),
+            ("signature", "%%% not base64 %%%"),
+            ("signature", 64),
+        ],
+    )
+    def test_a_malformed_field_is_refused(
+        self, key: Ed25519PrivateKey, field: str, value: object
+    ) -> None:
+        wire = bundle_to_wire(a_bundle(), sign_bundle(a_bundle(), key))
+        wire[field] = value
+        with pytest.raises(BundleWireError, match=field):
+            bundle_from_wire(wire)
+
+    @pytest.mark.parametrize(
+        "field",
+        ["serial", "version", "cedar_source", "entity_schema", "created_at", "tools", "signature"],
+    )
+    def test_a_missing_field_is_refused(self, key: Ed25519PrivateKey, field: str) -> None:
+        wire = bundle_to_wire(a_bundle(), sign_bundle(a_bundle(), key))
+        del wire[field]
+        with pytest.raises(BundleWireError, match=field):
+            bundle_from_wire(wire)
+
+    def test_a_payload_that_is_not_an_object_is_refused(self) -> None:
+        with pytest.raises(BundleWireError, match="object"):
+            bundle_from_wire(["serial", 1])  # type: ignore[arg-type]
+
+
+class TestBootFile:
+    """The deployment's boot bundle: wire form on disk, signature in its own file."""
+
+    def test_a_file_round_trips_and_verifies(self, key: Ed25519PrivateKey) -> None:
+        bundle = a_bundle(tools={"payment_api": {"sensitivity": "critical"}})
+        payload = json.loads(json.dumps(bundle_file_payload(bundle)))
+        assert "signature" not in payload
+        back = bundle_from_file(payload, sign_bundle(bundle, key))
+        assert back == bundle
+        verify_bundle(back, sign_bundle(bundle, key), key.public_key())
+
+    def test_a_file_missing_a_signed_field_is_refused(self, key: Ed25519PrivateKey) -> None:
+        # A reader that defaulted the missing field would verify a different bundle.
+        payload = bundle_file_payload(a_bundle())
+        del payload["created_at"]
+        with pytest.raises(BundleWireError, match="created_at"):
+            bundle_from_file(payload, sign_bundle(a_bundle(), key))
+
+    def test_a_file_that_is_not_an_object_is_refused(self) -> None:
+        with pytest.raises(BundleWireError, match="object"):
+            bundle_from_file([1, 2], b"")  # type: ignore[arg-type]

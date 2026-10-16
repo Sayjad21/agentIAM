@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agentiam_controlplane import app as app_module
-from agentiam_controlplane.app import app, store
+from agentiam_controlplane.app import app
 from agentiam_core.corpus import CORPUS_SOURCE
 
 client = TestClient(app)
@@ -58,66 +58,32 @@ def test_test_policy_endpoint_handles_parse_errors() -> None:
     assert "unexpected token `is`" in response.text or "parse error" in response.text.lower()
 
 
-class TestActivationIsGated:
-    """`PLAN.md` §907 and T-030: *never activatable without passing tests* (409).
+class TestTheDatabaseLessConsoleCannotActivate:
+    """T-027's console, built with no database, has no sessions and no bundle store.
 
-    The endpoint previously assigned `store.current_source` and returned 200 with no
-    corpus run, no auto-tests and not even a parse — `can_activate` was computed and
-    handed to the template, so the gate existed only in the UI. A direct POST installed
-    whatever it was given, including Cedar that does not parse.
-
-    ADR-030 and ADR-034 both describe a gate that nothing enforced. These tests are the
-    enforcement.
+    Activation used to succeed here by writing an in-memory stub that nothing read. Since
+    APICTA-01 activation publishes a signed bundle to every PEP and needs a signed-in approver
+    (spec 05 §5.7.1), so this console refuses it outright. The corpus gate itself is covered
+    against a real store in `tests/integration/test_policy_publication.py`.
     """
 
-    def setup_method(self) -> None:
-        self._saved = store.current_source
+    def test_activation_without_a_session_is_401(self) -> None:
+        response = client.post("/policy/activate", data={"source": CORPUS_SOURCE})
+        assert response.status_code == 401
+        assert "approver" in response.text
 
-    def teardown_method(self) -> None:
-        # The store is module-global; leaking a mutation between tests makes the next
-        # failure depend on execution order.
-        store.current_source = self._saved
+    def test_a_refused_activation_changes_nothing_shown(self) -> None:
+        client.post("/policy/activate", data={"source": "permit(principal, action, resource);"})
+        assert "Action::&#34;invoice:read&#34;" in client.get("/policy").text
 
-    def test_a_passing_policy_activates(self) -> None:
-        new_source = CORPUS_SOURCE + "\n// A new comment"
-        response = client.post("/policy/activate", data={"source": new_source})
-        assert response.status_code == 200
-        assert "Policy Activated" in response.text
-        assert store.current_source == new_source
+    def test_the_page_says_publication_is_not_configured(self) -> None:
+        assert "Publication is not configured" in client.get("/policy").text
 
-    def test_a_policy_failing_the_corpus_is_refused_with_409(self) -> None:
-        # Breaks beat 4's payment limit, exactly as the diff test does.
-        broken = CORPUS_SOURCE.replace('decimal("500000.0")', 'decimal("1000.0")')
-
-        response = client.post("/policy/activate", data={"source": broken})
-        assert response.status_code == 409
-        assert store.current_source != broken, "a refused bundle must not become current"
-
-    def test_the_refusal_names_what_failed(self) -> None:
-        broken = CORPUS_SOURCE.replace('decimal("500000.0")', 'decimal("1000.0")')
-        response = client.post("/policy/activate", data={"source": broken})
-        assert "corpus" in response.text.lower() or "failed" in response.text.lower()
-
-    def test_unparseable_cedar_is_refused(self) -> None:
-        response = client.post("/policy/activate", data={"source": "this is not cedar"})
-        assert response.status_code == 409
-        assert store.current_source != "this is not cedar"
-
-    def test_an_empty_policy_is_refused_rather_than_silently_permitting_nothing(self) -> None:
-        # An empty policy denies everything, so it would sail past a parse-only check and
-        # take the whole demo down. The corpus is what catches it.
-        #
-        # `source` defaults to "" rather than being required, deliberately: an empty
-        # policy is a thing to *refuse* (409), not a malformed request (422). httpx drops
-        # an empty form value where a browser would send `source=`, so a required field
-        # here would make the two disagree — and the browser is the one that matters.
-        assert client.post("/policy/activate", data={"source": ""}).status_code == 409
-        assert client.post("/policy/activate", data={}).status_code == 409
-
-    def test_the_previous_policy_keeps_serving_after_a_refusal(self) -> None:
-        original = store.current_source
-        client.post("/policy/activate", data={"source": "this is not cedar"})
-        assert store.current_source == original
+    def test_the_policy_page_shows_refusals_instead_of_discarding_them(self) -> None:
+        # HTMX 1.9 discards non-2xx responses; the page opts its refusals back in.
+        page = client.get("/policy").text
+        assert "htmx:beforeSwap" in page
+        assert "409" in page
 
 
 @patch("agentiam_controlplane.app.compile_nl_to_policy")
@@ -302,3 +268,42 @@ class TestLeaseReaper:
             await asyncio.sleep(0.06)
 
         assert len(attempts) > 1, "it gave up after the first failure instead of retrying"
+
+
+@patch("agentiam_controlplane.app.compile_nl_to_policy")
+def test_compiled_cedar_reaches_the_editor_as_a_string_not_as_script(
+    mock_compile: MagicMock,
+) -> None:
+    """Model output used to be pasted into a JavaScript template literal with `| safe`.
+
+    A backtick ends the literal and `${...}` runs as code, so a compiled policy that contained
+    either — in a comment or a string — broke the page or executed in it. It is now emitted
+    with `tojson`. Checked by parsing the rendered script, not by looking for a substring.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    from agentiam_controlplane.nl_compiler.compiler import CompilerOutput
+
+    hostile = (
+        "// a `backtick` and ${alert(1)}\n"
+        'permit(principal, action == Action::"invoice:read", resource);'
+    )
+    mock_compile.side_effect = AsyncMock(
+        return_value=CompilerOutput(cedar_source=hostile, tests=[])
+    )
+    html = client.post("/policy/compile", data={"nl_source": "readers may read"}).text
+
+    # The value is a JSON string literal now, so the hostile text sits inside quotes.
+    assert 'value = "// a `backtick` and ${alert(1)}' in html
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the substring checks above still ran")
+    script = re.search(r"<script>(.*?)</script>", html, re.S)
+    assert script is not None
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+        handle.write(script.group(1))
+    result = subprocess.run([node, "--check", handle.name], capture_output=True, text=True)  # noqa: S603
+    assert result.returncode == 0, result.stderr
