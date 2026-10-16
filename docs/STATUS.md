@@ -19,7 +19,7 @@ than none.
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 72 (ADR-001…ADR-072) |
+| **ADRs** | 73 (ADR-001…ADR-073) |
 
 ---
 
@@ -89,7 +89,7 @@ claim; `MASTER.md` §8 has the talk-track version.
 
 | What the console or docs say | What is actually true | Gap |
 |---|---|---|
-| "Policy Activated Successfully!" — enforced on the next call | `/policy/activate` reassigns `DummyBundleStore.current_source` in the console process (`agentiam_controlplane/app.py`). The PEP read its bundle from disk at boot and never sees the change | 26 |
+| "Policy Activated Successfully!" — enforced on the next call | `/policy/activate` reassigns `DummyBundleStore.current_source` in the console process (`agentiam_controlplane/app.py`). The PEP read its bundle from disk at boot and never sees the change. It also accepts a request with **no session** (measured; APICTA-01 Part B requires an approver, spec 05 §5.7.1) | 26 |
 | A judge sets a budget ceiling for a new task | Every task reuses one hard-coded `DEMO_MANDATE_ID`, because a PEP serves exactly one mandate | 25 |
 | An approved escalation elevates the agent | Approval mints a root token and returns it to the *approver* in the HTTP response. Nothing delivers it to the agent that asked | — |
 | Agents act; the console watches | No AI agent exists. All traffic comes from `scripts/seed_demo.py` and `scripts/demo_concurrency.py` | — |

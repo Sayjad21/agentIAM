@@ -187,7 +187,7 @@ operator names things is not a defence.
 
 | Situation | Behaviour |
 |---|---|
-| Bundle older than `max_staleness` (default 300 s) | `stale=True`, and spec 09 denies with `POLICY_BUNDLE_STALE` |
+| Bundle not **confirmed current** within `max_staleness` (default 300 s) | `stale=True`, and spec 09 denies with `POLICY_BUNDLE_STALE` |
 | A new bundle fails signature verification | **Rejected; the cache keeps serving the previous bundle** and the failure is counted |
 | A new bundle has a serial ≤ the current one | Rejected the same way |
 | No bundle has ever loaded | `OracleUnavailable` → `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED` |
@@ -201,6 +201,15 @@ underneath — so if the real bundle never arrives, the PEP fails closed on age 
 
 **Rejection is never silent.** The cache counts rejections and `/readyz` exposes them; a bundle
 being refused repeatedly is the signal EC-P01 asks to alert on.
+
+**Age is measured from the last confirmation, not from the load** (amended by APICTA-01). The
+question staleness answers is *"how long since this PEP last knew it holds the current
+policy?"*, and a policy that has not changed is not out of date. Measured before the
+amendment: a cache loaded at *t* reported `stale=True` at *t* + 301 s with the policy unchanged
+and the control plane healthy, and re-loading the same bundle to refresh it was refused as a
+rollback (`serial` must advance, §5.2). Wired as it stood, every PEP would have refused every
+request five minutes after boot. A successful sync that finds the PEP's serial still current
+therefore **confirms** it (§5.7.4), which restarts the clock without loading anything.
 
 ### 5.4 Hot reload
 
@@ -272,6 +281,131 @@ A misspelled attribute is refused rather than ignored. Splatting an entry into t
 would raise on some misspellings by luck and silently drop others, and a dropped `is_external`
 is the difference between a permit that fires and one that does not.
 
+
+### 5.7 Publication and distribution (APICTA-01)
+
+Everything above describes a PEP that *receives* bundles. Until APICTA-01 nothing sent one:
+`POST /policy/activate` ran the corpus gate and assigned the source to an in-memory stub in the
+console process, and the PEP verified one bundle from disk at boot and never saw another
+(`STATUS.md` gap 26). This section is the publishing half.
+
+#### 5.7.1 Who may activate
+
+**Activation requires a signed-in approver** — a session principal in `approvers`, the rule
+`POST /v1/escalations/{id}/approve` and `POST /v1/revocations` already apply. Measured before
+APICTA-01: `POST /policy/activate` with no session at all answered 200 and activated. That was
+harmless while activation changed only a stub; once it reaches every PEP it is the most
+powerful action in the system, and it must not be anonymous.
+
+| Request | Answer |
+|---|---|
+| No session | 401, nothing published |
+| A session not in `approvers` | 403, nothing published |
+| An approver, a policy failing the corpus | 409 (§5.5), nothing published |
+| An approver, a policy passing | the bundle is published (§5.7.3) and the response names its serial |
+
+The session cookie is `SameSite=Lax`, so a cross-site form cannot activate on an approver's
+behalf.
+
+#### 5.7.2 The signing key
+
+**A dedicated Ed25519 bundle-signing key, separate from the root token key.** The control plane
+holds the private half (`AGENTIAM_CONTROLPLANE_BUNDLE_SIGNING_KEY_PATH`, a 64-hex-character file,
+mode `0600`); each PEP holds only the public half, as it already does
+(`AGENTIAM_PEP_POLICY_PUBLIC_KEY`). `scripts/bootstrap_demo_secrets.py` generates the pair and
+must persist the private half — until now it signed the initial bundle with a key it then
+discarded, which is why no second bundle could ever be signed.
+
+Separation bounds what a stolen key does. The root key mints tokens; the bundle key can only
+change organization policy. And policy is the *second* of two layers (§1): a token's own scopes
+and caveats are evaluated before Cedar and cannot be widened by any bundle. A forged bundle can
+therefore at worst remove the organization's restrictions — it cannot grant an agent more than
+its token already holds.
+
+#### 5.7.3 The bundle store and serial allocation
+
+```sql
+CREATE TABLE policy_bundles (
+  serial        BIGINT PRIMARY KEY,                  -- §5.2: monotonic, compared by every PEP
+  version       TEXT NOT NULL,                       -- a label: "bundle-<serial>" by default
+  cedar_source  TEXT NOT NULL,
+  tools         JSONB,                               -- §5.6; null and {} sign differently
+  created_at    TIMESTAMPTZ NOT NULL,                -- inside the signature, timezone-aware
+  signature     BYTEA NOT NULL,                      -- 64 bytes, Ed25519, §5.1
+  activated_by  TEXT NOT NULL,                       -- the session principal, never a body field
+  source_serial BIGINT NULL,                         -- set on a rollback: the serial re-published
+  nl_digest     TEXT NULL                            -- sha256[:16] of the English, never the text
+);
+CREATE SEQUENCE policy_bundle_serial;
+```
+
+- **The serial comes from a sequence, before signing.** The signature covers the serial, so it
+  must be known first: `nextval`, build, sign, insert, in one transaction. Two concurrent
+  activations get two serials and the later one wins at every PEP, which is the intended
+  outcome; a failed activation leaves a gap, which §5.2 does not care about.
+- **The catalogue is carried forward.** An activation supplies Cedar source; the new bundle's
+  `tools` is the current bundle's, unchanged. A policy and its catalogue stay one artifact
+  (§5.6) without the console having to edit both.
+- **Rollback publishes the old source as a new serial.** Re-sending serial *n* would be refused
+  by every PEP as a rollback attack (§5.2), correctly. "Roll back to *n*" means publish serial
+  *m* > current with *n*'s source and catalogue, `source_serial = n`.
+- **The initial bundle is imported.** At startup, if the table is empty, the control plane
+  imports the deployment's signed bundle file (the one bootstrap wrote and every PEP boots
+  from) as its first row, verifying its signature first, and advances the sequence past it.
+- **The English is never stored.** `nl_digest` is the same `sha256[:16]` digest
+  `nl_compiler/compiler.py` logs (T-054); `tests/security/test_secret_scanning.py` already
+  forbids the text itself in logs.
+
+Two read routes serve PEPs and the console, unauthenticated like `GET /v1/revocations`:
+`GET /v1/policy/bundles/current` and `GET /v1/policy/bundles/{serial}`, each returning the
+bundle's fields, `created_at` as an ISO-8601 string with its offset, and the signature in
+base64. **Bundles are integrity-protected, not confidential**: anyone who can reach the control
+plane can read the policy, as anyone can read the revocation list. Measured: the signature
+survives a JSON round trip with a timezone-aware `created_at`, and a naive one fails
+canonicalization (`CanonicalizationError`) rather than verifying, so a transport bug fails
+closed.
+
+#### 5.7.4 How a PEP stays current
+
+The hot path only ever reads the cache (§5.4). Everything here is background work in the PEP's
+lifespan, in the shape `RedisRevocationSet` already uses (spec 07 §5):
+
+1. **Push.** After its transaction commits, the control plane publishes
+   `{"event": "policy:reload", "serial": <n>}` on the Redis channel `agentiam:policy`. A PEP
+   receiving it fetches `GET /v1/policy/bundles/current` — *current*, not *n*, so events that
+   arrive out of order or are coalesced still converge on the newest — and calls
+   `PolicyCache.load()`.
+2. **Pull backstop.** Every `AGENTIAM_PEP_POLICY_PULL_INTERVAL_S` (default 30 s) the PEP
+   fetches the current bundle regardless. Redis pub/sub is at-most-once: a PEP that was
+   restarting or partitioned when the event fired would otherwise miss it for good.
+3. **Confirmation.** A fetch whose serial equals the one held calls
+   `PolicyCache.confirm(serial)`, which restarts the staleness clock (§5.3 amendment). A fetch
+   with a lower serial is ignored; a fetch that fails changes nothing, and the clock runs on.
+4. **Boot.** A PEP loads the bundle file it was given, as today, then attempts one pull before
+   it reports ready. If the control plane is unreachable it serves the file's bundle, which goes
+   stale after `max_staleness` unless a sync confirms or replaces it — fail-closed on age, as
+   §5.3 intends.
+5. **A bad bundle is counted and refused** (§5.3, EC-P01): the previous one keeps serving.
+
+`max_staleness` (default 300 s) against a 30 s pull leaves roughly ten failed syncs before a PEP
+refuses on age. `/readyz` reports `PolicyCache.status()`: serial, loads, rejections, staleness.
+
+#### 5.7.5 What the cache must change to be wired
+
+Measured against `PolicyCache` as T-025 left it, and each a precondition for §5.7.4:
+
+| # | Finding | Required change |
+|---|---|---|
+| 1 | `__init__` stores `dict(tools or {})` and passes it to `CedarEngine`; an explicit `{}` overrides the bundle's own catalogue (§5.6). Measured: 5 catalogue entries directly, **0** through the cache | Pass `tools` through as `None` when not given |
+| 2 | No `.bundle`; `Pipeline` reads `policy.bundle.version` for every decision record | Expose the current bundle, or the unavailable placeholder |
+| 3 | No way to mark an unchanged bundle as still current (§5.3 amendment) | `confirm(serial)` |
+
+#### 5.7.6 Latency
+
+The target is that a policy activated in the console is enforced by every connected PEP within
+**one second**, by push; within one pull interval without it. The measured figure belongs here
+once Part C exists.
+
 ---
 
 ## 6. Cost, and what it does to NFR-1's headroom
@@ -327,6 +461,8 @@ Full OPA is deferred (`PLAN.md` §21).
 | 2 | Cost is measured with a small bundle | §6. A large policy set costs more; T-053 measures a realistic one |
 | 3 | `arg_digest` is in context, the arguments are not | A policy cannot say *deny payments to account X* unless the extractor maps that argument (spec 10 §4). Deliberate: NFR-5 keeps argument values out of everything that is recorded |
 | 4 | One bundle per PEP, no per-tenant bundles | Single-tenant is the scope (`PLAN.md` §1.4) |
+| 5 | Bundles are readable by anyone who can reach the control plane | §5.7.3: integrity-protected, not confidential. A policy that must stay secret needs authenticated reads |
+| 6 | One approver activates; there is no second-person rule for policy | §5.7.1. Separation of duties for activation would mirror escalation's; not built |
 
 ---
 

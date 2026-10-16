@@ -53,7 +53,7 @@ or a protocol model before being written down.
 
 | Document | What it holds |
 |---|---|
-| [`DECISIONS.md`](DECISIONS.md) | Append-only ADR log, 72 entries. Every non-obvious choice, the context that forced it, and what it costs |
+| [`DECISIONS.md`](DECISIONS.md) | Append-only ADR log, 73 entries. Every non-obvious choice, the context that forced it, and what it costs |
 | [`JOURNAL.md`](JOURNAL.md) | The development narrative: what each ticket did and found, the fix queue from the manual passes (items 1–34, cited in commits as "TODO item N"), and every closed gap |
 | [`threat-model.md`](threat-model.md) | 27 STRIDE threats, each with a mitigation, a status and the test covering it |
 | [`manual-test-report.md`](manual-test-report.md) | A hand-driven pass over the running system — the evidence behind the fix queue |

@@ -114,7 +114,7 @@ Configuration:
 **The one real finding this ticket fixed:** `agentiam_controlplane.nl_compiler.
 compiler.compile_nl_to_policy` was logging the user's full natural-language statement
 verbatim at INFO. Replaced with a `sha256[:16]` digest and the raw length — the same
-shape as `arg_digest` for the same reason (spec 10 §5.4, `PLAN.md` NFR-5).
+shape as `arg_digest` for the same reason (spec 10 §7, `PLAN.md` NFR-5).
 `test_compile_nl_to_policy_does_not_log_the_statement_verbatim` (`tests/unit/
 test_nl_compiler.py`) pins that fix, and the static AST scanner rejects any future edit
 that reintroduces the pattern.

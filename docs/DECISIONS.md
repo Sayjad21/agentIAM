@@ -2774,7 +2774,7 @@ logger.info(
 )
 ```
 
-Same shape as spec 10 §5.4's `arg_digest`, and for the same reason: a correlation
+Same shape as spec 10 §7's `arg_digest`, and for the same reason: a correlation
 handle across the compile request, its evaluation, and the eventual audit record,
 carrying nothing evidentiary about the input. `test_compile_nl_to_policy_does_not_
 log_the_statement_verbatim` in `tests/unit/test_nl_compiler.py` pins the
@@ -4402,3 +4402,64 @@ an international panel cannot read at a glance.
 - The SSE diff re-renders the open node every few seconds while it is busy, so the control
   is rebuilt only when the agent or its revoked state changes; otherwise a half-typed reason
   would be wiped.
+
+---
+
+## ADR-073 — Policy is published by the control plane, signed with its own key, pushed and pulled
+
+**Status:** accepted · **Ticket:** APICTA-01 Part A · **Closes (when Parts B–C land):**
+`STATUS.md` gap 26 · **Specified in:** spec 05 §5.7, with an amendment to §5.3
+
+### Context
+
+The PEP's policy layer was complete in isolation — signed bundles, a rollback-proof serial,
+staleness, atomic hot reload (T-025) — and nothing ever sent it a second bundle. The console's
+`/policy/activate` ran the corpus gate and wrote to an in-memory stub. Writing the publishing
+half meant deciding who may publish, with what key, how PEPs learn of it, and what "fresh"
+means. Four facts were measured before deciding, and two of them changed the design:
+
+1. `PolicyCache` dropped the bundle's tool catalogue (5 entries direct, 0 through the cache),
+   which would have disarmed every resource-attribute rule.
+2. Staleness counted from load, and an unchanged bundle could not be re-confirmed (re-loading
+   it is refused as a rollback). Wired as it stood, every healthy PEP would have refused every
+   request 300 s after boot.
+3. `PolicyCache` has no `.bundle`, which `Pipeline` reads for every record.
+4. `POST /policy/activate` answered 200 to a request with no session at all.
+
+### Decision
+
+1. **Activation requires a signed-in approver**, the rule approve/deny and revoke already use.
+2. **A dedicated bundle-signing key**, separate from the root token key, held by the control
+   plane; PEPs hold the public half as they already do. Bootstrap persists it.
+3. **`policy_bundles` in Postgres, serial from a sequence taken before signing.** The catalogue
+   carries forward from the current bundle; rollback publishes old source as a new serial; the
+   deployment's initial bundle file is imported on first start; the English is stored only as
+   a `sha256[:16]` digest.
+4. **Push on `agentiam:policy`, pull every 30 s, fetch "current" on either**, mirroring
+   revocation's push/pull (spec 07 §5). Out-of-order or lost events converge.
+5. **Freshness is "last confirmed current"**: a sync that finds the held serial still current
+   calls `PolicyCache.confirm()`. `max_staleness` stays 300 s, about ten missed pulls.
+6. **Bundles are readable without authentication**: integrity-protected, not confidential.
+
+### Alternatives rejected
+
+- **Sign with the root key.** One key fewer to manage, but a console compromise could then mint
+  tokens as well as change policy. Separate keys bound each.
+- **Push the bundle itself over Redis.** Redis would become a policy distribution channel whose
+  messages a restarted PEP never sees; an event that says "fetch" keeps the authoritative copy
+  in one place and makes push and pull the same code.
+- **`max(serial) + 1`.** Two concurrent activations would compute the same serial. A sequence
+  cannot.
+- **Extend staleness from load instead of adding `confirm`.** Either a large `max_staleness`,
+  which hides a dead control plane for longer, or a refresh that re-loads the same serial,
+  which would have to weaken §5.2's rollback refusal. Confirming leaves both intact.
+
+### Consequences
+
+- A forged bundle can at worst remove the organization's Cedar restrictions; the token's own
+  scopes and caveats are evaluated first and no bundle can widen them (spec 05 §1).
+- A PEP that cannot reach the control plane refuses on age after ~5 minutes — fail-closed, as
+  spec 05 §5.3 intends. A demo that stops the control plane for longer than that will see
+  `POLICY_BUNDLE_STALE`, which is the behaviour to narrate, not hide.
+- Anyone who can reach the control plane can read the policy. Recorded as spec 05 §8 row 5.
+- One approver can change enforced policy alone. Recorded as spec 05 §8 row 6.

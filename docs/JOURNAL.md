@@ -2449,7 +2449,7 @@ at INFO. A policy like *"Only alice@example.com approves >5000 BDT"* — the sha
 `docs/DEMO.md` names as beat 5 — put an e-mail address into logs by design. Nothing in
 `threat-model.md` had this as a threat; nothing in the red-team suite would have
 caught it (the operator's own console typed it, not an adversary). Fixed by hashing
-the statement (`sha256[:16]`, matching `arg_digest`'s shape from spec 10 §5.4) and
+the statement (`sha256[:16]`, matching `arg_digest`'s shape from spec 10 §7) and
 logging the raw length alongside. `test_compile_nl_to_policy_does_not_log_the_
 statement_verbatim` pins the fix behaviourally; the AST scanner refuses any future
 reintroduction of the pattern. **The static half saw it; the runtime half was written
@@ -3652,6 +3652,31 @@ looking past the tests: the SSE diff re-renders the open node every few seconds,
 have wiped a half-typed reason, and no test can see a JavaScript syntax error that blanks the
 tree — every rendered script was put through `node --check`, and the browser and server money
 helpers were run side by side to confirm they print the same strings.
+
+### APICTA-01 Part A · The spec for publishing policy, and two defects it would have shipped
+
+Spec first, because this is the ticket that makes the console's English sentence change what
+every PEP enforces. Five probes against the code before writing a line of it; two found
+defects the ticket did not know about.
+
+**Freshness was measured from the wrong moment.** `PolicyCache.stale` is *now − loaded_at >
+max_staleness*. A policy nobody changes is reloaded never, so 301 s after boot the cache said
+stale — with the control plane healthy and the policy current — and re-loading the same bundle
+to refresh it was refused as a rollback, correctly, because the serial did not advance. Wired as
+written, every PEP would have answered `POLICY_BUNDLE_STALE` to everything five minutes after
+it started. The question staleness is meant to answer is *how long since this PEP last knew its
+policy was current*; a sync that finds the serial unchanged now confirms it.
+
+**Activation was anonymous.** `POST /policy/activate` with no session answered 200 and
+"activated". Harmless while it changed a stub in the console's memory; the most powerful
+action in the system once it reaches every PEP. It now needs an approver.
+
+The other three probes confirmed what the ticket already said — the cache dropped the bundle's
+tool catalogue (5 entries to 0), it has no `.bundle` for the pipeline, and a signed bundle
+survives JSON transport only with a timezone-aware `created_at` (a naive one fails
+canonicalization, which is the safe direction). And one reference that had been copied through
+three documents and these notes turned out to point at a section that does not exist: spec 10
+has no §5.4; `arg_digest` is §7.
 
 ---
 

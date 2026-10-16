@@ -55,7 +55,7 @@ fallback) and T-059 (submission package).
 |---|---|
 | APICTA-07 | DONE — verified locally; CI pending (Actions billing block) |
 | APICTA-04 | DONE — verified locally and live on the demo stack; CI pending |
-| APICTA-01 | TODO |
+| APICTA-01 | IN_PROGRESS — Part A (spec) done; B, C, D to go |
 | APICTA-03 | TODO |
 | APICTA-05 | TODO |
 | APICTA-02 | TODO |
@@ -199,6 +199,8 @@ Then STATUS.md §3: delete the "Revoking an agent from the console" row; `MASTER
 - **Maps to:** gap 26; T-031 (deferred, reopened here); STATUS.md §3 "Policy Activated
   Successfully!" row
 - **Parts:** A (spec) → B (control plane) → C (PEP) → D (fallback). One sitting each.
+- **Part A: DONE** — spec 05 §5.7 and the §5.3 amendment, ADR-073. Parts B and C implement
+  §5.7 as written; where this ticket and the spec differ, the spec wins.
 
 **Problem statement.**
 `POST /policy/activate` (`packages/agentiam-controlplane/src/agentiam_controlplane/app.py:708`)
@@ -221,20 +223,21 @@ The bundle-signing key is generated in `scripts/bootstrap_demo_secrets.py` (line
 
 The compiler has no fallback: with no network and no model, beat 5 shows an error (F-2).
 
-**Part A — spec.** Add `docs/specs/05-policy.md` §5.6 "Publication": the bundle row, the
-signing key and its custody (a dedicated Ed25519 bundle key, **not** the root token key — a
-console compromise should not mint tokens), serial allocation (`max(serial)+1` in the same
-transaction), the Redis event, and what the PEP does on a bad event (log, count, keep
-serving). Write the ADR for the key decision.
+**Part A — spec (done).** `docs/specs/05-policy.md` §5.7 (§5.6 was already taken by the tool
+catalogue). Probing for it found two more defects than this ticket listed, both now in scope:
+**staleness counted from load**, so an unchanged bundle went stale after 300 s and could not be
+re-confirmed — every PEP would have refused everything five minutes after boot (fix:
+`PolicyCache.confirm()`, §5.3 amendment); and **`POST /policy/activate` accepted a request with
+no session** (fix: approver session, §5.7.1). Serial allocation is a sequence taken before
+signing, not `max(serial)+1`, which two concurrent activations would collide on.
 
 **Part B — control plane.**
-- Migration `0008_policy_bundles.py`: `policy_bundles(serial BIGINT PK, version TEXT,
-  cedar_source TEXT, tools JSONB, signature BYTEA, created_at, activated_by TEXT,
-  nl_digest TEXT NULL)` — `nl_digest` is the `sha256[:16]` of the English statement, never the
-  text.
+- Migration `0008_policy_bundles.py`: the table and sequence exactly as spec 05 §5.7.3
+  (including `source_serial` for rollbacks).
 - `db/policy_bundles.py` (new): `publish(session, *, source, tools, signing_key, activated_by,
   nl_digest, now) -> PolicyBundleRow`, `current(session)`, `history(session, limit)`.
-- `app.py` `/policy/activate`: after the corpus gate, publish, then
+- `app.py` `/policy/activate`: require an approver session (401/403, §5.7.1); after the
+  corpus gate, publish, then
   `redis.publish("agentiam:policy", json.dumps({"event": "policy:reload", "serial": n}))`.
   Remove `DummyBundleStore`. `/policy` shows history from the table.
 - `GET /v1/policy/bundles/current` and `GET /v1/policy/bundles/{serial}` → bundle + signature
@@ -245,7 +248,8 @@ serving). Write the ADR for the key decision.
 
 **Part C — PEP.**
 - `policy_cache.py`: pass `tools` through as `None` when not given; add a `bundle` property
-  (the current bundle, or the unavailable placeholder) so `Pipeline` can take a `PolicyCache`.
+  (the current bundle, or the unavailable placeholder) so `Pipeline` can take a `PolicyCache`;
+  add `confirm(serial)` and measure staleness from the last confirmation (§5.3 amendment).
 - New `agentiam_pep/policy_sync.py`: `PolicySync(cache, control_plane_url, redis_client)` —
   push (subscribe to `agentiam:policy`, fetch the named serial, `cache.load()`), pull
   backstop every N s, same reconnect shape as `RedisRevocationSet._subscribe_loop`
