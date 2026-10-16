@@ -8,41 +8,44 @@ Every document in this repository, what it is for, and when to read it.
 
 | If you want to… | Read |
 |---|---|
-| Understand what AgentIAM is | [`../README.md`](../README.md) |
-| See what is built and what is left | [`STATUS.md`](STATUS.md) |
-| Follow how the project developed, and why | [`JOURNAL.md`](JOURNAL.md) |
-| Build the next ticket | [`ROADMAP.md`](ROADMAP.md) → [`PLAN.md`](PLAN.md) → the relevant spec |
-| Pick up the next fix | [`TODO.md`](TODO.md) → [`manual-test-report.md`](manual-test-report.md) for the evidence behind it |
+| Get the whole picture on one page — architecture, status, deferrals, benchmarks, the demo | [`MASTER.md`](MASTER.md) |
+| See what is built, what is left, and what is known to be wrong | [`STATUS.md`](STATUS.md) |
+| Bring the stack up and drive it | [`RUNNING.md`](RUNNING.md) |
+| Learn the project from scratch | [`learn/00-start-here.md`](learn/00-start-here.md) |
+| Pick up the next piece of work | [`STATUS.md`](STATUS.md) §2 and §5 → [`PLAN.md`](PLAN.md) §9 for the ticket → its spec → [`ENGINEERING-RULES.md`](ENGINEERING-RULES.md) for the loop |
 
 ---
 
 ## The four authorities
 
-These four documents govern the project. When they disagree, the order below decides.
+These govern the project. When they disagree, the order below decides.
 
-| Document | Authority over | Size |
-|---|---|---|
-| [`PLAN.md`](PLAN.md) | **What** to build. Architecture, protocol specs, data model, API contracts, the 61 tickets, testing strategy, risk register, submission checklist. The root document. | 1,437 lines |
-| [`specs/`](specs/) | The **precise** contract for anything `PLAN.md` §6 only sketches. A spec supersedes the plan on its own subject. | 4 files |
-| [`ENGINEERING-RULES.md`](ENGINEERING-RULES.md) | **How** to build. Non-negotiable rules, the per-ticket loop, Definition of Done, review cadence. | 92 lines |
-| [`ROADMAP.md`](ROADMAP.md) | **Order**. Milestone sequencing, exit gates, what is deferred and why. | 272 lines |
+| Document | Authority over |
+|---|---|
+| [`PLAN.md`](PLAN.md) | **What** to build. Architecture, protocols, data model, API contracts, the 61 tickets, testing strategy, risk register, submission checklist. The root document |
+| [`specs/`](specs/) | The **precise** contract for anything `PLAN.md` §6 only sketches. A spec supersedes the plan on its own subject |
+| [`ENGINEERING-RULES.md`](ENGINEERING-RULES.md) | **How** to build. Non-negotiable rules, the per-ticket loop, Definition of Done |
+| [`ROADMAP.md`](ROADMAP.md) | **Order.** Milestone sequencing, exit gates, what is deferred and why |
 
 ---
 
 ## Specifications
 
-Written before the code that implements them. Each one was checked against a running
-`biscuit-python` or a protocol model *before* being written down — §9 of spec 02 and §15 of
-spec 04 list what was verified.
+Written before the code that implements them, and checked against a running `biscuit-python`
+or a protocol model before being written down.
 
-| Spec | Covers | Written by |
-|---|---|---|
-| [`specs/01-token-format.md`](specs/01-token-format.md) | Authority and attenuation block structure, all facts and checks, money encoding, size limits, a measured 3-level worked example | T-002 |
-| [`specs/02-caveat-language.md`](specs/02-caveat-language.md) | The nine caveat types, their Datalog compilation, the `check if` vs `reject if` rule, reason codes | T-003 |
-| [`specs/03-attenuation.md`](specs/03-attenuation.md) | The `narrows()` partial order, the mint-time check, INV-1…INV-10 stated formally, 14 counterexamples | T-003 |
-| [`specs/04-lease-protocol.md`](specs/04-lease-protocol.md) | All seven ledger operations, the lease state machine, safety and liveness arguments, partition and clock-skew handling | T-004 |
-
-Specs `05`–`09` (policy, drift, revocation, audit, decision record) are written in M2 and M5.
+| Spec | Covers |
+|---|---|
+| [`01-token-format`](specs/01-token-format.md) | Authority and attenuation block structure, facts and checks, money encoding, size limits |
+| [`02-caveat-language`](specs/02-caveat-language.md) | The caveat types, their Datalog compilation, `check if` vs `reject if`, reason codes, reading Datalog back |
+| [`03-attenuation`](specs/03-attenuation.md) | The `narrows()` partial order, the mint-time check, INV-1…INV-10, counterexamples |
+| [`04-lease-protocol`](specs/04-lease-protocol.md) | The seven ledger operations, the lease state machine, safety and liveness, partition and clock skew |
+| [`05-policy`](specs/05-policy.md) | Cedar in the hot path, the entity model, the test corpus |
+| [`06-drift-detection`](specs/06-drift-detection.md) | Intent binding, the drift oracle and its modes |
+| [`07-revocation`](specs/07-revocation.md) | Persist-then-publish, push and pull propagation, subtree semantics |
+| [`08-audit-chain`](specs/08-audit-chain.md) | The hash chain, custody, tamper detection |
+| [`09-decision-record`](specs/09-decision-record.md) | The ten-step decision, precedence, the record every decision writes |
+| [`10-scope-extraction`](specs/10-scope-extraction.md) | Route mapping, argument extraction, ambiguity refusal |
 
 ---
 
@@ -50,56 +53,55 @@ Specs `05`–`09` (policy, drift, revocation, audit, decision record) are writte
 
 | Document | What it holds |
 |---|---|
-| [`DECISIONS.md`](DECISIONS.md) | Append-only ADR log. **17 entries.** Every non-obvious choice, with the context that forced it and what it costs. The receipts behind every "we deferred X because Y" claim in the submission. |
-| [`JOURNAL.md`](JOURNAL.md) | The development narrative: what each ticket did, what was found while doing it, and what changed as a result. |
-| [`STATUS.md`](STATUS.md) | What is done, what remains, and the improvements worth making with their impact. |
-| [`threat-model.md`](threat-model.md) | 24 STRIDE threats, each with a mitigation, a status, and the test id covering it. Six came out of implementation rather than brainstorming. |
-| [`manual-test-report.md`](manual-test-report.md) | A hand-driven pass over the running system — 42 cases against a live PEP, each with the input sent, the behaviour the specs promise, and what actually came back. Where the automated suites and the deployed system disagree, this is what found it. |
-| [`TODO.md`](TODO.md) | The work queued out of that pass, ordered by cost of leaving it undone. Investigation items are marked as such, because the fix depends on the answer. |
+| [`DECISIONS.md`](DECISIONS.md) | Append-only ADR log, 70 entries. Every non-obvious choice, the context that forced it, and what it costs |
+| [`JOURNAL.md`](JOURNAL.md) | The development narrative: what each ticket did and found, the fix queue from the manual passes (items 1–34, cited in commits as "TODO item N"), and every closed gap |
+| [`threat-model.md`](threat-model.md) | 27 STRIDE threats, each with a mitigation, a status and the test covering it |
+| [`manual-test-report.md`](manual-test-report.md) | A hand-driven pass over the running system — the evidence behind the fix queue |
 
 ---
 
-## Learning the project
-
-New to AgentIAM? [`learn/`](learn/) is a 22-file guided tour, written to be read in order by
-someone who has never seen the project. Part 1 builds the vocabulary and the request path,
-Part 2 covers one feature per file, Part 3 covers testing, the bugs worth remembering, and
-every known gap. Start at [`learn/00-start-here.md`](learn/00-start-here.md).
-
-It is deliberately separate from the documents above: those are written for someone who
-already knows the system, `learn/` is written for someone who does not.
-
----
-
-## Demo and submission
+## Demo, operations and submission
 
 | Document | What it holds |
 |---|---|
-| [`DEMO.md`](DEMO.md) | The 8-beat demo runbook, 7 failure drills, judge archetypes, pre-presentation checklist |
-| [`RUNNING.md`](RUNNING.md) | The operator's guide under `DEMO.md`: bring-up, every surface with the output it actually produces, and what to do when it differs |
+| [`DEMO.md`](DEMO.md) | The intended 8-beat demo, failure drills, judge archetypes, pre-presentation checklist. `MASTER.md` §7.8 says which beats can be shown today |
+| [`RUNNING.md`](RUNNING.md) | The operator's guide: bring-up, every surface with the output it produces, what to do when it differs |
+| [`deployment.md`](deployment.md) | Image provenance, signing, rollback |
+| [`../deploy/k3s/README.md`](../deploy/k3s/README.md) | The Kubernetes manifests |
 
-`PLAN.md` §14 (evidence pack), §18 (research and IP), and §19 (submission checklist) cover the
+`PLAN.md` §14 (evidence pack), §18 (research and IP) and §19 (submission checklist) cover the
 rest of the submission material.
 
 ---
 
 ## Generated, not written
 
-| Path | Filled by |
-|---|---|
-| `benchmarks/` | T-053 (load), T-052 (chaos), T-019 (decision latency). Committed — these go in the submission. |
-| `openapi/` | Generated from the FastAPI apps, committed |
+| Path | Produced by | Checked in CI |
+|---|---|---|
+| `benchmarks/performance.md` | `make benchmarks` (from the PB-2 and NFR-2 JSON) | yes |
+| `benchmarks/chaos-results.md` | `make chaos` | yes |
+| `evidence/sbom.json` | `make sbom` — regenerate on Linux x86_64 only (see `scripts/generate_sbom.py`) | yes |
+| `evidence/evidence-pack.html` | `make evidence` | yes |
+
+`evidence/security-scan.md` is written by hand and documents every scanner waiver.
+
+---
+
+## Research
+
+[`../research/`](../research/README.md) is the research track: the gap analysis of claims
+against code, related work, a property-oriented threat model, and the plan for the lease
+contribution. Its README gives the reading order.
 
 ---
 
 ## Reading orders
 
-**To evaluate the project (a judge, or a reviewer):**
-`../README.md` → `STATUS.md` → `threat-model.md` → `specs/03-attenuation.md` §4 → `DEMO.md`
+**To evaluate the project (a judge or a reviewer):**
+`../README.md` → `MASTER.md` → `threat-model.md` → `specs/03-attenuation.md` §4 → `DEMO.md`
 
 **To understand the engineering:**
 `JOURNAL.md` → `DECISIONS.md` → the specs
 
 **To build the next ticket:**
-`ROADMAP.md` for the milestone → `PLAN.md` §9 for the ticket → its specs →
-`ENGINEERING-RULES.md` for the loop
+`STATUS.md` → `PLAN.md` §9 for the ticket → its specs → `ENGINEERING-RULES.md` for the loop

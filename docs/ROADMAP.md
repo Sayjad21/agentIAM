@@ -8,6 +8,9 @@
 > `ENGINEERING-RULES.md`.
 >
 > **Timeline:** no fixed deadline. Milestones advance on their exit gate, not on a date.
+>
+> **Progress:** the "Done" notes in Part 3 were written as each ticket closed and are not
+> kept current. `STATUS.md` is the record of what is done and what is left.
 
 ---
 
@@ -191,7 +194,7 @@ against a real injected violation · sibling budget test passing under both miti
 | Ticket | Build | Verify |
 |---|---|---|
 | T-018 | PEP ASGI app, httpx reverse proxy, `healthz`/`readyz`/`metrics` | **Done.** GET/POST/PUT/PATCH/DELETE, streaming verified over a real socket, header hygiene measured against a live upstream. Trailers unsupported on this stack (ADR-020). Enforces nothing yet — `/readyz` says so |
-| T-019 | `decision.py` — the pure 10-step pipeline, 40+ scenario tests, `pytest-benchmark` | **Done.** 54 scenarios; every reason code reachable or declared unreachable; **NFR-1 measured at ~5 µs mean, ~200× inside the 1 ms budget** — R-2's Rust-port trigger can be considered closed. Spec 09 written first, and its precedence contract is the substance |
+| T-019 | `decision.py` — the pure 10-step pipeline, 40+ scenario tests, `pytest-benchmark` | **Done.** 54 scenarios; every reason code reachable or declared unreachable; NFR-1 was first reported at ~5 µs, measured against a stub policy and since withdrawn; with real Cedar `decide()` is 430 µs p99, still inside the 1 ms budget (ADR-052, `benchmarks/performance.md`). Spec 09 written first, and its precedence contract is the substance |
 | T-020 | Config-driven scope mapping + JSONPath argument extraction | Correct against 15 route patterns |
 | T-021 | Local lease pool — zero-network reserve, async top-up | Verify with a socket monkeypatch that the reserve path makes **no** network call |
 | T-022 | Buffered async decision-record emitter + OTEL span | Back-pressure policy is deny-on-full-buffer, and that path is tested |

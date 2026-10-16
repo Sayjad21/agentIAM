@@ -32,8 +32,12 @@ AgentIAM addresses three things nobody currently enforces correctly:
 
 ## Status
 
-**Milestone 1 — Foundation, in progress.** The specification is complete. The workspace,
-tooling, and CI are in place (T-001); the protocol specs and domain models are next.
+**The core is built; the demo and submission are in progress.** Tokens, attenuation, the
+lease ledger, Cedar policy, the PEP, revocation, escalation, the audit chain, the console,
+observability, and the red-team, chaos, load and security suites are done — 48 of 52 in-scope
+tickets, ten specs, 70 ADRs, ~2,950 tests. What is left, and what is presented as working but
+is not yet wired, is in [`docs/STATUS.md`](docs/STATUS.md). The one-page overview is
+[`docs/MASTER.md`](docs/MASTER.md).
 
 Work proceeds ticket by ticket against `docs/PLAN.md`, sequenced by `docs/ROADMAP.md`.
 
@@ -59,7 +63,15 @@ On Windows, `make` is unavailable; `make.ps1` mirrors every target (ADR-003):
 .\make.ps1 check
 ```
 
-`make help` lists the rest.
+To run the whole system — control plane, console, PEP and stub tools — and drive the demo
+scenario through it:
+
+```bash
+make demo-up             # build and start everything, wait for healthy (~20 s)
+make demo-seed           # send the demo traffic; then open http://localhost:8000
+```
+
+[`docs/RUNNING.md`](docs/RUNNING.md) walks every surface. `make help` lists the rest.
 
 ### Layout
 
@@ -69,9 +81,10 @@ packages/
   agentiam-sdk/           what agent developers import
   agentiam-pep/           the enforcement point (hot path)
   agentiam-controlplane/  issuance, ledger, policy, revocation, audit, console
-  agentiam-demo/          reference procurement agent, stub tools, demo scenarios
+  agentiam-demo/          stub upstream tools for the demo (no AI agent yet)
 tests/                    unit · property · integration · e2e · security · chaos · perf
-docs/                     specification, roadmap, engineering rules, ADRs
+docs/                     plan, specs, status, ADRs, journal, runbooks
+research/                 related work, gap analysis, the lease research plan
 ```
 
 `agentiam-core` is I/O-free by contract, enforced statically on every CI run by
@@ -82,27 +95,28 @@ this project makes is a claim about that package.
 
 ## Documentation
 
-| Document | What it governs |
+| Document | What it is for |
 |---|---|
-| [`docs/PLAN.md`](docs/PLAN.md) | Authoritative on **what** to build — architecture, protocol specs, data model, API contracts, the full ticket list, testing strategy |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Milestone sequencing, exit gates, scope decisions |
-| [`docs/ENGINEERING-RULES.md`](docs/ENGINEERING-RULES.md) | Authoritative on **how** to build — non-negotiable rules, Definition of Done, review cadence |
-| [`docs/DEMO.md`](docs/DEMO.md) | Demo runbook, failure drills, judge handling |
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Append-only ADR log |
-| `docs/specs/` | Protocol specifications — written before the code that implements them |
+| [`docs/MASTER.md`](docs/MASTER.md) | The whole picture on one page |
+| [`docs/STATUS.md`](docs/STATUS.md) | What is built, what is left, what is known to be wrong |
+| [`docs/PLAN.md`](docs/PLAN.md) | Authoritative on **what** to build |
+| [`docs/ENGINEERING-RULES.md`](docs/ENGINEERING-RULES.md) | Authoritative on **how** to build |
+| [`docs/README.md`](docs/README.md) | The index of every other document |
 
 ---
 
 ## Stack
 
 Python 3.12 · uv · FastAPI · Pydantic v2 · SQLAlchemy 2.0 (async) · Alembic · PostgreSQL 16 ·
-Redis 7 · Keycloak (OIDC) · biscuit-python · cedarpy · Ollama (Qwen2.5-7B, open weights,
-self-hosted) · pytest · hypothesis · testcontainers · ruff · mypy --strict · OpenTelemetry ·
-Grafana
+Redis 7 · Keycloak (OIDC) · biscuit-python · cedarpy · Ollama · pytest · hypothesis ·
+testcontainers · ruff · mypy --strict · OpenTelemetry · Grafana
 
-**Every dependency is free and open source.** There is no paid service and no proprietary
-black-box API anywhere in this system, and all model weights are open-weight and self-hosted.
-That is a design constraint, not a budget compromise.
+**Every dependency is free and open source, and nothing on the enforcement path calls out.**
+One exception, stated rather than hidden: the natural-language policy compiler uses hosted
+inference (Gemini or Groq, free tier) when an API key is configured, because that is what made
+it score 27/30 (ADR-040). Without a key it runs on a local open-weight model through Ollama,
+and `AGENTIAM_LLM_BACKEND=ollama` forces that. The compiler only drafts policy; nothing it
+produces is enforced until it passes the test corpus and an operator activates it.
 
 ---
 
@@ -111,8 +125,9 @@ That is a design constraint, not a budget compromise.
 - **The hot path never blocks on the network.** Verification, policy evaluation, revocation
   checks, and budget reservation are all local. Leases and revocation lists propagate
   asynchronously.
-- **Fail closed.** No lease, stale policy bundle, unreachable control plane → deny. Fail-open
-  is per-scope, opt-in, and audited.
+- **Fail closed.** No lease, stale policy bundle, unreachable control plane → deny. There is no
+  fail-open mode for authorization; only the advisory drift score fails open when its model
+  is unreachable.
 - **Tokens are immutable.** Elevation issues a new token. Narrowing creates a new token.
 - **Every deny is explainable.** A decision record names the exact caveat, policy statement, or
   budget that caused it. A deny without a reason is a bug.
@@ -128,7 +143,7 @@ Stated up front, because they are real:
   short TTLs and fast revocation; proof-of-possession binding is documented future work. This
   is the same trust model as every OAuth deployment in production today.
 - **Stranded lease window.** A hard-killed enforcement point strands its lease until TTL
-  expiry. Bounded, measured, and reclaimed by the reaper.
+  expiry. Bounded, measured, and reclaimed by the control plane's reaper.
 - **Slow-drift evasion.** An adversary who drifts intent gradually enough can stay under the
   detection threshold. A genuine open problem, named rather than hidden.
 - **Agent-reported amounts.** Where the enforcement point cannot independently determine the
