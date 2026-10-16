@@ -408,7 +408,8 @@ refuses on age. `/readyz` reports `PolicyCache.status()`: serial, loads, rejecti
 
 #### 5.7.5 What the cache must change to be wired
 
-Measured against `PolicyCache` as T-025 left it, and each a precondition for §5.7.4:
+Measured against `PolicyCache` as T-025 left it, and each a precondition for §5.7.4. All three
+are done (APICTA-01 Part C), each pinned by a test:
 
 | # | Finding | Required change |
 |---|---|---|
@@ -416,11 +417,25 @@ Measured against `PolicyCache` as T-025 left it, and each a precondition for §5
 | 2 | No `.bundle`; `Pipeline` reads `policy.bundle.version` for every decision record | Expose the current bundle, or the unavailable placeholder |
 | 3 | No way to mark an unchanged bundle as still current (§5.3 amendment) | `confirm(serial)` |
 
+**A fourth, found wiring it:** the pipeline read `policy.bundle.version` when it wrote the
+record, after awaiting an escalation or a drift score — so a bundle loaded during that await
+was credited with a decision made under its predecessor. The engine and the label are now read
+together, with no await between them, and a test loads a bundle mid-request to prove it.
+
 #### 5.7.6 Latency
 
-The target is that a policy activated in the console is enforced by every connected PEP within
-**one second**, by push; within one pull interval without it. The measured figure belongs here
-once Part C exists.
+The target: a policy activated in the console is enforced by every connected PEP within **one
+second** by push, within one pull interval without it. Measured:
+
+| | |
+|---|---|
+| Published → PEP loaded, push, real Redis (integration test) | **2.4 ms** |
+| Published → PEP loaded, pull-only at a 0.2 s interval | 196 ms |
+| Console click → running PEP refuses, demo stack (`agt-payer` quarantined) | **42 ms** (31 ms of it the activation request, corpus gate included) |
+| One load on the event loop (verify + parse, 51-case corpus bundle) | 0.34 ms median, 0.37 ms p99 |
+
+A load costs the hot path one bundle parse, once per change. A confirmation costs one signature
+check (~0.2 ms) per pull.
 
 ---
 

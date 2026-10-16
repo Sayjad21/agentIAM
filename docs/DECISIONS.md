@@ -4491,3 +4491,31 @@ post-import `setval` — turned a test red every time.
 
 Not done here: the k3s manifests do not mount the signing key, so a k3s control plane answers
 activation with 503 until they do (tracked in APICTA-01 Part C).
+
+### ADR-073 addendum — Part C: the PEP side, and gap 26 closed
+
+**Status:** accepted · **Ticket:** APICTA-01 Part C · **Closes:** `STATUS.md` gap 26
+
+`agentiam_pep.policy_sync.PolicySync` subscribes to `agentiam:policy`, pulls every 30 s, and
+fetches `current` on either; a newer bundle is loaded, the held one (same serial, verified
+signature, equal content) is confirmed, anything else is refused or ignored with a named
+outcome. `PolicyCache` takes each bundle's own catalogue, exposes `bundle`, and measures age from
+`confirm()`. `pep_service` enforces through the cache, syncs once (bounded) before serving, and
+reports the sync under `/readyz`'s `checks.policy`. The k3s control plane now mounts the Secret
+and reads the signing key and boot bundle from it.
+
+Two decisions here, each with a test that fails without it:
+
+1. **A confirmation needs the same evidence as a load.** Same serial alone would let anything
+   able to answer for the control plane keep a PEP looking fresh while it missed real updates;
+   the bundle must verify and equal the one held. A valid bundle under the held serial with
+   different content is reported `mismatch`, and a control plane *behind* the PEP is `behind` —
+   neither restarts the clock.
+2. **The record names the bundle that decided.** Reading the version at record time, after an
+   await, credited a decision to a bundle loaded mid-request.
+
+Measured: published → PEP loaded 2.4 ms by push; click → enforced 42 ms on the demo stack; a
+restarted PEP fetched serial 3 before serving rather than enforcing its serial-1 boot file; an
+unchanged policy was confirmed by the pull and `confirmed_at` moved. Also fixed while running
+the full suite: `test_mandates_reach_the_full_depth_range` missed depth 1 or 8 in 3 of 300
+campaigns at 200 samples (hypothesis biases toward simple draws); 600 samples missed 0 of 300.

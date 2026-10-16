@@ -392,6 +392,54 @@ class TestAssembly:
         body = TestClient(service.app).get("/readyz").json()
         assert body["enforcing"] is True
 
+    def test_the_deployed_pep_enforces_through_a_cache_it_keeps_current(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """APICTA-01: a published bundle reaches the PEP without a restart (gap 26).
+
+        Until then the pipeline held a `CedarEngine` built once from disk, so nothing the
+        control plane published could ever change what this PEP enforced.
+        """
+        from agentiam_pep.policy_cache import PolicyCache
+        from agentiam_pep.policy_sync import PolicySync
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        assert isinstance(service.policy, PolicyCache)
+        assert service.policy.serial == 1
+        assert isinstance(service.policy_sync, PolicySync)
+        assert service.pipeline._policy is service.policy
+
+    def test_readyz_reports_the_policy_sync(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        policy = TestClient(service.app).get("/readyz").json()["checks"]["policy"]
+        assert policy["serial"] == 1
+        assert policy["stale"] is False
+        assert policy["last_sync"] is None  # nothing has synced: the lifespan has not run
+
+    def test_policy_timing_is_configurable(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _base_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("AGENTIAM_PEP_POLICY_PULL_INTERVAL_S", "5")
+        monkeypatch.setenv("AGENTIAM_PEP_POLICY_MAX_STALENESS_S", "60")
+        settings = pep_service.ServiceSettings.from_env()
+        assert settings.policy_pull_interval_s == 5.0
+        assert settings.policy_max_staleness_s == 60.0
+
+    def test_policy_timing_defaults_follow_the_spec(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Spec 05 §5.7.4: a 30 s pull against a 300 s staleness limit, about ten missed syncs.
+        _base_env(monkeypatch, tmp_path)
+        settings = pep_service.ServiceSettings.from_env()
+        assert (settings.policy_pull_interval_s, settings.policy_max_staleness_s) == (30.0, 300.0)
+
     def test_without_an_ollama_url_drift_is_off_not_silently_absent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

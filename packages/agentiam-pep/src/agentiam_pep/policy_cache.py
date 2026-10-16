@@ -19,13 +19,20 @@ Three rules, and the second is the one that looks inconsistent:
 Hot reload is a single attribute rebind, which is atomic under the GIL. In-flight requests
 finish against the engine they started with — the correct outcome rather than a compromise,
 since a decision made under bundle *n* was made under bundle *n*.
+
+**Age counts from the last confirmation, not the load** (spec 05 §5.3 as amended by
+APICTA-01). A sync that finds the held serial still current calls `confirm()`. Measured before
+the change: a cache loaded at *t* was stale at *t* + 301 s with the policy unchanged and the
+control plane healthy, and nothing could refresh it — re-loading the same serial is a rollback.
+Measured cost of a load, for the record: ~0.34 ms (verify + parse of the 51-case corpus
+bundle), paid on the event loop only when policy changes.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from agentiam_core.bundles import BundleSignatureError, verify_bundle
+from agentiam_core.bundles import BundleSignatureError, PolicyBundle, verify_bundle
 from agentiam_pep.errors import PepError
 from agentiam_pep.policy import CedarEngine, PolicyBundleError
 
@@ -35,7 +42,6 @@ if TYPE_CHECKING:
 
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-    from agentiam_core.bundles import PolicyBundle
     from agentiam_pep.policy import AgentPrincipal, BoundCedarEngine, ToolFacts
 
 __all__ = ["BundleRejected", "PolicyCache"]
@@ -56,14 +62,20 @@ class PolicyCache:
         max_staleness: timedelta,
         now: Callable[[], datetime],
     ) -> None:
-        """Start empty. Until a bundle loads, the engine reports itself unavailable."""
+        """Start empty. Until a bundle loads, the engine reports itself unavailable.
+
+        `tools=None` — the default — means *use each bundle's own catalogue* (spec 05 §5.6).
+        It used to become `{}`, an explicit empty catalogue that overrides the bundle's, so a
+        cache built without one silently disarmed every resource-attribute rule (measured:
+        5 entries directly, 0 through the cache).
+        """
         self._public_key = public_key
-        self._tools = dict(tools or {})
+        self._tools = dict(tools) if tools is not None else None
         self._max_staleness = max_staleness
         self._now = now
         self._engine: CedarEngine | None = None
         self._serial: int | None = None
-        self._loaded_at: datetime | None = None
+        self._confirmed_at: datetime | None = None
         self.rejected = 0
         self.loaded = 0
 
@@ -75,15 +87,30 @@ class PolicyCache:
         return self._serial
 
     @property
+    def public_key(self) -> Ed25519PublicKey:
+        """The key every bundle must verify against — `PolicySync` checks confirmations with it."""
+        return self._public_key
+
+    @property
+    def bundle(self) -> PolicyBundle:
+        """The bundle being enforced, or an unnamed placeholder before any has loaded.
+
+        `Pipeline` records `bundle.version` on every decision; an empty version makes it fall
+        back to its configured label.
+        """
+        engine = self._engine
+        return engine.bundle if engine is not None else PolicyBundle(version="", cedar_source="")
+
+    @property
     def stale(self) -> bool:
-        """Whether the held bundle is past `max_staleness`.
+        """Whether the held bundle went unconfirmed for longer than `max_staleness`.
 
         An empty cache is not *stale* — it is unavailable, which is a different denial with a
         different fix (fetch a bundle, versus refresh a stale one).
         """
-        if self._loaded_at is None:
+        if self._confirmed_at is None:
             return False
-        return self._now() - self._loaded_at > self._max_staleness
+        return self._now() - self._confirmed_at > self._max_staleness
 
     def status(self) -> dict[str, object]:
         """What `/readyz` reports. A bundle being refused repeatedly is EC-P01's alert."""
@@ -92,6 +119,9 @@ class PolicyCache:
             "loaded": self.loaded,
             "rejected": self.rejected,
             "stale": self.stale,
+            "confirmed_at": (
+                self._confirmed_at.isoformat() if self._confirmed_at is not None else None
+            ),
         }
 
     # -- loading ------------------------------------------------------------------
@@ -129,8 +159,21 @@ class PolicyCache:
         # bundle visible. One rebind, atomic under the GIL.
         self._engine = engine
         self._serial = bundle.serial
-        self._loaded_at = self._now()
+        self._confirmed_at = self._now()
         self.loaded += 1
+
+    def confirm(self, serial: int) -> bool:
+        """Record that `serial` is still the current bundle. Loads nothing.
+
+        The caller has established that the control plane's current bundle *is* the one held —
+        same serial, verified signature (`PolicySync` checks both). Returns whether it matched;
+        a confirmation of any other serial is evidence about a different bundle and changes
+        nothing.
+        """
+        if self._serial is None or serial != self._serial:
+            return False
+        self._confirmed_at = self._now()
+        return True
 
     # -- serving ------------------------------------------------------------------
 

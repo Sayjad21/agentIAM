@@ -313,7 +313,13 @@ class TestStatus:
             cache.load(a_bundle(serial=1), sign_bundle(a_bundle(serial=1), key))
 
         status = cache.status()
-        assert status == {"serial": 4, "loaded": 1, "rejected": 1, "stale": False}
+        assert status == {
+            "serial": 4,
+            "loaded": 1,
+            "rejected": 1,
+            "stale": False,
+            "confirmed_at": NOW.isoformat(),
+        }
 
     def test_an_empty_cache_reports_no_serial(self, key: Ed25519PrivateKey) -> None:
         cache, _ = a_cache(key)
@@ -335,3 +341,108 @@ class TestKeyHelpers:
         bundle = a_bundle()
         cache.load(bundle, sign_bundle(bundle, key))
         assert cache.serial == 1
+
+
+# --- APICTA-01 Part C: what the cache must change to be wired (spec 05 §5.7.5) -----------
+
+#: A forbid that only fires through the catalogue — `payment_api` is critical only if the
+#: bundle's own `tools` says so.
+_SENSITIVE = (
+    'permit(principal, action == Action::"invoice:read", resource);\n'
+    'forbid(principal, action, resource) when { resource.sensitivity == "critical" };\n'
+)
+
+
+class TestTheCatalogueComesFromTheBundle:
+    def test_a_cache_given_no_catalogue_uses_the_bundles_own(self, key: Ed25519PrivateKey) -> None:
+        """Measured before the fix: 5 catalogue entries directly, 0 through the cache.
+
+        `dict(tools or {})` turned "none given" into an explicit empty catalogue, which
+        overrides the bundle's (ADR-069) — so every resource looked `low` and this forbid
+        could never fire.
+        """
+        cache = PolicyCache(
+            public_key=key.public_key(), max_staleness=timedelta(seconds=300), now=Clock()
+        )
+        bundle = PolicyBundle(
+            version="v1",
+            cedar_source=_SENSITIVE,
+            serial=1,
+            tools={"invoice_api": {"sensitivity": "critical"}},
+        )
+        cache.load(bundle, sign_bundle(bundle, key))
+        assert not cache.bound(a_principal()).evaluate(ctx()).allowed
+
+    def test_an_explicit_catalogue_still_wins(self, key: Ed25519PrivateKey) -> None:
+        cache, _ = a_cache(key)  # TOOLS says invoice_api is low
+        bundle = PolicyBundle(
+            version="v1",
+            cedar_source=_SENSITIVE,
+            serial=1,
+            tools={"invoice_api": {"sensitivity": "critical"}},
+        )
+        cache.load(bundle, sign_bundle(bundle, key))
+        assert cache.bound(a_principal()).evaluate(ctx()).allowed
+
+
+class TestTheCurrentBundleIsVisible:
+    def test_bundle_is_the_one_enforced(self, key: Ed25519PrivateKey) -> None:
+        # `Pipeline` reads `policy.bundle.version` for every decision record.
+        cache, _ = a_cache(key)
+        bundle = a_bundle(serial=4, version="bundle-4")
+        cache.load(bundle, sign_bundle(bundle, key))
+        assert cache.bundle == bundle
+
+    def test_an_empty_cache_has_an_unnamed_placeholder(self, key: Ed25519PrivateKey) -> None:
+        cache, _ = a_cache(key)
+        assert cache.bundle.version == ""
+
+
+class TestConfirmation:
+    """Spec 05 §5.3 amended: age counts from the last time the PEP knew it was current.
+
+    Measured before: stale at load + 301 s with the policy unchanged, and re-loading the same
+    bundle to refresh it was refused as a rollback. Every PEP would have refused everything
+    five minutes after boot.
+    """
+
+    def test_confirming_the_held_serial_restarts_the_clock(self, key: Ed25519PrivateKey) -> None:
+        cache, clock = a_cache(key, max_staleness=timedelta(seconds=300))
+        bundle = a_bundle(serial=3)
+        cache.load(bundle, sign_bundle(bundle, key))
+
+        clock.t = NOW + timedelta(seconds=299)
+        assert cache.confirm(3)
+        clock.t = NOW + timedelta(seconds=500)
+        assert not cache.stale
+
+    def test_an_unchanged_bundle_is_stale_only_if_nothing_confirms_it(
+        self, key: Ed25519PrivateKey
+    ) -> None:
+        cache, clock = a_cache(key, max_staleness=timedelta(seconds=300))
+        bundle = a_bundle(serial=3)
+        cache.load(bundle, sign_bundle(bundle, key))
+        clock.t = NOW + timedelta(seconds=301)
+        assert cache.stale
+
+    def test_confirming_another_serial_changes_nothing(self, key: Ed25519PrivateKey) -> None:
+        # A confirmation is evidence about one bundle; it must not refresh a different one.
+        cache, clock = a_cache(key, max_staleness=timedelta(seconds=300))
+        bundle = a_bundle(serial=3)
+        cache.load(bundle, sign_bundle(bundle, key))
+        clock.t = NOW + timedelta(seconds=299)
+        assert not cache.confirm(4)
+        clock.t = NOW + timedelta(seconds=301)
+        assert cache.stale
+
+    def test_an_empty_cache_cannot_be_confirmed(self, key: Ed25519PrivateKey) -> None:
+        cache, _ = a_cache(key)
+        assert not cache.confirm(1)
+
+    def test_status_reports_when_it_was_last_confirmed(self, key: Ed25519PrivateKey) -> None:
+        cache, clock = a_cache(key)
+        bundle = a_bundle(serial=3)
+        cache.load(bundle, sign_bundle(bundle, key))
+        clock.t = NOW + timedelta(seconds=10)
+        cache.confirm(3)
+        assert cache.status()["confirmed_at"] == (NOW + timedelta(seconds=10)).isoformat()

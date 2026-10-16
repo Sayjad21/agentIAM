@@ -55,7 +55,7 @@ fallback) and T-059 (submission package).
 |---|---|
 | APICTA-07 | DONE — verified locally; CI pending (Actions billing block) |
 | APICTA-04 | DONE — verified locally and live on the demo stack; CI pending |
-| APICTA-01 | IN_PROGRESS — Parts A (spec) and B (control plane) done; C, D to go |
+| APICTA-01 | IN_PROGRESS — Parts A, B and C done (gap 26 closed); D (offline compiler fallback) to go |
 | APICTA-03 | TODO |
 | APICTA-05 | TODO |
 | APICTA-02 | TODO |
@@ -195,7 +195,7 @@ Then STATUS.md §3: delete the "Revoking an agent from the console" row; `MASTER
 
 ## APICTA-01 — Policy publication to the PEP, and a template fallback for the compiler
 
-- **Status:** IN_PROGRESS — Parts A and B done (spec 05 §5.7, ADR-073 and its addendum); C, D to go
+- **Status:** IN_PROGRESS — Parts A, B, C done (spec 05 §5.7, ADR-073 and two addenda; gap 26 closed); D to go
 - **Maps to:** gap 26; T-031 (deferred, reopened here); STATUS.md §3 "Policy Activated
   Successfully!" row
 - **Parts:** A (spec) → B (control plane) → C (PEP) → D (fallback). One sitting each.
@@ -205,6 +205,9 @@ Then STATUS.md §3: delete the "Revoking an agent from the console" row; `MASTER
   bootstrap added the key without rotating the root, the boot bundle imported as serial 1,
   anonymous/non-approver/failing activations answered 401/403/409, a passing one published
   serial 2 and Redis carried `{"event": "policy:reload", "serial": 2}`, rollback published 3.
+- **Part C: DONE** — see ADR-073's Part C addendum. Live: console click → running PEP refusal
+  42 ms; rollback restored; a restarted PEP fetched the current serial before serving; the pull
+  confirmed an unchanged policy. k3s wiring included.
 
 **Problem statement.**
 `POST /policy/activate` (`packages/agentiam-controlplane/src/agentiam_controlplane/app.py:708`)

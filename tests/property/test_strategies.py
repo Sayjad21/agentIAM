@@ -152,7 +152,10 @@ class TestShapeCoverage:
         assert any(not r.isascii() for r in roles), "no non-ASCII principal generated"
 
     def test_mandates_reach_the_full_depth_range(self) -> None:
-        depths = {m.max_depth for m in _sample(mandates(), 200)}  # type: ignore[attr-defined]
+        # 600, not 200: hypothesis biases draws toward simple values, and at 200 one campaign
+        # in a hundred missed depth 1 or 8 (measured: 3 of 300), which surfaced as a red
+        # `make check` unrelated to the change under test. 600 missed 0 of 300.
+        depths = {m.max_depth for m in _sample(mandates(), 600)}  # type: ignore[attr-defined]
         assert min(depths) == 1
         assert max(depths) == 8
 

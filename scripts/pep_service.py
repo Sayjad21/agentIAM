@@ -79,12 +79,15 @@ if TYPE_CHECKING:
     from biscuit_auth import PublicKey
     from fastapi import FastAPI
 
+    from agentiam_core.bundles import PolicyBundle
     from agentiam_core.decision import DriftOracle
     from agentiam_core.models import BudgetDimension
     from agentiam_core.tokens import VerifiedToken
     from agentiam_pep.config import PepSettings
     from agentiam_pep.pipeline import Pipeline
     from agentiam_pep.policy import AgentPrincipal, CedarEngine
+    from agentiam_pep.policy_cache import PolicyCache
+    from agentiam_pep.policy_sync import PolicySync
     from agentiam_pep.pool import LeaseGrant, LeasePool
 
 logger = logging.getLogger(__name__)
@@ -251,6 +254,12 @@ class ServiceSettings:
     #: "not assessed" (APICTA-07). `None` keeps `drift.DEFAULT_ASSESS_TIMEOUT_S`, which is
     #: measured; see its comment. Read from `AGENTIAM_PEP_DRIFT_EMBED_TIMEOUT_MS`.
     drift_embed_timeout_ms: float | None = None
+    #: How often the PEP fetches the control plane's current policy bundle regardless of
+    #: pushes (spec 05 §5.7.4). `AGENTIAM_PEP_POLICY_PULL_INTERVAL_S`.
+    policy_pull_interval_s: float = 30.0
+    #: How long a bundle may go unconfirmed before the PEP refuses with
+    #: `POLICY_BUNDLE_STALE` (spec 05 §5.3). `AGENTIAM_PEP_POLICY_MAX_STALENESS_S`.
+    policy_max_staleness_s: float = 300.0
 
     @classmethod
     def from_env(cls) -> ServiceSettings:
@@ -293,6 +302,10 @@ class ServiceSettings:
             default_role=os.environ.get(f"{ENV_PREFIX}DEFAULT_ROLE", "").strip() or DEFAULT_ROLE,
             ollama_url=os.environ.get(f"{ENV_PREFIX}OLLAMA_URL", "").strip() or None,
             drift_embed_timeout_ms=_optional_positive_float(f"{ENV_PREFIX}DRIFT_EMBED_TIMEOUT_MS"),
+            policy_pull_interval_s=_optional_positive_float(f"{ENV_PREFIX}POLICY_PULL_INTERVAL_S")
+            or 30.0,
+            policy_max_staleness_s=_optional_positive_float(f"{ENV_PREFIX}POLICY_MAX_STALENESS_S")
+            or 300.0,
             # Every other setting here reads an override and this one did not, so the
             # 5,000 default was the hard ceiling on any single payment a deployed PEP
             # could authorize — a request larger than the lease is refused with
@@ -304,23 +317,43 @@ class ServiceSettings:
         )
 
 
-def load_policy(settings: ServiceSettings) -> CedarEngine:
-    """Read the bundle, verify its signature, and build the engine.
+def load_policy_cache(settings: ServiceSettings, *, now: Callable[[], datetime]) -> PolicyCache:
+    """The boot bundle in a `PolicyCache` — what the deployed PEP enforces (APICTA-01).
+
+    The same file, the same strict reader and the same signature check as `load_policy`, but
+    loaded into the cache `PolicySync` keeps current, so a bundle published later replaces this
+    one without a restart and an unchanged one is confirmed rather than going stale (spec 05
+    §5.7.4). The cache takes each bundle's own tool catalogue (spec 05 §5.6).
 
     Raises:
-        ServiceConfigError: The bundle is unreadable, its signature does not verify, or
-            its Cedar does not parse. Every one of those is fail-closed at boot.
+        ServiceConfigError: Unreadable, malformed, unverifiable, or unparseable — fail closed
+            at boot, as before.
     """
+    from agentiam_core.bundles import public_key_from_hex
+    from agentiam_pep.policy_cache import BundleRejected, PolicyCache
+
+    bundle, signature = _read_boot_bundle(settings)
+    try:
+        public_key = public_key_from_hex(settings.policy_public_key_hex)
+    except ValueError as exc:
+        raise ServiceConfigError(f"policy public key is malformed: {exc}") from exc
+    cache = PolicyCache(
+        public_key=public_key,
+        max_staleness=timedelta(seconds=settings.policy_max_staleness_s),
+        now=now,
+    )
+    try:
+        cache.load(bundle, signature)
+    except BundleRejected as exc:
+        raise ServiceConfigError(f"policy bundle refused at boot: {exc}") from exc
+    return cache
+
+
+def _read_boot_bundle(settings: ServiceSettings) -> tuple[PolicyBundle, bytes]:
+    """Read the boot bundle file and its signature with the shared reader."""
     import json
 
-    from agentiam_core.bundles import (
-        BundleSignatureError,
-        BundleWireError,
-        bundle_from_file,
-        public_key_from_hex,
-        verify_bundle,
-    )
-    from agentiam_pep.policy import CedarEngine, PolicyBundleError
+    from agentiam_core.bundles import BundleWireError, bundle_from_file
 
     try:
         payload = json.loads(settings.policy_bundle_path.read_text(encoding="utf-8"))
@@ -329,15 +362,27 @@ def load_policy(settings: ServiceSettings) -> CedarEngine:
         raise ServiceConfigError(f"cannot read the policy bundle: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise ServiceConfigError(f"policy bundle is not valid JSON: {exc}") from exc
+    try:
+        return bundle_from_file(payload, signature), signature
+    except BundleWireError as exc:
+        raise ServiceConfigError(f"policy bundle file is malformed: {exc}") from exc
+
+
+def load_policy(settings: ServiceSettings) -> CedarEngine:
+    """Read the bundle, verify its signature, and build the engine.
+
+    Raises:
+        ServiceConfigError: The bundle is unreadable, its signature does not verify, or
+            its Cedar does not parse. Every one of those is fail-closed at boot.
+    """
+    from agentiam_core.bundles import BundleSignatureError, public_key_from_hex, verify_bundle
+    from agentiam_pep.policy import CedarEngine, PolicyBundleError
 
     # The one shared reader (`bundle_from_file`), strict about every signed field — the
     # catalogue included, so a tampered `sensitivity` is a boot failure rather than a silently
     # disarmed forbid. It used to rebuild the bundle field by field here, and would have
     # verified a different bundle the moment bootstrap began signing `created_at`.
-    try:
-        bundle = bundle_from_file(payload, signature)
-    except BundleWireError as exc:
-        raise ServiceConfigError(f"policy bundle file is malformed: {exc}") from exc
+    bundle, signature = _read_boot_bundle(settings)
 
     try:
         verify_bundle(bundle, signature, public_key_from_hex(settings.policy_public_key_hex))
@@ -526,7 +571,9 @@ class Service:
 
     app: FastAPI
     revocation: object
-    policy: CedarEngine
+    #: The cache `policy_sync` keeps current (APICTA-01) — not a fixed engine any more.
+    policy: PolicyCache
+    policy_sync: PolicySync
     #: `None` when `AGENTIAM_PEP_OLLAMA_URL` is unset — a legitimate, safe configuration
     #: (spec 06 §2.1), not a degraded one. Exposed rather than left implicit so a caller
     #: (or a test) does not have to infer it from an absent constructor argument.
@@ -572,13 +619,14 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_pep.extractor import RouteTable
     from agentiam_pep.pipeline import Pipeline, PipelineSettings
     from agentiam_pep.policy import AgentPrincipal
+    from agentiam_pep.policy_sync import PolicySync
     from agentiam_pep.pool import LeasePool, PoolSettings
     from agentiam_pep.revocation import RedisRevocationSet
     from agentiam_pep.settlement import SettlementQueue, SettlementSettings
 
     engine = make_engine(settings.database_url)
     factory = make_session_factory(engine)
-    policy = load_policy(settings)
+    policy = load_policy_cache(settings, now=lambda: datetime.now(UTC))
     role_assignments = load_role_assignments(settings)
 
     settlement = SettlementQueue(
@@ -598,9 +646,19 @@ def build_service(settings: ServiceSettings) -> Service:
     )
     emitter = DecisionEmitter(LedgerAuditSink(factory), EmitterSettings())
 
+    # One Redis client and one control-plane client, shared by the two background consumers
+    # that keep this PEP current: revocations (spec 07 §5) and policy (spec 05 §5.7.4).
+    redis_client = Redis.from_url(settings.redis_url)
+    control_plane_client = httpx.AsyncClient(base_url=settings.control_plane_url)
     revocation = RedisRevocationSet(
-        redis_client=Redis.from_url(settings.redis_url),
-        control_plane_client=httpx.AsyncClient(base_url=settings.control_plane_url),
+        redis_client=redis_client,
+        control_plane_client=control_plane_client,
+    )
+    policy_sync = PolicySync(
+        cache=policy,
+        control_plane_client=control_plane_client,
+        redis_client=redis_client,
+        pull_interval_s=settings.policy_pull_interval_s,
     )
 
     drift_oracle = (
@@ -702,6 +760,9 @@ def build_service(settings: ServiceSettings) -> Service:
         await emitter.start()
         await settlement.start()
         await revocation.start()
+        # One bounded fetch before serving, so a PEP restarted after a policy change does not
+        # spend a pull interval enforcing its stale boot file; then push and pull run on.
+        await policy_sync.start()
         # Keeps the held lease fresh on a timer rather than waiting for a request to notice
         # it aged out. Started before `prime()` so the first lease is under renewal from the
         # moment it exists; the sweep does nothing until there is something to renew.
@@ -763,17 +824,24 @@ def build_service(settings: ServiceSettings) -> Service:
                 warm_up.cancel()
             if drift_oracle is not None:
                 await drift_oracle.embeddings.aclose()
+            await policy_sync.aclose()
             await revocation.aclose()
             await settlement.aclose()
             await pool.aclose()
             await emitter.aclose()
             await engine.dispose()
 
-    app = create_app(settings=settings.pep, pipeline=pipeline, lifespan=lifespan)
+    app = create_app(
+        settings=settings.pep,
+        pipeline=pipeline,
+        lifespan=lifespan,
+        readiness=lambda: {"policy": policy_sync.status()},
+    )
     return Service(
         app=app,
         revocation=revocation,
         policy=policy,
+        policy_sync=policy_sync,
         drift_oracle=drift_oracle,
         pool=pool,
         principal_for=principal_for,

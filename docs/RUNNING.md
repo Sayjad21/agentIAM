@@ -51,7 +51,7 @@ Where things listen on the host:
 |---|---|---|
 | Control plane + console | http://localhost:8000 | Every screen, and the `/v1` API |
 | PEP | http://localhost:8082 | The enforcement proxy — `/proxy/...` |
-| Keycloak | http://localhost:8085 | OIDC. Runs, but the console is **not** wired to it — see §10 |
+| Keycloak | http://localhost:8085 | OIDC. Runs, but the console is **not** wired to it; the demo sign-in stands in — see §10 |
 | Postgres | localhost:5433 | `agentiam` / `agentiam` |
 | Redis | localhost:6379 | Revocation push channel |
 
@@ -341,7 +341,7 @@ looks empty, check the API under it before suspecting the page.
 | `/budgets` | The pool: total, committed, leased | `GET /v1/budgets/dashboard` |
 | `/identity-tree?task_id=<task>` | The delegation tree, one node per agent, current minting only | `GET /v1/tree/{task_id}` |
 | `/audit` | The hash-chained ledger | `POST /v1/audit/verify`, `GET /v1/audit/search` |
-| `/escalations` | Pending requests. The approve/deny buttons need a login this stack does not wire — §10 | `GET /v1/escalations` |
+| `/escalations` | Pending requests, approved or denied by a signed-in approver (the passwordless demo sign-in — §10) | `GET /v1/escalations` |
 | `/policy` | Cedar authoring, compile, activate, and the published bundle history with rollback. Activating and rolling back need a signed-in approver (Tanvir or Farhana) | `POST /policy/compile`, `/test`, `/activate`, `/republish`; `GET /v1/policy/bundles/current` |
 
 **Publishing policy** (APICTA-01, spec 05 §5.7). Activating signs the policy with the
@@ -349,9 +349,14 @@ bundle-signing key bootstrap wrote, stores it as the next serial and announces i
 (`agentiam:policy`); the history table under the editor lists every serial, and "Roll back to
 this" re-publishes an earlier one under a new serial. The first row is the boot bundle every PEP
 started from, imported at control-plane startup and recorded as `bootstrap`. Check it with
-`curl -s http://localhost:8000/v1/policy/bundles/current | head -c 200`. **Until APICTA-01 Part C
-lands, PEPs do not yet fetch published bundles** — they still enforce the boot bundle until they
-restart.
+`curl -s http://localhost:8000/v1/policy/bundles/current | head -c 200`. **Every running PEP
+enforces it without a restart**: it fetches the new bundle on the Redis event, and pulls every
+30 s regardless. Measured on the demo stack: quarantining `agt-payer` from the console was
+enforced by the PEP 42 ms after the click, `agt-treasury` untouched; rolling back restored it.
+`curl -s http://localhost:8082/readyz` shows the PEP's side under `checks.policy` — the serial it
+enforces, the last sync's outcome, and `confirmed_at`, which the pull refreshes while nothing
+changes. A PEP that cannot reach the control plane for `AGENTIAM_PEP_POLICY_MAX_STALENESS_S`
+(default 300 s) refuses with `POLICY_BUNDLE_STALE`: fail closed on age, by design.
 
 The task id is fixed for the demo and printed by the seed script:
 `d0d0d0d0-0000-4000-8000-000000000002`.
@@ -480,19 +485,17 @@ Worth doing once before a real presentation.
 Stated so a judge asking finds an answer rather than a gap (`STATUS.md` §3 has the full list):
 
 - **One PEP serves one mandate.** The lease pool binds a `mandate_id` at construction (gap 25).
-- **No issuance or bundle-publishing service.** The bundle is signed at bootstrap and loaded
-  once at boot, so hot reload and staleness are unreachable (gap 26); roles are static
-  configuration (gap 28); `budgets.mandate_id` has no foreign key (gap 7).
+- **No issuance service.** Roles are static configuration (gap 28) and `budgets.mandate_id` has
+  no foreign key (gap 7). Policy *is* published and hot-reloaded since APICTA-01 (§5 above).
 - **Drift detection needs Ollama**, and is off unless you enable the profile. `None` is a
   legitimate configuration, not a degraded one (spec 06 §2.1).
-- **OIDC login is not wired, so nobody can approve or deny an escalation on this stack.**
-  Keycloak runs and is healthy, but the console has no `AGENTIAM_CONTROLPLANE_OIDC_*`
-  configured, `/auth/login` is therefore not mounted (404), and `/readyz` reports
-  `auth: false` — derived from the wiring, like the PEP's `enforcing`. Escalations can be
-  opened, listed and left to expire, which is the honest demo; approve/deny answers
-  `401 login required` until you set the three OIDC variables. **Do not script a live human
-  approval against this stack.** Revocation is unaffected: it takes an operator token, for
-  exactly the reason that incident response cannot depend on a browser login.
+- **OIDC login is not wired; the passwordless demo sign-in stands in for it.** Keycloak runs
+  and is healthy, but the console has no `AGENTIAM_CONTROLPLANE_OIDC_*` configured, so
+  `/readyz` reports `auth: false` and `demo_login: true`. Sign in from the console as Farhana
+  Rahman, Tanvir Ahmed or Nusrat Jahan — no credential is checked, every page shows a DEMO tag,
+  and it must never be enabled anywhere reachable. Approving, activating policy and revoking
+  from the console all take that session; revocation also accepts the operator token, because
+  incident response cannot depend on a browser login.
 - **No demo beat shows the role forbid firing** *in the scripted thirteen*. It is enforced,
   corpus-tested, and reachable by hand — `root` paying ৳400,000 answers
   `403 POLICY_DENIED / policy5`, because `payment_api` is `critical` and the root token

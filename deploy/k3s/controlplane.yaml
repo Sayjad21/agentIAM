@@ -87,6 +87,20 @@ spec:
                 secretKeyRef:
                   name: agentiam-secrets
                   key: root_private_key.hex
+            # Policy publication (APICTA-01, spec 05 §5.7). File paths rather than values: the
+            # control plane reads the signing key and the boot bundle from disk, the same files
+            # every PEP boots from. The Secret is created from bootstrap's whole output
+            # directory, so `bundle_signing_key.hex` is already in it.
+            - name: AGENTIAM_CONTROLPLANE_BUNDLE_SIGNING_KEY_PATH
+              value: /secrets/bundle_signing_key.hex
+            - name: AGENTIAM_CONTROLPLANE_POLICY_BUNDLE_PATH
+              value: /secrets/policy_bundle.json
+            - name: AGENTIAM_CONTROLPLANE_POLICY_BUNDLE_SIG_PATH
+              value: /secrets/policy_bundle.sig
+          volumeMounts:
+            - name: secrets
+              mountPath: /secrets
+              readOnly: true
           readinessProbe:
             httpGet: { path: /healthz, port: 8000 }
             periodSeconds: 2
@@ -98,6 +112,10 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: secrets
+          secret:
+            secretName: agentiam-secrets
 ---
 apiVersion: v1
 kind: Service

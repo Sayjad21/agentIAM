@@ -161,7 +161,7 @@ def activate_bundle(
     # -- All gates passed — make it current ----------------------------------
     cache._engine = engine
     cache._serial = bundle.serial
-    cache._loaded_at = now
+    cache._confirmed_at = now
     cache.loaded += 1
 
     return summary

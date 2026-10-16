@@ -170,6 +170,35 @@ class TestControlplaneDeployment:
             if name.startswith("AGENTIAM_CONTROLPLANE_"):
                 assert name.startswith(CP_PREFIX), name
 
+    def test_policy_publication_reads_the_mounted_secret(self) -> None:
+        """APICTA-01: without these the control plane answers activation with 503.
+
+        The paths are cross-checked against what bootstrap actually writes, never retyped —
+        the same discipline as the PEP's file paths.
+        """
+        from agentiam_controlplane.settings import ENV_PREFIX as CP_PREFIX
+        from scripts.bootstrap_demo_secrets import _FILES
+
+        container = _pep_container(self._deployment())
+        by_name = {e["name"]: e.get("value") for e in container["env"]}
+        expected = {
+            f"{CP_PREFIX}BUNDLE_SIGNING_KEY_PATH": "bundle_signing_key.hex",
+            f"{CP_PREFIX}POLICY_BUNDLE_PATH": "policy_bundle.json",
+            f"{CP_PREFIX}POLICY_BUNDLE_SIG_PATH": "policy_bundle.sig",
+        }
+        for name, filename in expected.items():
+            assert filename in _FILES, f"bootstrap does not write {filename}"
+            assert by_name.get(name) == f"/secrets/{filename}", name
+
+    def test_the_secret_is_mounted_read_only_for_the_control_plane_too(self) -> None:
+        deployment = self._deployment()
+        container = _pep_container(deployment)
+        (mount,) = [m for m in container["volumeMounts"] if m["name"] == "secrets"]
+        assert mount["mountPath"] == "/secrets"
+        assert mount["readOnly"] is True
+        volumes = {v["name"]: v for v in deployment["spec"]["template"]["spec"]["volumes"]}
+        assert volumes["secrets"]["secret"]["secretName"] == "agentiam-secrets"
+
     def test_the_root_private_key_comes_from_the_secret_not_a_literal(self) -> None:
         from agentiam_controlplane.settings import ENV_PREFIX as CP_PREFIX
 

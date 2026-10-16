@@ -25,7 +25,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from agentiam_core.attenuation import effective_bound, grant_caveats
 from agentiam_core.decision import DriftOracle, decide
@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
     from opentelemetry.trace import Span
 
+    from agentiam_core.bundles import PolicyBundle
     from agentiam_core.models import Caveat, CaveatRef, DecisionRecord
     from agentiam_core.tokens import RootKeySet, VerifiedToken
     from agentiam_pep.drift import FeatureExtractor
@@ -56,13 +57,32 @@ if TYPE_CHECKING:
     from agentiam_pep.escalation_sink import EscalationSink
     from agentiam_pep.extractor import Extraction, RouteTable
     from agentiam_pep.lease import Reservation
-    from agentiam_pep.policy import AgentPrincipal, CedarEngine
+    from agentiam_pep.policy import AgentPrincipal, BoundCedarEngine
     from agentiam_pep.pool import LeasePool
     from agentiam_pep.settlement import SettlementQueue
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["Authorized", "Pipeline", "PipelineSettings", "Refused", "status_for"]
+
+
+class PolicySource(Protocol):
+    """What step 5 needs from policy: an engine per principal, and the bundle's label.
+
+    A `CedarEngine` (one bundle for the process — tests and the load harness) or a
+    `PolicyCache` (the deployed PEP, whose bundle `PolicySync` replaces while it runs; spec 05
+    §5.7.4). Read once per request, so a request decides under one bundle even if a new one
+    lands mid-flight.
+    """
+
+    @property
+    def bundle(self) -> PolicyBundle:
+        """The bundle being enforced; its `version` goes on every decision record."""
+        ...
+
+    def bound(self, principal: AgentPrincipal) -> BoundCedarEngine:
+        """An engine over the current bundle, for one agent."""
+        ...
 
 
 class _DriftMissRecorder:
@@ -205,7 +225,7 @@ class Pipeline:
         *,
         routes: RouteTable,
         key_set: RootKeySet,
-        policy: CedarEngine,
+        policy: PolicySource,
         principal_for: Callable[[VerifiedToken], AgentPrincipal],
         pool: LeasePool,
         emitter: DecisionEmitter,
@@ -233,6 +253,11 @@ class Pipeline:
         self._features = features
         self._escalation_sink = escalation_sink
         self._settlement = settlement
+
+    def policy_status(self) -> dict[str, object] | None:
+        """The policy cache's state for `/readyz`, when the policy is a cache."""
+        status = getattr(self._policy, "status", None)
+        return status() if callable(status) else None
 
     def drift_outcomes(self) -> dict[str, int]:
         """How drift assessments that needed the model ended, for `/metrics`.
@@ -335,7 +360,12 @@ class Pipeline:
         # token's effective authority. Reading it costs a block-source parse, and the comment
         # above is about exactly this: resolve once, carry it.
         caveats = self._caveats_for(token)
+        # The engine and its bundle's label are read together, with no await between them, so
+        # the record names the bundle this decision was actually made under. Read again at
+        # record time, a bundle `PolicySync` loaded while this request awaited an escalation
+        # or a drift score would be credited with a decision it never made (APICTA-01).
         policy = self._policy.bound(principal)
+        policy_version = self._policy.bundle.version
         recorder = (
             _DriftMissRecorder(self._drift_oracle) if self._drift_oracle is not None else None
         )
@@ -437,6 +467,7 @@ class Pipeline:
             principal=principal,
             drift_score=decision.drift_score,
             failing_caveat=decision.failing_caveat,
+            policy_version=policy_version,
             context_for_features=context,
             caveats=caveats,
         )
@@ -612,6 +643,7 @@ class Pipeline:
         failing_caveat: CaveatRef | None = None,
         context_for_features: RequestContext | None = None,
         caveats: Sequence[Caveat] | None = None,
+        policy_version: str | None = None,
     ) -> DecisionRecord:
         from agentiam_core.models import Budget, DecisionRecord
 
@@ -648,7 +680,10 @@ class Pipeline:
             # `CaveatRef` it returns onto the record. Supplying the list uncovered the
             # second one; this closes it.
             failing_caveat=failing_caveat,
-            policy_version=self._policy.bundle.version or self._settings.policy_version_fallback,
+            policy_version=(
+                (policy_version if policy_version is not None else self._policy.bundle.version)
+                or self._settings.policy_version_fallback
+            ),
             budget_before=Budget(spend_bdt=before + spent),
             budget_after=Budget(spend_bdt=before),
             reservation_id=reservation.id if reservation is not None else None,
