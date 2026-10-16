@@ -6,9 +6,12 @@ Real Postgres via testcontainers and a real in-process HTTP round trip via
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import itsdangerous
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -184,3 +187,37 @@ async def test_without_a_database_the_router_is_absent() -> None:
     ) as client:
         result = await client.get("/v1/revocations")
         assert result.status_code == 404
+
+
+async def test_the_response_reports_how_long_persist_and_publish_took(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """APICTA-04: the console's toast shows this.
+
+    It is the control plane's own half only — persisted, then published to Redis. When each
+    PEP applies the revocation is not visible from here, and the field's name says so.
+    """
+    async with await _client(migrated_engine) as client:
+        revoked = await client.post("/v1/revocations", json=_revoke_body(), headers=_AUTH)
+    assert revoked.status_code == 201
+    elapsed = revoked.json()["persisted_and_published_ms"]
+    assert isinstance(elapsed, int | float)
+    assert elapsed >= 0
+
+
+async def test_the_console_buttons_request_revokes_a_subtree_as_the_signed_in_approver(
+    migrated_engine: AsyncEngine,
+) -> None:
+    """The exact shape the identity tree's revoke button sends, with a session, no token."""
+    payload = base64.b64encode(json.dumps({"principal_id": "kc:cfo"}).encode("utf-8"))
+    cookie = itsdangerous.TimestampSigner(_SETTINGS.session_secret_key).sign(payload).decode()
+    async with await _client(migrated_engine) as client:
+        client.cookies.set("session", cookie)
+        revoked = await client.post(
+            "/v1/revocations",
+            json=_revoke_body(block_id="b" * 64, scope="subtree", reason="compromised branch"),
+        )
+    assert revoked.status_code == 201
+    body = revoked.json()
+    assert body["scope"] == "subtree"
+    assert body["revoked_by"] == "kc:cfo"

@@ -17,7 +17,7 @@ Every beat is scripted, deterministic, and individually runnable. `make demo-res
 | 4 | **Judge sets the ceiling** | 3:30–5:00 | Hand over the keyboard. They set ৳50,000. Agent spends up to the line across 3 concurrent sub-agents and hard-stops. **Invariant checker green throughout.** |
 | 5 | **Judge writes a policy in English** | 5:00–6:30 | Their sentence → Cedar → generated tests → pass/fail table → decision diff → activate → enforced on the next call. |
 | 6 | Goal drift | 6:30–7:30 | Inject an instruction redirecting the agent. Drift score crosses the band. **Escalation raised to a human, not a silent block.** |
-| 7 | Revocation | 7:30–8:15 | Revoke the root. 12 agents across 3 PEPs die. Timer on screen shows the actual propagation time. |
+| 7 | Revocation | 7:30–8:15 | Signed in as the CFO, open a compromised branch in the identity tree and press **Revoke agent & subtree**. The branch turns red; its siblings keep working. The toast shows the control plane's save-and-publish time; PEP-side propagation is the measured NFR-4 figure (11 µs–16 ms p99, T-039) — say that, not a live timer. |
 | 8 | Chain of custody | 8:15–9:30 | "Who authorized this payment?" → full chain to the human and the permitting caveat. Verify the audit chain live. Then tamper with a record and watch verification catch it. |
 | 9 | Close | 9:30–10:00 | Three numbers, the OSS repo, the APICTA export story. |
 

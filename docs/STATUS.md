@@ -15,11 +15,11 @@ than none.
 |---|---|
 | **Tickets** | **48 of 52 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 9 deferred · 61 defined (`PLAN.md` §9) |
 | **Milestones** | Everything through hardening (T-051…T-056) is complete. Demo and submission (T-057…T-061) is in progress |
-| **Tests** | 2,955 collected. `make check` runs 2,650, all passing; the other 305 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
+| **Tests** | 2,976 collected. `make check` runs 2,669, all passing; the other 307 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 71 (ADR-001…ADR-071) |
+| **ADRs** | 72 (ADR-001…ADR-072) |
 
 ---
 
@@ -99,7 +99,6 @@ claim; `MASTER.md` §8 has the talk-track version.
 | "Periodic checkpoints signed by the audit service key" (`PLAN.md` §6.8) | No checkpoints, no signatures | — |
 | "Full OpenAPI is generated and committed to `docs/openapi/`" (`PLAN.md` §8) | The directory does not exist | — |
 | "Model-checked" (spec 04 header) | 400 random interleavings in a scratchpad script that was never committed | — |
-| Revoking an agent from the console | The identity tree shows revocations; it cannot make one. The API with an operator token can | — |
 | Roles are attested | A static JSON map read at boot | 28 |
 
 `research/gap-analysis.md` and `research/threat-model.md` §6 list the rest of the

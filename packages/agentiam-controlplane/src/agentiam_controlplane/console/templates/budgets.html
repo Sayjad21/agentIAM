@@ -55,15 +55,18 @@
 const REFRESH_MS = 3000;
 
 const fmt = (s) => Number(s).toLocaleString(undefined, { maximumFractionDigits: 4 });
+// Taka with a dollar equivalent for the spend dimension only — a count of tool calls or rows
+// read is not money and must not grow a "$" beside it.
+const amount = (g, s) => g.dimension === "spend_bdt" ? AgentIAM.bdt(s) : fmt(s);
 const pct = (s) => (Number(s) * 100).toFixed(1) + "%";
 
-function seg(cls, amount, total, title) {
-    const width = Number(total) > 0 ? (Number(amount) / Number(total)) * 100 : 0;
+function seg(g, cls, value, title) {
+    const width = Number(g.total) > 0 ? (Number(value) / Number(g.total)) * 100 : 0;
     if (width <= 0) return null;
     const d = document.createElement("div");
     d.className = cls;
     d.style.width = width + "%";
-    d.title = title + ": " + fmt(amount);
+    d.title = title + ": " + amount(g, value);
     return d;
 }
 
@@ -87,7 +90,7 @@ function renderPool(g) {
     who.textContent = g.mandate_id;
     const dim = document.createElement("span");
     dim.className = "dim";
-    dim.textContent = g.dimension + " · " + fmt(g.committed) + " of " + fmt(g.total)
+    dim.textContent = g.dimension + " · " + amount(g, g.committed) + " of " + amount(g, g.total)
         + " spent (" + pct(g.spend_fraction) + ")";
     head.append(who, dim);
     card.appendChild(head);
@@ -98,19 +101,19 @@ function renderPool(g) {
     const bar = document.createElement("div");
     bar.className = "bar";
     for (const s of [
-        seg("seg-committed", g.committed, g.total, "committed"),
-        seg("seg-leased", g.leased, g.total, "leased"),
-        seg("seg-allocated", g.allocated, g.total, "allocated to children"),
+        seg(g, "seg-committed", g.committed, "committed"),
+        seg(g, "seg-leased", g.leased, "leased"),
+        seg(g, "seg-allocated", g.allocated, "allocated to children"),
     ]) if (s) bar.appendChild(s);
     card.appendChild(bar);
 
     const legend = document.createElement("div");
     legend.className = "legend";
     legend.append(
-        legendKey("var(--level-1)", "committed " + fmt(g.committed)),
-        legendKey("var(--level-2)", "leased " + fmt(g.leased)),
-        legendKey("var(--level-3)", "allocated " + fmt(g.allocated)),
-        legendKey("var(--level-track)", "available " + fmt(g.available)),
+        legendKey("var(--level-1)", "committed " + amount(g, g.committed)),
+        legendKey("var(--level-2)", "leased " + amount(g, g.leased)),
+        legendKey("var(--level-3)", "allocated " + amount(g, g.allocated)),
+        legendKey("var(--level-track)", "available " + amount(g, g.available)),
     );
     const leases = document.createElement("span");
     leases.textContent = g.active_leases + " active lease(s), " + pct(g.lease_utilization) + " of held spent";

@@ -14,7 +14,7 @@
     <script src="/static/ui.js?v=topbar-capsules-2"></script>
     {% block head_extra %}{% endblock %}
 </head>
-<body data-page="{{ active | default('') }}">
+<body data-page="{{ active | default('') }}" data-bdt-per-usd="{{ bdt_per_usd | default('120') }}">
 
 {# Enterprise Anchored Top Command Bar (Fixed Edge-to-Edge 56px) #}
 <header class="topbar">
@@ -105,6 +105,10 @@
     {% endblock %}
 
     {% block content %}{% endblock %}
+
+    {# Stated once per page so a dollar figure is never mistaken for a live quote. #}
+    <p class="page-footnote dim">Dollar amounts are at a fixed display rate of
+        {{ bdt_per_usd | default('120') }} BDT = 1 USD. Every budget is held and enforced in BDT.</p>
 </main>
 
 {% block scripts %}{% endblock %}

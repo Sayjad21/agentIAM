@@ -166,6 +166,31 @@
         });
     }
 
+    /* `৳500,000 ($4,167)` — the same string `console/money.py` renders on the server.
+     *
+     * The rate comes from `<body data-bdt-per-usd>`, which the server sets from its own
+     * configuration, so the two can never disagree about it. Display only: every budget is
+     * held and enforced in BDT. Taka whole when whole, else to two places; dollars whole
+     * from $1,000 and to the cent below, so a small amount is not rounded into a wrong one. */
+    function bdt(value) {
+        var amount = Number(value);
+        if (!isFinite(amount)) return "–";
+        var rate = Number((document.body && document.body.dataset.bdtPerUsd) || 120);
+        if (!(rate > 0)) rate = 120;
+        var whole = Math.round(amount * 100) % 100 === 0;
+        var taka = amount.toLocaleString("en-US", {
+            minimumFractionDigits: whole ? 0 : 2,
+            maximumFractionDigits: whole ? 0 : 2,
+        });
+        var usd = amount / rate;
+        var big = Math.abs(usd) >= 1000;
+        var dollars = usd.toLocaleString("en-US", {
+            minimumFractionDigits: big ? 0 : 2,
+            maximumFractionDigits: big ? 0 : 2,
+        });
+        return "\u09F3" + taka + " ($" + dollars + ")";
+    }
+
     /* Table density switcher (compact vs relaxed) */
     function setDensity(mode) {
         var tables = document.querySelectorAll(".data-grid, .results-table, table.grid");
@@ -236,6 +261,7 @@
         pill: pill,
         copy: copy,
         copyChip: copyChip,
+        bdt: bdt,
         setDensity: setDensity,
         filterTests: filterTests,
         reduceMotion: reduceMotion

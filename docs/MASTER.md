@@ -73,7 +73,7 @@ today.
 | C6 | Natural language → Cedar compiler with verification | **Built.** Scores 27/30 on hosted inference. Activation does not reach the PEP yet (gap 26) |
 | C7 | Intent binding and drift detection | **Partial.** Intent binding is enforced. Drift is a rule-based v0 using three of six features, needs the opt-in Ollama profile, and its false-positive rate (NFR-9) has never been measured |
 | C8 | Just-in-time elevation with human approval | **Partial.** The PEP opens escalations itself; approval can only narrow the request and enforces separation of duties. The elevated token goes back to the approver, not the agent |
-| C9 | Fast subtree revocation | **Built** through the API with an operator token. The console cannot revoke yet |
+| C9 | Fast subtree revocation | **Built.** One click in the identity tree for a signed-in approver, or the API with an operator token |
 | C10 | Hash-chained audit and custody query | **Built.** Verifiable live from the console |
 | C11 | MCP gateway and HTTP PEP | **HTTP PEP only.** MCP is deferred (T-041, T-042) |
 | C12 | Admin console | **Built.** Overview, identity tree, live decisions, budgets, audit and custody, escalations, policy |
@@ -163,9 +163,9 @@ and model training beyond a small classifier.
 | | |
 |---|---|
 | **Tickets** | 48 of the 52 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 9 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
-| **Tests** | 2,955 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,650 |
+| **Tests** | 2,976 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,669 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 71 in `DECISIONS.md` |
+| **ADRs** | 72 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -470,7 +470,7 @@ Run `demo-reset` before the real presentation.
 | 4 Judge sets the ceiling | **No** — one hard-coded mandate (gap 25). `demo-conc` shows the concurrency half with a fixed pool |
 | 5 Judge writes policy in English | Compile, auto-tests, corpus gate and diff all work; **activation does not reach the PEP** (gap 26) |
 | 6 Goal drift | Needs the Ollama profile; rule-based v0 only |
-| 7 Revocation | Through the API with an operator token; not from the console |
+| 7 Revocation | **Yes** — sign in as Tanvir, open an agent in `/identity-tree`, revoke; the branch turns red. The toast shows the control plane's save-and-publish time, not PEP propagation |
 | 8 Chain of custody + tamper | **Yes** — custody view, Verify chain, `demo-tamper` |
 
 ---
@@ -506,7 +506,7 @@ for it.
 | What to build | [`PLAN.md`](PLAN.md) (§3 architecture, §6 protocols, §21 deferred) |
 | What is left | [`APICTA_TICKETS.md`](APICTA_TICKETS.md) (the sprint), [`STATUS.md`](STATUS.md) §2 and §5 |
 | Status and gaps | [`STATUS.md`](STATUS.md) |
-| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 71 ADRs |
+| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 72 ADRs |
 | Exact protocol contracts | [`specs/`](specs/) 01–10 |
 | Running the stack by hand | [`RUNNING.md`](RUNNING.md) |
 | The presentation script and judge handling | [`DEMO.md`](DEMO.md) |

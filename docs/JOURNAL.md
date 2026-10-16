@@ -3628,6 +3628,31 @@ three at a time in 0.4 s, all allowed. Also found while there: CH-8's "a closed 
 after ~3 s" is a Windows fact — on Fedora the refusal is immediate — and every demo route has
 drift `off`, so none of this was visible in the demo either way.
 
+### APICTA-04 · A kill-switch that only claims what it measured
+
+The backend existed; the ticket was a button. Three details decided whether it was honest.
+
+**Which block.** An agent's own block is `block_ids[depth]`. Everything it delegated to carries
+that block in its chain, so revoking it kills the subtree with nothing computed — and naming
+`block_ids[depth - 1]`, the obvious off-by-one, would have revoked the siblings too.
+
+**Which expiry.** The revocation row carries the token's expiry because pruning keys on it
+(spec 07 §8). Guessing *early* would let a future prune un-revoke a live token, so when the
+record has no expiry the button sends a year out, the direction that only costs storage.
+
+**Which number.** The ticket asked for "the propagation latency in a toast". The control plane
+can time its own insert-and-publish and nothing else; it never learns when a PEP applied the
+message. So the field is `persisted_and_published_ms` and the toast cites NFR-4's measured
+figure for the PEP side. `DEMO.md` beat 7 had promised "a timer on screen showing the actual
+propagation time" and now says what can be shown.
+
+Measured live: 201 in 11.5 ms; the PEP refusing the descendant 21 ms after the request was
+sent; the sibling still allowed; a non-approver refused 403. Two things were caught only by
+looking past the tests: the SSE diff re-renders the open node every few seconds, which would
+have wiped a half-typed reason, and no test can see a JavaScript syntax error that blanks the
+tree — every rendered script was put through `node --check`, and the browser and server money
+helpers were run side by side to confirm they print the same strings.
+
 ---
 
 ## What the numbers looked like at T-033

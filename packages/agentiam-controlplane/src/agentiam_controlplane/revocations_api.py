@@ -33,6 +33,7 @@ its own to leak.
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from hmac import compare_digest
 from typing import TYPE_CHECKING
@@ -140,6 +141,7 @@ def build_router(
                 {"detail": f"{revoked_by!r} is not an authorized revoker"},
                 status_code=403,
             )
+        started = time.perf_counter()
         async with session_factory() as session:
             record = await store.revoke(
                 session,
@@ -151,7 +153,13 @@ def build_router(
                 now=now(),
                 publisher=publisher,
             )
-        return JSONResponse(_serialize(record), status_code=201)
+        # The control plane's own half — persisted, then published — and named for exactly
+        # that. When each PEP applies the revocation is not visible from here; NFR-4's
+        # PEP-side figure is measured separately (T-039). The console's toast shows this.
+        created = _serialize(record) | {
+            "persisted_and_published_ms": round((time.perf_counter() - started) * 1000, 3)
+        }
+        return JSONResponse(created, status_code=201)
 
     @router.get("")
     async def list_revocations(since: int = Query(default=0)) -> JSONResponse:

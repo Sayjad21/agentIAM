@@ -41,7 +41,7 @@
                         <span class="badge escalate">PENDING</span>
                     </div>
                     <div class="queue-reason">{{ e.reason }}</div>
-                    <div class="queue-meta mono">req: {{ e.principal_id }} · cap: {{ e.requested_amount }}</div>
+                    <div class="queue-meta mono">req: {{ e.principal_id }} · cap: {{ e.requested_amount | bdt }}</div>
                 </div>
                 {% endfor %}
             {% else %}
@@ -104,7 +104,7 @@
                                 data-scopes="{{ e.requested_scopes | length }}"
                                 oninput="validateRow('{{ e.id }}')"
                             >
-                            <div class="narrow-cap">ceiling {{ e.requested_amount }} — above this the server returns 400</div>
+                            <div class="narrow-cap">ceiling {{ e.requested_amount | bdt }} — above this the server returns 400</div>
                         </div>
                     </div>
 
@@ -179,7 +179,7 @@
             if (checked !== requestedScopes) parts.push(`${checked} of ${requestedScopes} scopes`);
             if (amount !== requested) {
                 const cut = requested > 0 ? (100 - (amount / requested) * 100).toFixed(0) : 0;
-                parts.push(`${fmt(amount)} of ${fmt(requested)} (−${cut}%)`);
+                parts.push(`${AgentIAM.bdt(amount)} of ${AgentIAM.bdt(requested)} (−${cut}%)`);
             }
             text.innerHTML = "narrowed to <strong>" + parts.join("</strong>, <strong>") + "</strong>";
         }

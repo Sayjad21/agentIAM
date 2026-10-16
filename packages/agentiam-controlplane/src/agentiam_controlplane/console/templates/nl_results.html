@@ -101,7 +101,7 @@
                 <div class="small muted">Role: {{ item.case.role }}</div>
             </td>
             <td>
-                {% if item.case.amount > 0 %}Amt: {{ item.case.amount }} BDT{% endif %}
+                {% if item.case.amount > 0 %}Amt: {{ item.case.amount | bdt }}{% endif %}
                 {% if item.case.tool %}<br>Tool: {{ item.case.tool }}{% endif %}
                 {% if item.case.depth > 0 %}<br>Depth: {{ item.case.depth }}{% endif %}
             </td>

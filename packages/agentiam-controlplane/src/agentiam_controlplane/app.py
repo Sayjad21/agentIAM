@@ -172,6 +172,27 @@ def _reaper_interval_s() -> float | None:
     return value or None
 
 
+_BDT_PER_USD_ENV = "AGENTIAM_CONTROLPLANE_BDT_PER_USD"
+
+
+def _bdt_per_usd() -> Decimal:
+    """The console's fixed display rate, from the environment. Unset keeps the default."""
+    import os
+
+    from agentiam_controlplane.console.money import DEFAULT_BDT_PER_USD
+
+    raw = os.environ.get(_BDT_PER_USD_ENV, "").strip()
+    if not raw:
+        return DEFAULT_BDT_PER_USD
+    try:
+        value = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError(f"{_BDT_PER_USD_ENV} is not a number: {raw!r}") from exc
+    if not value.is_finite() or value <= 0:
+        raise ValueError(f"{_BDT_PER_USD_ENV} must be a positive number, got {raw!r}")
+    return value
+
+
 def _reaper_lifespan(
     session_factory: async_sessionmaker[AsyncSession],
     interval_s: float,
@@ -237,6 +258,7 @@ def create_app(
     revocation_publisher: RevocationPublisher | None = None,
     reaper_interval_s: float | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    bdt_per_usd: Decimal | None = None,
 ) -> FastAPI:
     """Create the FastAPI application for the Control Plane.
 
@@ -272,7 +294,19 @@ def create_app(
     and a background task retiring expired leases underneath a ledger test would make it
     flaky in a way that looks like a ledger bug. `create_app_from_env()` turns it on, the
     same split `pep_service.py` uses for everything a deployment needs and a test does not.
+
+    `bdt_per_usd` is the console's fixed display rate for the dollar figure shown beside
+    every taka amount (`console/money.py`). Display only: nothing is converted.
     """
+    from agentiam_controlplane.console.money import DEFAULT_BDT_PER_USD, format_bdt
+
+    display_rate = bdt_per_usd if bdt_per_usd is not None else DEFAULT_BDT_PER_USD
+    # One shared `Jinja2Templates`, so the rate is the last app built's. Deployments build one.
+    templates.env.globals["bdt_per_usd"] = f"{display_rate.normalize():f}"
+    templates.env.filters["bdt"] = lambda value: format_bdt(
+        Decimal(str(value)), bdt_per_usd=display_rate
+    )
+
     lifespan = (
         _reaper_lifespan(session_factory, reaper_interval_s, now)
         if session_factory is not None and reaper_interval_s is not None and reaper_interval_s > 0
@@ -440,6 +474,14 @@ def create_app(
             },
         )
 
+    def _revoker(request: Request) -> str | None:
+        if escalation_settings is None or "session" not in request.scope:
+            return None
+        principal = request.session.get("principal_id")
+        if isinstance(principal, str) and principal in escalation_settings.approvers:
+            return principal
+        return None
+
     @app.get("/identity-tree", response_class=HTMLResponse)
     async def identity_tree(
         request: Request, task_id: str | None = Query(default=None)
@@ -451,6 +493,10 @@ def create_app(
             context={
                 "active": "identity-tree",
                 "task_id": task_id,
+                # APICTA-04: who may use the revoke button. Only a signed-in approver — the
+                # same rule `POST /v1/revocations` applies — because a button that can only
+                # answer 403 is worse than none. The API is still the gate.
+                "revoker": _revoker(request),
                 # So the empty state offers a pick rather than demanding a pasted uuid.
                 "known_tasks": [t.as_dict() for t in registry.list_tasks()] if registry else [],
             },
@@ -967,6 +1013,7 @@ def create_app_from_env() -> FastAPI:
         # It belongs here rather than in the PEP for two reasons: the ledger is this
         # service's, and a PEP that died is exactly the one that cannot reap its own lease.
         reaper_interval_s=_reaper_interval_s(),
+        bdt_per_usd=_bdt_per_usd(),
     )
 
 

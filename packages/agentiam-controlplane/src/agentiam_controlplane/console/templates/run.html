@@ -80,7 +80,7 @@
             <div class="dim mono small">{{ task.task_id }}</div>
         </div>
         <div class="task-meta">
-            <span>ceiling <strong>{{ task.budget }}</strong></span>
+            <span>ceiling <strong>{{ task.budget | bdt }}</strong></span>
             <span>{{ task.scopes | join(', ') }}</span>
             <a href="/identity-tree?task_id={{ task.task_id }}">view the tree &rarr;</a>
         </div>
@@ -97,7 +97,7 @@
                 <td>{{ agent.role }}</td>
                 <td>{{ agent.depth }}</td>
                 <td class="mono small">{{ agent.scopes | join(', ') }}</td>
-                <td class="mono">{{ agent.ceiling if agent.ceiling else '—' }}</td>
+                <td class="mono">{{ agent.ceiling | bdt if agent.ceiling else '—' }}</td>
                 <td class="drive-cell">
                     <form method="post" action="/run/call" class="inline-form">
                         <input type="hidden" name="task_id" value="{{ task.task_id }}">

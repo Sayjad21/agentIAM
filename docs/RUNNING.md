@@ -247,6 +247,18 @@ Revocation is an *operator* action on the control plane, not an agent action on 
 it authenticates differently from everything above: no biscuit, no `revoked_by` field. Present
 either a console session or the operator token.
 
+**From the console** (APICTA-04): sign in as an approver — Tanvir Ahmed or Farhana Rahman on the
+demo stack, not Nusrat Jahan — open an agent in `/identity-tree`, give a reason, and press
+**Revoke agent & subtree**. It revokes that agent's own block, so the agent answers
+`401 TOKEN_REVOKED` and everything it delegated to `401 ANCESTOR_REVOKED`; siblings are
+untouched. The root node revokes the whole task. The toast's figure is the control plane's own
+save-and-publish time (~11 ms measured on the demo stack); it cannot see when each PEP applied
+the revocation. Measured once end to end: the PEP was refusing the descendant 21 ms after the
+button's request was sent. To undo, re-seed (`seed_demo.py --out /secrets`), which mints fresh
+blocks no revocation names.
+
+From a script:
+
 ```bash
 OPERATOR_TOKEN=dev-change-me-operator-token   # AGENTIAM_CONTROLPLANE_OPERATOR_TOKENS
 TASK=d0d0d0d0-0000-4000-8000-000000000002

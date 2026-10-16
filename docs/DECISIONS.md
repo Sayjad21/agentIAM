@@ -4353,3 +4353,52 @@ Making the client async is not enough on its own: `decide()` cannot `await`, and
   drift scenarios now assert the absence of the stall against a same-run baseline.
 - Every guard was removed in turn and a test went red: the shield, the second pass,
   single-flight, and the bound.
+
+---
+
+## ADR-072 — The console's revoke button, and money shown in two currencies
+
+**Status:** accepted · **Ticket:** APICTA-04 · **Relates to:** ADR-046, spec 07 §2 and §8,
+T-039 (NFR-4)
+
+### Context
+
+Revocation has worked since T-038 through `POST /v1/revocations`, authenticated by a session
+or an operator token, with the acting principal derived from the credential (ADR-046). The
+identity tree could display a revocation and not make one, so the demo's revocation beat
+needed a terminal. Separately, every amount in the console was a bare number of taka, which
+an international panel cannot read at a glance.
+
+### Decision
+
+1. **The button calls the existing API; nothing new authorizes.** It is rendered only for a
+   signed-in member of `approvers`, the rule the API applies, because a button that can only
+   answer 403 is worse than none. The API stays the gate: a forged page gains nothing.
+2. **It revokes the agent's own block, `block_ids[depth]`.** Descendants fail by construction
+   (`ANCESTOR_REVOKED`, spec 07 §2); naming the parent block would take out the siblings too.
+   Scope is `subtree`, or `mandate` for the root node — descriptive only, as spec 07 says.
+3. **An unknown expiry errs late.** `expires_at` is what pruning keys on (spec 07 §8), so a
+   date earlier than the token's real expiry would let a prune un-revoke a live token. The
+   button sends the recorded authority's `expires_at` when the record has one, and otherwise
+   now + 365 days, which only keeps the row longer.
+4. **The response reports `persisted_and_published_ms`, named for what it is.** The control
+   plane can time its own insert-then-publish; it cannot see when each PEP applies the
+   revocation. The toast says so and cites NFR-4's measured PEP-side figure rather than
+   presenting a control-plane timing as propagation.
+5. **Dollars are display only, at a fixed configured rate** (`AGENTIAM_CONTROLPLANE_BDT_PER_USD`,
+   default 120), stated in small print on every page. Only `spend_bdt` gets a currency;
+   tool calls and rows read are counts. The budgets page's invariant equation stays in plain
+   numbers, because it is the equation. `console/money.py` (server) and `AgentIAM.bdt`
+   (browser) render the same strings; a test pins that every money page uses the helper, and
+   the two were compared directly on five cases.
+
+### Consequences
+
+- Measured live on the demo stack: the revoke returned 201 in 11.5 ms (persisted and
+  published); the PEP refused the descendant 21 ms after the request was sent; the sibling
+  `agt-payer` kept succeeding; a non-approver got 403.
+- The cookie is `SameSite=Lax`, so a cross-site form cannot carry the session to this POST.
+  A same-site CSRF defence for the console in general is still open.
+- The SSE diff re-renders the open node every few seconds while it is busy, so the control
+  is rebuilt only when the agent or its revoked state changes; otherwise a half-typed reason
+  would be wiped.

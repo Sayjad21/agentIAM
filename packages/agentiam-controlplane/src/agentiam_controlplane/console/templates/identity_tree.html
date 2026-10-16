@@ -91,6 +91,12 @@
     .status-escalated { background: var(--escalate-soft); color: var(--escalate-text); border: 1px solid var(--escalate-line); }
     .status-breached { background: var(--deny-soft); color: var(--deny-text); border: 1px solid var(--deny-line); }
 
+    .panel-revoke { margin: 0.9rem 0 0.4rem; padding: 0.75rem; border: 1px solid var(--deny-line); border-radius: 8px; background: var(--deny-soft); }
+    .panel-revoke p { margin: 0 0 0.5rem; font-size: 0.85rem; }
+    .panel-revoke input { width: 100%; margin-bottom: 0.5rem; }
+    .panel-revoke button { width: 100%; background: var(--deny); border-color: var(--deny); color: #fff; font-weight: 600; }
+    .panel-revoke button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .panel-revoke .revoke-msg { margin-top: 0.5rem; font-size: 0.82rem; }
     .panel-budget-box {
         background: var(--surface-subtle);
         border: 1px solid var(--border);
@@ -452,6 +458,9 @@
         <h2 id="panel-agent-id" class="mono" style="margin-top:0; padding-right:2rem;">Agent</h2>
         <div id="panel-status"></div>
         <div id="panel-budget"></div>
+        {# APICTA-04. Rendered only for a signed-in approver — the rule the API itself applies
+           — so nobody is offered a button that can only answer 403. #}
+        {% if revoker %}<div id="panel-revoke" class="panel-revoke" data-revoker="{{ revoker }}"></div>{% endif %}
         <h3 class="panel-section-title">Token chain &amp; caveats</h3>
         <div id="panel-caveats">
             <p class="muted">Loading block sources…</p>
@@ -862,6 +871,8 @@
     function closePanel() {
         document.getElementById('side-panel').classList.remove('open');
         document.getElementById('panel-agent-id').dataset.agentId = "";
+        const revokeBox = document.getElementById('panel-revoke');
+        if (revokeBox) revokeBox.dataset.agentId = '';
     }
 
     function renderPanelState(node) {
@@ -894,6 +905,97 @@
             budgetHtml += `</div>`;
         }
         document.getElementById('panel-budget').innerHTML = budgetHtml;
+        renderRevokeControl(node);
+    }
+
+    // --- APICTA-04: revoke an agent and everything it delegated to ---------------------
+    //
+    // The revocation names the agent's *own* block, `block_ids[depth]`. Every token minted
+    // beneath it carries that block in its chain, so the PEP refuses all of them
+    // (`ANCESTOR_REVOKED`) and the agent itself (`TOKEN_REVOKED`), with nothing computed
+    // here — spec 07 §2. Naming `block_ids[depth - 1]` instead would take out the siblings.
+
+    // Spec 07 §8: a row may be pruned once `expires_at` passes, so an expiry *earlier* than
+    // the token's real one would quietly un-revoke a live token. When the record carries no
+    // expiry, err late: a later date only keeps the row longer.
+    const REVOCATION_FALLBACK_EXPIRY_DAYS = 365;
+    let panelAuthority = null;
+
+    function descendantsOf(node) {
+        const own = node.block_ids[node.depth];
+        return nodesData.filter(n => n.agent_id !== node.agent_id && n.block_ids.includes(own));
+    }
+
+    function renderRevokeControl(node) {
+        const box = document.getElementById('panel-revoke');
+        if (!box) return;
+        if (node.revoked) { box.hidden = true; box.dataset.agentId = ''; return; }
+        // The SSE diff re-renders the open node every few seconds while it is busy; rebuilding
+        // here each time would wipe a reason the operator is halfway through typing.
+        if (!box.hidden && box.dataset.agentId === node.agent_id) return;
+        box.dataset.agentId = node.agent_id;
+        box.hidden = false;
+        const below = descendantsOf(node).length;
+        const what = node.depth === 0
+            ? `the task's root authority — <strong>every agent in this task</strong>`
+            : below > 0
+                ? `<strong>${node.agent_id}</strong> and the ${below} agent${below === 1 ? '' : 's'} it delegated to`
+                : `<strong>${node.agent_id}</strong>`;
+        box.innerHTML = `
+            <p>Emergency kill-switch: revokes ${what}. Their next call is refused at every PEP.</p>
+            <input type="text" id="revoke-reason" placeholder="Reason (recorded in the audit trail)" maxlength="200">
+            <button type="button" id="revoke-btn" disabled>Revoke agent &amp; subtree</button>
+            <div class="revoke-msg" id="revoke-msg" role="status"></div>`;
+        const reason = document.getElementById('revoke-reason');
+        const button = document.getElementById('revoke-btn');
+        reason.addEventListener('input', () => { button.disabled = reason.value.trim() === ''; });
+        button.addEventListener('click', () => revokeSubtree(node, reason.value.trim()));
+    }
+
+    async function revokeSubtree(node, reason) {
+        const button = document.getElementById('revoke-btn');
+        const msg = document.getElementById('revoke-msg');
+        button.disabled = true;
+        msg.textContent = 'Revoking…';
+        const expiresAt = (panelAuthority && panelAuthority.expires_at)
+            || new Date(Date.now() + REVOCATION_FALLBACK_EXPIRY_DAYS * 86400000).toISOString();
+        let resp;
+        try {
+            resp = await fetch('/v1/revocations', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    block_id: node.block_ids[node.depth],
+                    scope: node.depth === 0 ? 'mandate' : 'subtree',
+                    reason: reason,
+                    expires_at: expiresAt,
+                }),
+            });
+        } catch (e) {
+            msg.textContent = 'Could not reach the control plane — nothing was revoked.';
+            button.disabled = false;
+            return;
+        }
+        const body = await resp.json().catch(() => ({}));
+        if (resp.status !== 201) {
+            msg.textContent = `Refused (${resp.status}): ${body.detail || 'no detail'}`;
+            button.disabled = false;
+            return;
+        }
+        // The control plane's own half — saved, then published to every PEP's channel. It
+        // cannot see when each PEP applied it; that figure is NFR-4's (T-039).
+        msg.innerHTML = `Revoked. Saved and published in <strong>${body.persisted_and_published_ms} ms</strong>; `
+            + `PEPs apply it as the message arrives (11 µs–16 ms p99 measured, T-039).`;
+        try {
+            const snap = await fetch(`/v1/tree/${taskId}`);
+            if (snap.ok) {
+                nodesData = (await snap.json()).nodes;
+                updateTree(nodesData);
+                const updated = nodesData.find(n => n.agent_id === node.agent_id);
+                if (updated) renderPanelState(updated);
+            }
+        } catch (e) { /* the 3 s SSE diff will catch up */ }
     }
 
     const money = v => Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
@@ -945,8 +1047,8 @@
             html += `
               <div class="authority-spend">
                 <div class="authority-spend-head">
-                  <span><strong>${money(spent)}</strong> of ${money(spend)} spent</span>
-                  <span class="dim">${remaining !== null ? money(remaining) + ' left' : ''}</span>
+                  <span><strong>${AgentIAM.bdt(spent)}</strong> of ${AgentIAM.bdt(spend)} spent</span>
+                  <span class="dim">${remaining !== null ? AgentIAM.bdt(remaining) + ' left' : ''}</span>
                 </div>
                 <div class="authority-bar"><span style="width:${pct}%"></span></div>
               </div>`;
@@ -981,6 +1083,7 @@
     }
 
     async function openPanel(node) {
+        panelAuthority = null;
         renderPanelState(node);
         document.getElementById('side-panel').classList.add('open');
 
@@ -991,6 +1094,7 @@
             const resp = await fetch(`/v1/tree/${taskId}/blocks/${node.agent_id}`);
             if (!resp.ok) throw new Error('Failed to fetch caveats');
             const data = await resp.json();
+            panelAuthority = data.authority || null;
 
             // Authority first, block ids after. The ids are what a revocation names, so
             // they stay — but on their own they told an operator nothing, which is what

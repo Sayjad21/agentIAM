@@ -54,7 +54,7 @@ fallback) and T-059 (submission package).
 | Ticket | Status |
 |---|---|
 | APICTA-07 | DONE — verified locally; CI pending (Actions billing block) |
-| APICTA-04 | TODO |
+| APICTA-04 | DONE — verified locally and live on the demo stack; CI pending |
 | APICTA-01 | TODO |
 | APICTA-03 | TODO |
 | APICTA-05 | TODO |
@@ -138,7 +138,8 @@ Then STATUS.md: close gap 22 (move its row to JOURNAL's appendix).
 
 ## APICTA-04 — Console kill-switch and BDT/USD display
 
-- **Status:** TODO
+- **Status:** DONE (ADR-072). Local: `make check`, `make test-integration`; live on
+  `make demo-up`. CI not yet run
 - **Maps to:** C9 (`MASTER.md` §2); STATUS.md §3 "Revoking an agent from the console" row
 
 **Problem statement.**
@@ -167,9 +168,9 @@ USD equivalent anywhere.
   (the revocation row needs it, spec 07 §8).
 - `console/static/ui.js` — one `formatMoney(bdt)` helper returning `৳500,000 ($4,167)`;
   replace the three local `fmt`/`money` functions with it.
-- `settings.py` — `AGENTIAM_CONTROLPLANE_USD_PER_BDT_DISPLAY` (default `120`, i.e.
-  1 USD = 120 BDT), passed to templates; a Jinja filter `money` for server-rendered amounts
-  (`run.html`, `nl_results.html`).
+- `AGENTIAM_CONTROLPLANE_BDT_PER_USD` (default `120`, i.e. 1 USD = 120 BDT), read in
+  `create_app_from_env()` and passed to templates; a Jinja filter `bdt` for server-rendered
+  amounts (`run.html`, `nl_results.html`, `escalations.html`).
 - Every page that shows the rate says it is a fixed display rate, once, in small print.
 
 **Step-by-step plan.**
@@ -372,6 +373,14 @@ agent; native tool calling is not needed.
   it the decision time.
 - `--offline` and automatic fallback on `LLMError`/timeout: a scripted model that returns the
   same actions, labelled "scripted" on screen.
+- **Report what the model actually did.** A real model may ignore the injection, and then no
+  payment is attempted and there is nothing to refuse. The transcript says which happened —
+  *"the model resisted the injection"* or *"the model tried to pay; the PEP refused it"* —
+  never implying the PEP was tested when it was not. The protection does not depend on the
+  model being fooled; the token never held `payment:initiate`.
+- `--force-attempt`: after the model's own turn, the script sends the poisoned payment itself
+  if the model did not, labelled as forced. That guarantees the stage beat while keeping the
+  live model's real behaviour on screen.
 - Never log the invoice text or the prompt (secret scanner); log digests.
 
 **Step-by-step plan.**
