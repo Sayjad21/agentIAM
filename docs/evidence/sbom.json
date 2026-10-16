@@ -3288,7 +3288,7 @@
       "version": "2.9.0.post0"
     },
     {
-      "bom-ref": "python-discovery==1.5.2",
+      "bom-ref": "python-discovery==1.6.3",
       "description": "Python interpreter discovery",
       "externalReferences": [
         {
@@ -3325,9 +3325,9 @@
         }
       ],
       "name": "python-discovery",
-      "purl": "pkg:pypi/python-discovery@1.5.2",
+      "purl": "pkg:pypi/python-discovery@1.6.3",
       "type": "library",
-      "version": "1.5.2"
+      "version": "1.6.3"
     },
     {
       "bom-ref": "python-dotenv==1.2.2",
@@ -4202,7 +4202,7 @@
       "version": "1.3.0"
     },
     {
-      "bom-ref": "urllib3==2.7.0",
+      "bom-ref": "urllib3==2.8.0",
       "description": "HTTP library with thread-safe connection pooling, file post, and more.",
       "externalReferences": [
         {
@@ -4221,6 +4221,11 @@
           "url": "https://github.com/urllib3/urllib3"
         },
         {
+          "comment": "from packaging metadata Project-URL: Security policy",
+          "type": "other",
+          "url": "https://urllib3.readthedocs.io/en/latest/security.html"
+        },
+        {
           "comment": "from packaging metadata Project-URL: Changelog",
           "type": "release-notes",
           "url": "https://github.com/urllib3/urllib3/blob/main/CHANGES.rst"
@@ -4234,9 +4239,9 @@
         }
       ],
       "name": "urllib3",
-      "purl": "pkg:pypi/urllib3@2.7.0",
+      "purl": "pkg:pypi/urllib3@2.8.0",
       "type": "library",
-      "version": "2.7.0"
+      "version": "2.8.0"
     },
     {
       "bom-ref": "uvicorn==0.52.3",
@@ -4309,7 +4314,7 @@
       "version": "0.22.1"
     },
     {
-      "bom-ref": "virtualenv==21.7.4",
+      "bom-ref": "virtualenv==21.14.8",
       "description": "Virtual Python Environment builder",
       "externalReferences": [
         {
@@ -4328,6 +4333,26 @@
           "url": "https://github.com/pypa/virtualenv"
         },
         {
+          "comment": "from packaging metadata Project-URL: Funding",
+          "type": "other",
+          "url": "https://github.com/sponsors/gaborbernat"
+        },
+        {
+          "comment": "from packaging metadata Project-URL: thanks.dev",
+          "type": "other",
+          "url": "https://thanks.dev/u/gh/gaborbernat"
+        },
+        {
+          "comment": "from packaging metadata Project-URL: Tidelift",
+          "type": "other",
+          "url": "https://tidelift.com/funding/github/pypi/virtualenv"
+        },
+        {
+          "comment": "from packaging metadata Project-URL: Changelog",
+          "type": "release-notes",
+          "url": "https://virtualenv.pypa.io/en/latest/changelog.html"
+        },
+        {
           "comment": "from packaging metadata Project-URL: Homepage",
           "type": "website",
           "url": "https://github.com/pypa/virtualenv"
@@ -4341,9 +4366,9 @@
         }
       ],
       "name": "virtualenv",
-      "purl": "pkg:pypi/virtualenv@21.7.4",
+      "purl": "pkg:pypi/virtualenv@21.14.8",
       "type": "library",
-      "version": "21.7.4"
+      "version": "21.14.8"
     },
     {
       "bom-ref": "watchfiles==1.2.0",
@@ -4762,7 +4787,7 @@
         "pytest==9.1.1",
         "requests==2.34.2",
         "ruff==0.16.3",
-        "urllib3==2.7.0"
+        "urllib3==2.8.0"
       ],
       "ref": "docker==7.2.0"
     },
@@ -5075,7 +5100,7 @@
         "cfgv==3.5.0",
         "identify==2.6.19",
         "nodeenv==1.10.0",
-        "virtualenv==21.7.4"
+        "virtualenv==21.14.8"
       ],
       "ref": "pre_commit==4.6.2"
     },
@@ -5143,7 +5168,7 @@
         "coverage==7.15.4",
         "pluggy==1.6.0",
         "pytest==9.1.1",
-        "virtualenv==21.7.4"
+        "virtualenv==21.14.8"
       ],
       "ref": "pytest-cov==7.1.0"
     },
@@ -5170,7 +5195,7 @@
       "dependsOn": [
         "filelock==3.32.3"
       ],
-      "ref": "python-discovery==1.5.2"
+      "ref": "python-discovery==1.6.3"
     },
     {
       "dependsOn": [
@@ -5222,7 +5247,7 @@
         "chardet==5.2.0",
         "charset-normalizer==3.5.0",
         "idna==3.18",
-        "urllib3==2.7.0"
+        "urllib3==2.8.0"
       ],
       "ref": "requests==2.34.2"
     },
@@ -5287,7 +5312,7 @@
         "python-keycloak==7.1.1",
         "redis==8.1.0",
         "typing_extensions==4.16.0",
-        "urllib3==2.7.0",
+        "urllib3==2.8.0",
         "wrapt==2.3.0"
       ],
       "ref": "testcontainers==4.15.0"
@@ -5327,7 +5352,7 @@
       "ref": "uri-template==1.3.0"
     },
     {
-      "ref": "urllib3==2.7.0"
+      "ref": "urllib3==2.8.0"
     },
     {
       "dependsOn": [
@@ -5353,11 +5378,12 @@
       "dependsOn": [
         "distlib==0.4.3",
         "filelock==3.32.3",
+        "packaging==26.3",
         "platformdirs==4.11.3",
-        "python-discovery==1.5.2",
+        "python-discovery==1.6.3",
         "typing_extensions==4.16.0"
       ],
-      "ref": "virtualenv==21.7.4"
+      "ref": "virtualenv==21.14.8"
     },
     {
       "dependsOn": [
