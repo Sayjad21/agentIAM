@@ -129,6 +129,30 @@ both succeed — measured overspend of 160 against a total of 100 (§13, CE-2.2)
 A **top-up** is an `ACQUIRE` against the same `(mandate, dimension)`. There is no separate
 operation.
 
+### 4.1a A request larger than the lease (APICTA-03, ADR-076)
+
+The PEP asks for `requested = max(lease_size, wanted)`, where `wanted` is the largest amount a
+budget check has refused on this dimension since the last successful `ACQUIRE`, and zero when
+there is none. The refusal itself schedules the `ACQUIRE` and still answers
+`LEASE_UNAVAILABLE` (retryable); the client's retry finds a lease sized to cover it. Before
+this, `requested` was always `lease_size`, so **no single request larger than one lease could
+ever be authorized** — every refusal topped up another `lease_size` and was refused again.
+Found when an approved ৳50,000 escalation met a PEP leasing ৳5,000.
+
+- **Safe by §4.1 as written.** The ledger grants `min(requested, available)`, so asking for
+  more cannot overdraw the pool; a short pool grants what it has and the request keeps
+  waiting. Nothing about G1–G6 changes: this alters only the number a PEP asks for.
+- **Bounded by authority, not by the PEP.** A budget check runs only after the token's own
+  ceilings, so `wanted` never exceeds what the requesting token was already allowed to spend in
+  one request. One authorized request can still pull up to that much of the pool into one PEP
+  for one `ttl` — §14 limitation 1, with the request as its bound instead of `lease_size`.
+- **`wanted` is cleared by any successful `ACQUIRE`.** Demand that arrived while a smaller
+  top-up was in flight is recorded again by the retry's own refusal; keeping it across the grant
+  was measured to change nothing and was dropped (a guard whose removal changes nothing).
+- **When `max_fraction` lands (gap 8, T-015)** it must not clamp below the waiting request, or a
+  request above `max_fraction × available` becomes unservable again — the defect this section
+  removes, reintroduced by the clamp.
+
 ### 4.2 `RESERVE(lease, amount) → Reservation | Insufficient`
 
 PEP-side. **No network, no ledger mutation, no lock.** This is the hot path.
@@ -483,8 +507,9 @@ across siblings — is the publishable observation.
 
 State these voluntarily. Each has a bound.
 
-1. **Stranded budget on PEP crash.** Real. Bounded by `max_fraction × available` per PEP, for at
-   most `ttl + S + ttl/4` (80 s with defaults). Mitigations: short TTL, graceful-shutdown
+1. **Stranded budget on PEP crash.** Real. Bounded by `max_fraction × available` per PEP — or,
+   until that clamp exists, by the larger of `lease_size` and the largest single request the PEP
+   was holding a lease for (§4.1a) — for at most `ttl + S + ttl/4` (80 s with defaults). Mitigations: short TTL, graceful-shutdown
    `RELEASE`, and heartbeat-based early reclaim. Do not pretend it does not exist.
 2. **Safety depends on bounded clock skew** (§9.3). Beyond `S`, overspend is possible within the
    excess.

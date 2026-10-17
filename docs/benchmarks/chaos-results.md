@@ -30,7 +30,7 @@ notes rather than in a footnote.
 
 | ID | Scenario | Expected | Invariant sweeps | Verdict |
 |---|---|---|---|---|
-| CH-1 | Kill Postgres for 30 s | PEPs spend leases, then fail closed; recovery is clean; invariant holds | 3 held / 0 violated / 122 unavailable | held |
+| CH-1 | Kill Postgres for 30 s | PEPs spend leases, then fail closed; recovery is clean; invariant holds | 3 held / 0 violated / 123 unavailable | held |
 | CH-2 | Kill Redis for 30 s | revocation falls back to pull; leases unaffected | — | not run — deferred (`PLAN.md` §21) |
 | CH-3 | SIGKILL one PEP of three | its lease strands <= TTL then reclaims; others unaffected | 9 held / 0 violated | held |
 | CH-4 | Partition PEP<->ledger | bounded spend, then fail closed | 3 held / 0 violated | held |
@@ -47,7 +47,7 @@ Sub-scenarios — additional runs that probe one aspect of a scenario above:
 
 | Run | Title | Invariant sweeps | Verdict |
 |---|---|---|---|
-| CH-01-audit | Kill Postgres for 30 s — the audit path | 3 held / 0 violated / 121 unavailable | held |
+| CH-01-audit | Kill Postgres for 30 s — the audit path | 4 held / 0 violated / 121 unavailable | held |
 | CH-04-shutdown | Partition PEP <-> ledger — graceful shutdown | 22 held / 0 violated | held |
 | CH-08-blackhole | Ollama black-holed (accepts, never answers) | 3 held / 0 violated | held |
 | CH-08-compiler | Ollama down — the NL compiler | 1 held / 0 violated | held |
@@ -59,9 +59,9 @@ Sub-scenarios — additional runs that probe one aspect of a scenario above:
 
 **Expected:** PEPs spend leases, then fail closed; recovery is clean; invariant holds
 
-Run `fc8c7ec8-8518-4d3d-bb15-28cae02ead6a` at `2026-10-16T18:26:05.753541+00:00`, 31.686 s. Verdict: **held**.
+Run `efcf3237-0df9-4d0e-af3b-6be8709ddbc8` at `2026-10-17T14:20:45.130667+00:00`, 31.675 s. Verdict: **held**.
 
-Invariant sidecar, sweeping every 0.25 s: **125 sweeps** — 3 held, 0 violated, 122 unavailable.
+Invariant sidecar, sweeping every 0.25 s: **126 sweeps** — 3 held, 0 violated, 123 unavailable.
 
 Sweeps that could not run:
 
@@ -69,7 +69,7 @@ Sweeps that could not run:
 [SQL: 
     SELECT
         b.id  `
-- `OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 34675, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 34675)`
+- `OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 44841, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 44841)`
 - `ConnectionResetError: [Errno 104] Connection reset by peer`
 
 | Measurement | Value |
@@ -77,30 +77,30 @@ Sweeps that could not run:
 | `leased_before_outage` | `300.0000` |
 | `local_remaining_at_cut` | `200.0000` |
 | `committed_before_outage` | `0.0000` |
-| `outage_s` | `30.07` |
+| `outage_s` | `30.35` |
 | `spent_during_outage` | `200.0000` |
 | `served_during_outage` | `8` |
 | `refused_during_outage` | `6` |
-| `recovery_s` | `0.3` |
+| `recovery_s` | `0.28` |
 | `leased_after_recovery` | `300.0000` |
 | `acquire_failures` | `1` |
 | `final_sweep_readable` | yes |
 
 | Load | Sent | 2xx | Dropped | Statuses | Reason codes | p50 ms | p99 ms |
 |---|---|---|---|---|---|---|---|
-| healthy | 4 | 4 | 0 | `200`: 4 | — | 3.489 | 7.575 |
-| during outage | 14 | 8 | 0 | `200`: 8, `429`: 6 | `LEASE_UNAVAILABLE`: 6 | 1.72 | 3.646 |
-| after recovery | 4 | 4 | 0 | `200`: 4 | — | 1.79 | 2.891 |
+| healthy | 4 | 4 | 0 | `200`: 4 | — | 5.052 | 9.154 |
+| during outage | 14 | 8 | 0 | `200`: 8, `429`: 6 | `LEASE_UNAVAILABLE`: 6 | 2.585 | 3.705 |
+| after recovery | 4 | 4 | 0 | `200`: 4 | — | 1.954 | 2.836 |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.037 s`  stopping postgres
-- `  0.953 s`  postgres stopped
-- ` 31.019 s`  starting postgres
-- ` 31.586 s`  postgres accepting connections after 0.3 s
-- ` 31.684 s`  scenario ended
-- ` 31.684 s`  final sweep
+- `  0.048 s`  stopping postgres
+- `  0.674 s`  postgres stopped
+- ` 31.028 s`  starting postgres
+- ` 31.582 s`  postgres accepting connections after 0.3 s
+- ` 31.674 s`  scenario ended
+- ` 31.674 s`  final sweep
 
 **Notes:**
 
@@ -113,9 +113,9 @@ Timeline:
 
 **Expected:** every record buffered during the outage reaches the chain afterwards
 
-Run `02b3e1dc-23c8-430b-a6e6-22409f335577` at `2026-10-16T18:26:38.212295+00:00`, 31.387 s. Verdict: **held**.
+Run `7205dae4-a5d5-482a-ba20-71e909b7650d` at `2026-10-17T14:21:17.333667+00:00`, 31.303 s. Verdict: **held**.
 
-Invariant sidecar, sweeping every 0.25 s: **124 sweeps** — 3 held, 0 violated, 121 unavailable.
+Invariant sidecar, sweeping every 0.25 s: **125 sweeps** — 4 held, 0 violated, 121 unavailable.
 
 Sweeps that could not run:
 
@@ -123,13 +123,13 @@ Sweeps that could not run:
 [SQL: 
     SELECT
         b.id  `
-- `OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 34675, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 34675)`
+- `OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 44841, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 44841)`
 
 | Measurement | Value |
 |---|---|
 | `records_before_outage` | `1` |
-| `allowed_while_unrecordable` | `145` |
-| `records_landed` | `145` |
+| `allowed_while_unrecordable` | `146` |
+| `records_landed` | `146` |
 | `emitter_failed_batches` | `60` |
 | `emitter_lost_records` | `0` |
 | `emitter_dropped` | `0` |
@@ -138,14 +138,14 @@ Sweeps that could not run:
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.037 s`  stopping postgres
-- ` 30.690 s`  starting postgres
-- ` 31.386 s`  scenario ended
-- ` 31.386 s`  final sweep
+- `  0.048 s`  stopping postgres
+- ` 30.659 s`  starting postgres
+- ` 31.301 s`  scenario ended
+- ` 31.301 s`  final sweep
 
 **Notes:**
 
-- Every one of the 145 records written while Postgres was stopped reached the chain after it came back (145 landed, 0 lost, 60 failed write attempts along the way). Before the fix this scenario measured the opposite: the emitter bounded every failure by max_retries and discarded the batch, so an outage was indistinguishable from a poison batch and the PEP kept authorizing requests it could no longer record. STATUS.md gap 20, now closed.
+- Every one of the 146 records written while Postgres was stopped reached the chain after it came back (146 landed, 0 lost, 60 failed write attempts along the way). Before the fix this scenario measured the opposite: the emitter bounded every failure by max_retries and discarded the batch, so an outage was indistinguishable from a poison batch and the PEP kept authorizing requests it could no longer record. STATUS.md gap 20, now closed.
 
 
 ---
@@ -154,7 +154,7 @@ Timeline:
 
 **Expected:** its lease strands <= TTL then reclaims; others unaffected
 
-Run `643915a3-c8a6-4917-bab4-b552878703e8` at `2026-10-16T18:27:17.368513+00:00`, 1.755 s. Verdict: **held**.
+Run `819dd791-80a9-4851-acd5-6edeb0b5a5c1` at `2026-10-17T14:21:56.171983+00:00`, 1.738 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **9 sweeps** — 9 held, 0 violated, 0 unavailable.
 
@@ -172,13 +172,13 @@ Invariant sidecar, sweeping every 0.25 s: **9 sweeps** — 9 held, 0 violated, 0
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.483 s`  three leases held
-- `  0.490 s`  killing pep-doomed
-- `  0.497 s`  pep-doomed exited -9
-- `  1.256 s`  reaped one second inside the skew margin
-- `  1.274 s`  reaped past the skew margin
-- `  1.747 s`  scenario ended
-- `  1.748 s`  final sweep
+- `  0.500 s`  three leases held
+- `  0.505 s`  killing pep-doomed
+- `  0.509 s`  pep-doomed exited -9
+- `  1.251 s`  reaped one second inside the skew margin
+- `  1.295 s`  reaped past the skew margin
+- `  1.736 s`  scenario ended
+- `  1.736 s`  final sweep
 
 **Notes:**
 
@@ -191,7 +191,7 @@ Timeline:
 
 **Expected:** bounded spend, then fail closed
 
-Run `bea0b247-07d6-4f9a-90ef-8dfc25ce9f8d` at `2026-10-16T18:27:28.309849+00:00`, 0.138 s. Verdict: **held**.
+Run `b68167b3-8af3-42f2-9d92-d86892b7adda` at `2026-10-17T14:22:05.659128+00:00`, 0.107 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0 unavailable.
 
@@ -202,8 +202,8 @@ Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0
 | `local_remaining_at_cut` | `120.0000` |
 | `served_during_partition` | `6` |
 | `spent_during_partition` | `120.0000` |
-| `hot_path_p99_ms_partitioned` | `3.607` |
-| `hot_path_p99_ms_healthy` | `5.162` |
+| `hot_path_p99_ms_partitioned` | `2.987` |
+| `hot_path_p99_ms_healthy` | `4.939` |
 | `committed_during_partition` | `0.0000` |
 | `invariant_held_during_partition` | yes |
 | `blackholed_connections` | `2` |
@@ -211,17 +211,17 @@ Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0
 
 | Load | Sent | 2xx | Dropped | Statuses | Reason codes | p50 ms | p99 ms |
 |---|---|---|---|---|---|---|---|
-| healthy | 4 | 4 | 0 | `200`: 4 | — | 3.602 | 5.162 |
-| during partition | 11 | 6 | 0 | `200`: 6, `429`: 5 | `LEASE_UNAVAILABLE`: 5 | 1.906 | 3.607 |
-| after heal | 4 | 4 | 0 | `200`: 4 | — | 1.884 | 2.509 |
+| healthy | 4 | 4 | 0 | `200`: 4 | — | 3.369 | 4.939 |
+| during partition | 11 | 6 | 0 | `200`: 6, `429`: 5 | `LEASE_UNAVAILABLE`: 5 | 1.699 | 2.987 |
+| after heal | 4 | 4 | 0 | `200`: 4 | — | 1.639 | 1.837 |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.036 s`  cutting PEP -> ledger (blackhole)
-- `  0.066 s`  healing the partition
-- `  0.136 s`  scenario ended
-- `  0.136 s`  final sweep
+- `  0.033 s`  cutting PEP -> ledger (blackhole)
+- `  0.060 s`  healing the partition
+- `  0.105 s`  scenario ended
+- `  0.105 s`  final sweep
 
 
 ---
@@ -230,7 +230,7 @@ Timeline:
 
 **Expected:** a partitioned PEP cannot complete `LeasePool.aclose()`
 
-Run `8155569a-8296-4c92-a7e8-f256c0d8bb69` at `2026-10-16T18:27:28.963421+00:00`, 5.159 s. Verdict: **held**.
+Run `37c68229-b954-4c02-8040-21080af52ef6` at `2026-10-17T14:22:06.246838+00:00`, 5.142 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **22 sweeps** — 22 held, 0 violated, 0 unavailable.
 
@@ -243,10 +243,10 @@ Invariant sidecar, sweeping every 0.25 s: **22 sweeps** — 22 held, 0 violated,
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.114 s`  cutting, then asking the pool to close
-- `  5.119 s`  healing; the pending shutdown should now complete
-- `  5.157 s`  scenario ended
-- `  5.157 s`  final sweep
+- `  0.105 s`  cutting, then asking the pool to close
+- `  5.109 s`  healing; the pending shutdown should now complete
+- `  5.140 s`  scenario ended
+- `  5.140 s`  final sweep
 
 **Notes:**
 
@@ -259,32 +259,32 @@ Timeline:
 
 **Expected:** template fallback; no hot-path impact
 
-Run `9a0eb476-72d5-407b-aa72-87ada65d6ccc` at `2026-10-17T12:44:29.730833+00:00`, 0.046 s. Verdict: **held**.
+Run `6e6378f6-05e2-4de1-a06f-5b4fc36e1219` at `2026-10-17T14:22:19.052190+00:00`, 0.049 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **2 sweeps** — 2 held, 0 violated, 0 unavailable.
 
 | Measurement | Value |
 |---|---|
 | `served_with_ollama_down` | `12` |
-| `hot_path_p99_ms` | `15.934` |
-| `hot_path_p50_ms` | `8.548` |
+| `hot_path_p99_ms` | `12.078` |
+| `hot_path_p50_ms` | `11.312` |
 | `embedding_timeout_s` | `2.0` |
 | `final_sweep_readable` | yes |
 
 | Load | Sent | 2xx | Dropped | Statuses | Reason codes | p50 ms | p99 ms |
 |---|---|---|---|---|---|---|---|
-| ollama refusing connections | 12 | 12 | 0 | `200`: 12 | — | 8.548 | 15.934 |
+| ollama refusing connections | 12 | 12 | 0 | `200`: 12 | — | 11.312 | 12.078 |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.044 s`  scenario ended
-- `  0.044 s`  final sweep
+- `  0.047 s`  scenario ended
+- `  0.047 s`  final sweep
 
 **Notes:**
 
 - Both halves of the expectation hold: the template fallback (T-031) answers the compiler when the model is down (CH-08-compiler), and the hot path is unaffected.
-- An unreachable Ollama costs the hot path p50 8.548 ms / p99 15.934 ms: each request waits at most 120 ms for the model and then goes on with drift unassessed (spec 09 §5 fails it open). Before APICTA-07 the same scenario measured p99 6,066 ms, because the embedding client was synchronous and called from the event loop (STATUS gap 22, closed). All 12 requests were allowed.
+- An unreachable Ollama costs the hot path p50 11.312 ms / p99 12.078 ms: each request waits at most 120 ms for the model and then goes on with drift unassessed (spec 09 §5 fails it open). Before APICTA-07 the same scenario measured p99 6,066 ms, because the embedding client was synchronous and called from the event loop (STATUS gap 22, closed). All 12 requests were allowed.
 - Measured on the Windows development host, and it invalidated this scenario's first premise: a connect to a *closed* 127.0.0.1 port does not refuse, it raises ConnectTimeout after ~3 s — port 9 included. There is no cheap-failure mode for an unreachable local service on Windows.
 
 
@@ -294,7 +294,7 @@ Timeline:
 
 **Expected:** requests still allowed; each waits at most the assess bound
 
-Run `fb9623a7-8024-41fd-b533-760501c0faf1` at `2026-10-17T12:44:30.253888+00:00`, 0.401 s. Verdict: **held**.
+Run `f1509983-72eb-41c4-8076-3c1c1680993c` at `2026-10-17T14:22:19.594480+00:00`, 0.403 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0 unavailable.
 
@@ -302,27 +302,27 @@ Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0
 |---|---|
 | `embedding_timeout_s` | `2.0` |
 | `assess_timeout_ms` | `120.0` |
-| `baseline_p99_ms` | `5.927` |
-| `blackholed_p99_ms` | `131.147` |
-| `nine_requests_three_at_a_time_wall_s` | `0.39` |
+| `baseline_p99_ms` | `7.502` |
+| `blackholed_p99_ms` | `128.817` |
+| `nine_requests_three_at_a_time_wall_s` | `0.38` |
 | `blackholed_connections` | `10` |
 | `assessments_timed_out` | `9` |
 | `final_sweep_readable` | yes |
 
 | Load | Sent | 2xx | Dropped | Statuses | Reason codes | p50 ms | p99 ms |
 |---|---|---|---|---|---|---|---|
-| no intent headers (oracle not consulted) | 6 | 6 | 0 | `200`: 6 | — | 4.916 | 5.927 |
-| ollama black-holed | 9 | 9 | 0 | `200`: 9 | — | 129.037 | 131.147 |
+| no intent headers (oracle not consulted) | 6 | 6 | 0 | `200`: 6 | — | 6.38 | 7.502 |
+| ollama black-holed | 9 | 9 | 0 | `200`: 9 | — | 126.723 | 128.817 |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.399 s`  scenario ended
-- `  0.399 s`  final sweep
+- `  0.398 s`  scenario ended
+- `  0.398 s`  final sweep
 
 **Notes:**
 
-- A black-holed Ollama now costs a request at most the 120 ms assess bound: p99 131.147 ms against a baseline p99 of 5.927 ms, nine requests three at a time in 0.4 s. Before APICTA-07 each uncached request paid the full 2.0 s embedding timeout on the event loop, and three concurrent requests took over 6 s. Outcomes are unchanged — spec 09 §5 fails drift open.
+- A black-holed Ollama now costs a request at most the 120 ms assess bound: p99 128.817 ms against a baseline p99 of 7.502 ms, nine requests three at a time in 0.4 s. Before APICTA-07 each uncached request paid the full 2.0 s embedding timeout on the event loop, and three concurrent requests took over 6 s. Outcomes are unchanged — spec 09 §5 fails drift open.
 
 
 ---
@@ -331,14 +331,14 @@ Timeline:
 
 **Expected:** typed error inside the timeout; the template compiler answers
 
-Run `70112bff-b997-4fa5-b100-7bdcb1abd923` at `2026-10-17T12:44:31.075847+00:00`, 0.061 s. Verdict: **held**.
+Run `b84dda92-b42b-4da7-b48c-fe5057809f04` at `2026-10-17T14:22:20.403520+00:00`, 0.049 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **1 sweeps** — 1 held, 0 violated, 0 unavailable.
 
 | Measurement | Value |
 |---|---|
 | `warm_returned` | no |
-| `warm_s` | `0.012` |
+| `warm_s` | `0.009` |
 | `generate_failed_after_s` | `0.005` |
 | `generate_error` | `OllamaError` |
 | `compiled_by` | `template` |
@@ -348,8 +348,8 @@ Invariant sidecar, sweeping every 0.25 s: **1 sweeps** — 1 held, 0 violated, 0
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.026 s`  scenario ended
-- `  0.026 s`  final sweep
+- `  0.022 s`  scenario ended
+- `  0.023 s`  final sweep
 
 **Notes:**
 
@@ -362,7 +362,7 @@ Timeline:
 
 **Expected:** zero dropped requests; invariant holds
 
-Run `20a2979f-46c3-4599-92d5-38e7361c0f5d` at `2026-10-16T18:27:51.221331+00:00`, 3.573 s. Verdict: **held**.
+Run `194dcab7-2531-4a90-84b0-b579b5a6f1f1` at `2026-10-17T14:22:28.298568+00:00`, 3.556 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **15 sweeps** — 15 held, 0 violated, 0 unavailable.
 
@@ -370,47 +370,47 @@ Invariant sidecar, sweeping every 0.25 s: **15 sweeps** — 15 held, 0 violated,
 |---|---|
 | `leased_with_three_instances` | `15000.0000` |
 | `restarts` | `3` |
-| `requests_sent` | `178` |
+| `requests_sent` | `182` |
 | `requests_dropped` | `0` |
 | `sweeps_during_restarts` | `12` |
-| `settlement_backlog_when_load_stopped` | `0` |
-| `settlement_counters` | `applied`: 86, `declined`: 0, `dropped`: 0, `failed_attempts`: 0, `still_pending`: 0, `shutdown_timeouts`: 0 |
-| `leased_after_restarts` | `14570.0000` |
-| `committed_after_restarts` | `890.0000` |
-| `spent_locally` | `890.0000` |
-| `pool_available_after_restarts` | `184540.0000` |
+| `settlement_backlog_when_load_stopped` | `1` |
+| `settlement_counters` | `applied`: 92, `declined`: 0, `dropped`: 0, `failed_attempts`: 0, `still_pending`: 0, `shutdown_timeouts`: 0 |
+| `leased_after_restarts` | `14540.0000` |
+| `committed_after_restarts` | `910.0000` |
+| `spent_locally` | `910.0000` |
+| `pool_available_after_restarts` | `184550.0000` |
 | `lease_rows_by_state` | `active`: 3, `released`: 3 |
 | `final_sweep_readable` | yes |
 
 | Load | Sent | 2xx | Dropped | Statuses | Reason codes | p50 ms | p99 ms |
 |---|---|---|---|---|---|---|---|
-| continuous load across the restart | 178 | 178 | 0 | `200`: 178 | — | 5.088 | 81.147 |
+| continuous load across the restart | 182 | 182 | 0 | `200`: 182 | — | 4.996 | 12.675 |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.504 s`  draining pep-roll-0
-- `  0.504 s`  stopping pep-roll-0 (RELEASE)
-- `  1.302 s`  starting pep-roll-0 (ACQUIRE)
-- `  1.360 s`  pep-roll-0 back in rotation
-- `  1.360 s`  draining pep-roll-1
-- `  1.360 s`  stopping pep-roll-1 (RELEASE)
-- `  2.148 s`  starting pep-roll-1 (ACQUIRE)
-- `  2.225 s`  pep-roll-1 back in rotation
-- `  2.225 s`  draining pep-roll-2
-- `  2.225 s`  stopping pep-roll-2 (RELEASE)
-- `  2.990 s`  starting pep-roll-2 (ACQUIRE)
-- `  3.034 s`  pep-roll-2 back in rotation
-- `  3.561 s`  settlement queues drained
-- `  3.571 s`  scenario ended
-- `  3.571 s`  final sweep
+- `  0.506 s`  draining pep-roll-0
+- `  0.506 s`  stopping pep-roll-0 (RELEASE)
+- `  1.307 s`  starting pep-roll-0 (ACQUIRE)
+- `  1.364 s`  pep-roll-0 back in rotation
+- `  1.364 s`  draining pep-roll-1
+- `  1.364 s`  stopping pep-roll-1 (RELEASE)
+- `  2.130 s`  starting pep-roll-1 (ACQUIRE)
+- `  2.183 s`  pep-roll-1 back in rotation
+- `  2.183 s`  draining pep-roll-2
+- `  2.183 s`  stopping pep-roll-2 (RELEASE)
+- `  2.964 s`  starting pep-roll-2 (ACQUIRE)
+- `  3.028 s`  pep-roll-2 back in rotation
+- `  3.552 s`  settlement queues drained
+- `  3.555 s`  scenario ended
+- `  3.555 s`  final sweep
 
 **Notes:**
 
 - An instance is the whole PEP object graph rebuilt, with a real RELEASE and a real ACQUIRE against Postgres, but not a new OS process. CH-3 is the real-process scenario. The risk a rolling restart carries is in the ledger, which is fully exercised here.
 - Two throughput observations from tuning this scenario, both unrelated to restarts and both the PEP correctly failing closed. (1) With the lease at 500 and four workers, the low-water mark leaves 25 payments of headroom and the load spent it before the top-up's ACQUIRE landed — 14 LEASE_UNAVAILABLE in 10,434 requests; that is the case T-015 (adaptive lease sizing, deferred) exists for. (2) Settlement cost one LEDGER_COMMIT per reservation, each taking FOR UPDATE on the same pool row, so three instances serialized; since `LeasePool._release` drains the queue before retiring a lease, a backlog larger than a lease's spending stalled the top-up behind it — 7,053 refusals in 21,006 requests at concurrency=4, pace=5 ms.
 - (2) is fixed. T-053 batches settlements sharing a lease into one transaction (`ledger_commit_batch`), so N lock acquisitions became one. Re-measured at the same concurrency=4, pace=5 ms that produced 7,053 refusals in 21,006 requests (33.6%): **22 in 1,083 (2.0%)**, a 17x reduction in refusal rate. At this scenario's committed paced load the settlement backlog when traffic stopped fell from 442 to 10. What remains is (1), which is lease sizing and belongs to T-015.
-- 178 requests spent 890.0000, and the ledger agrees: committed=890.0000 across 3 restarts. Before T-052 this read committed=0 — no production caller reached LEDGER_COMMIT, so every RELEASE returned spent budget to the pool. Closed by `agentiam_pep.settlement`.
+- 182 requests spent 910.0000, and the ledger agrees: committed=910.0000 across 3 restarts. Before T-052 this read committed=0 — no production caller reached LEDGER_COMMIT, so every RELEASE returned spent budget to the pool. Closed by `agentiam_pep.settlement`.
 
 
 ---
@@ -419,7 +419,7 @@ Timeline:
 
 **Expected:** a RELEASE returns only the unspent remainder of the lease
 
-Run `afd94a59-d86e-46c2-b340-4204b500369b` at `2026-10-16T18:27:55.291469+00:00`, 1.68 s. Verdict: **held**.
+Run `7759dc30-c117-43d5-9ac9-140c4c527993` at `2026-10-17T14:22:32.396373+00:00`, 1.695 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **8 sweeps** — 8 held, 0 violated, 0 unavailable.
 
@@ -435,9 +435,9 @@ Invariant sidecar, sweeping every 0.25 s: **8 sweeps** — 8 held, 0 violated, 0
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  1.645 s`  stopping pep-roll-0 gracefully (settle, then RELEASE)
-- `  1.678 s`  scenario ended
-- `  1.678 s`  final sweep
+- `  1.649 s`  stopping pep-roll-0 gracefully (settle, then RELEASE)
+- `  1.693 s`  scenario ended
+- `  1.693 s`  final sweep
 
 **Notes:**
 

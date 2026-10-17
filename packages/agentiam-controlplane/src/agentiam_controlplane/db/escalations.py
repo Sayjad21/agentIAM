@@ -12,14 +12,20 @@ here is a `SELECT ... FOR UPDATE` on the row before `approve()`/`deny()` runs, m
 lock, then sees the first caller's write and gets `EscalationNotPending` from the pure check —
 the lock only has to make the read-then-decide atomic; the "already resolved" logic still
 lives entirely in `agentiam_core.escalation`.
+
+**The grant is written in the approving transaction** (APICTA-03). `resolve_approve` takes the
+minter as a callable and runs it under the row lock, so a mint that fails — a token over the
+size limit — rolls the approval back rather than committing an approval whose token the
+waiting agent can never collect.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -36,15 +42,48 @@ from agentiam_core.escalation import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from agentiam_core.escalation import ElevationGrant
 
 __all__ = [
+    "Delivery",
     "create",
     "get",
+    "get_delivery",
     "list_by_state",
     "resolve_approve",
     "resolve_deny",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    """The elevated token as stored with an approval, and what it grants."""
+
+    elevated_token: str
+    expires_at: datetime
+    scopes: frozenset[str]
+    amount: Decimal
+
+    def to_json(self) -> dict[str, object]:
+        """The `grant` column's shape, which is also the approve route's response body."""
+        return {
+            "elevated_token": self.elevated_token,
+            "expires_at": self.expires_at.isoformat(),
+            "scopes": sorted(self.scopes),
+            "amount": str(self.amount),
+        }
+
+    @classmethod
+    def from_json(cls, stored: dict[str, Any]) -> Delivery:
+        """Read back what `to_json` wrote."""
+        return cls(
+            elevated_token=str(stored["elevated_token"]),
+            expires_at=datetime.fromisoformat(str(stored["expires_at"])),
+            scopes=frozenset(str(s) for s in stored["scopes"]),
+            amount=Decimal(str(stored["amount"])),
+        )
 
 
 def _to_domain(row: EscalationRow) -> Escalation:
@@ -64,6 +103,8 @@ def _to_domain(row: EscalationRow) -> Escalation:
         resolved_by=row.resolved_by,
         resolved_at=row.resolved_at,
         resolution_reason=row.resolution_reason,
+        mandate_id=row.mandate_id,
+        agent_path=tuple(row.agent_path) if row.agent_path is not None else None,
     )
 
 
@@ -80,6 +121,8 @@ async def create(
     reason: str,
     now: datetime,
     ttl: timedelta,
+    mandate_id: uuid.UUID | None = None,
+    agent_path: tuple[str, ...] | None = None,
 ) -> Escalation:
     """Open a pending escalation and persist it.
 
@@ -101,6 +144,8 @@ async def create(
         reason=reason,
         now=now,
         ttl=ttl,
+        mandate_id=mandate_id,
+        agent_path=agent_path,
     )
     try:
         async with session.begin():
@@ -118,6 +163,10 @@ async def create(
                     created_at=escalation.created_at,
                     expires_at=escalation.expires_at,
                     state=escalation.state.value,
+                    mandate_id=escalation.mandate_id,
+                    agent_path=(
+                        list(escalation.agent_path) if escalation.agent_path is not None else None
+                    ),
                 )
             )
     except IntegrityError as exc:
@@ -156,6 +205,20 @@ async def get(session: AsyncSession, escalation_id: uuid.UUID) -> Escalation | N
     """Fetch one escalation, or `None` if no such id exists."""
     row = await session.get(EscalationRow, escalation_id)
     return _to_domain(row) if row is not None else None
+
+
+async def get_delivery(
+    session: AsyncSession, escalation_id: uuid.UUID
+) -> tuple[Escalation, Delivery | None] | None:
+    """Fetch one escalation with its stored grant, or `None` if no such id exists.
+
+    The grant is `None` until the escalation is approved, and stays `None` for one approved
+    without a minter.
+    """
+    row = await session.get(EscalationRow, escalation_id)
+    if row is None:
+        return None
+    return _to_domain(row), Delivery.from_json(row.grant) if row.grant is not None else None
 
 
 async def list_by_state(
@@ -199,8 +262,13 @@ async def resolve_approve(
     elevation_ttl: timedelta,
     narrowed_scopes: frozenset[str] | None = None,
     max_amount: Decimal | None = None,
-) -> tuple[Escalation, ElevationGrant]:
+    mint: Callable[[ElevationGrant], str] | None = None,
+) -> tuple[Escalation, ElevationGrant, Delivery | None]:
     """Approve under a row lock, so two racing approvers cannot both win (EC-A10).
+
+    `mint` turns the grant into the elevated token. It runs under the same lock and in the
+    same transaction as the state change, and whatever it raises propagates and rolls the
+    approval back — an approved row always carries its token.
 
     Raises:
         EscalationNotFoundError: No such escalation.
@@ -218,10 +286,21 @@ async def resolve_approve(
             narrowed_scopes=narrowed_scopes,
             max_amount=max_amount,
         )
+        delivery = (
+            Delivery(
+                elevated_token=mint(grant),
+                expires_at=grant.expires_at,
+                scopes=grant.scopes,
+                amount=grant.amount,
+            )
+            if mint is not None
+            else None
+        )
         row.state = resolved.state.value
         row.resolved_by = resolved.resolved_by
         row.resolved_at = resolved.resolved_at
-    return resolved, grant
+        row.grant = delivery.to_json() if delivery is not None else None
+    return resolved, grant, delivery
 
 
 async def resolve_deny(

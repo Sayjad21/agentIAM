@@ -1,21 +1,27 @@
 """The client an agent developer holds: verify a token, attenuate it, act under it.
 
-This is the whole surface for now, and deliberately so. `spend()`, `call_tool()` and
-`escalate()` from `PLAN.md` §8 all need a transport and a lease pool; they arrive with
-T-018 and T-021. Stubbing them here would produce methods that look usable and enforce
-nothing, which is worse than their absence.
+Minting a narrower child is pure local cryptography — no issuer round-trip, no shared
+state (INV-3) — and it is the claim the demo is built on, so it shipped first.
 
-What *is* here is the part that needs no network at all. Minting a narrower child is
-pure local cryptography — no issuer round-trip, no shared state (INV-3) — and it is the
-claim the demo is built on, so it is the part that ships first.
+`call()` and `call_with_escalation_wait()` (APICTA-03) are the network half: a request
+through the PEP under this client's token, and, when the PEP answers `APPROVAL_REQUIRED`,
+waiting for a human's decision and retrying once under the elevated token the approval
+minted. The agent collects that token from the control plane with the token it was refused
+under — the only credential that proves it is the agent that asked. Nothing here enforces
+anything; the PEP does, and an over-grant retry is refused there, not here.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
+import uuid
 import warnings
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
-from typing import TYPE_CHECKING
+from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING, Any, Final
+
+import httpx
 
 from agentiam_core.attenuation import attenuate as core_attenuate
 from agentiam_core.errors import DepthExceededError, ReasonCode
@@ -30,13 +36,36 @@ from agentiam_core.models import (
 )
 from agentiam_core.tokens import WARN_SIZE_LIMIT_B64, RootKeySet, verify
 from agentiam_sdk.context import use_identity
-from agentiam_sdk.errors import TokenSizeWarning
+from agentiam_sdk.errors import (
+    EscalationDenied,
+    EscalationError,
+    EscalationExpired,
+    EscalationWaitTimeout,
+    TokenSizeWarning,
+)
 from agentiam_sdk.identity import AgentIdentity
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
 
     from agentiam_sdk.context import _IdentityScope
+
+
+#: Refusal codes whose body carries an escalation id worth waiting on (spec 09 §11).
+_ESCALATING: Final = frozenset(
+    {ReasonCode.APPROVAL_REQUIRED.value, ReasonCode.DRIFT_ESCALATION.value}
+)
+#: Each status poll waits this much longer than the last, up to this multiple of `poll_s`.
+#: An approver takes tens of seconds; the cap keeps the worst added latency a few polls.
+_BACKOFF: Final = 1.5
+_BACKOFF_CAP: Final = 5.0
+#: How often the approved retry is re-sent while the PEP answers `LEASE_UNAVAILABLE`, and the
+#: longest wait between. An approved amount can exceed the PEP's standing lease; the refusal
+#: makes the PEP acquire enough to cover it (spec 04 §4.1a), which takes one ledger round trip.
+_LEASE_RETRIES: Final = 5
+_LEASE_RETRY_CAP_S: Final = 1.0
+#: Per-request bound for a client the SDK builds itself. Generous: it covers the upstream.
+_HTTP_TIMEOUT_S: Final = 30.0
 
 
 def _utc_now() -> datetime:
@@ -56,7 +85,7 @@ class AgentIAM:
     reach back through it to the parent's authority.
     """
 
-    __slots__ = ("_clock", "_identity", "_key_set", "_task_intent")
+    __slots__ = ("_clock", "_control_plane_url", "_http", "_identity", "_key_set", "_task_intent")
 
     def __init__(
         self,
@@ -68,6 +97,8 @@ class AgentIAM:
         known_caveats: Sequence[Caveat] = (),
         task_intent: str | None = None,
         clock: Callable[[], datetime] | None = None,
+        http: httpx.AsyncClient | None = None,
+        control_plane_url: str | None = None,
     ) -> None:
         """Verify `token` and hold it as this agent's identity.
 
@@ -87,6 +118,10 @@ class AgentIAM:
             task_intent: The original English description of the task this token authorizes.
                 Used by the PEP for drift scoring.
             clock: Source of the current instant. Injected so tests are reproducible.
+            http: The HTTP client `call()` sends through. When omitted, each call opens and
+                closes its own; pass one to reuse connections or to inject a transport.
+            control_plane_url: Base URL of the control plane, where
+                `call_with_escalation_wait()` collects an approved escalation.
 
         Raises:
             TokenTooLargeError, MalformedTokenError, InvalidSignatureError,
@@ -95,6 +130,8 @@ class AgentIAM:
         self._key_set = key_set
         self._clock = clock or _utc_now
         self._task_intent = task_intent
+        self._http = http
+        self._control_plane_url = control_plane_url
         verified = verify(token, key_set, now=self._clock())
         self._identity = AgentIdentity(
             token=token,
@@ -129,6 +166,11 @@ class AgentIAM:
     def token(self) -> str:
         """The chain as it goes on the wire."""
         return self._identity.token
+
+    @property
+    def control_plane_url(self) -> str | None:
+        """Where an approved escalation is collected from, if configured."""
+        return self._control_plane_url
 
     @property
     def key_set(self) -> RootKeySet:
@@ -234,7 +276,177 @@ class AgentIAM:
             known_caveats=(*parent.known_caveats, *proposed),
             task_intent=self._task_intent,
             clock=self._clock,
+            http=self._http,
+            control_plane_url=self._control_plane_url,
         )
+
+    async def call(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any = None,  # noqa: ANN401 — any JSON-serializable body, as httpx takes it
+        intent: str | None = None,
+    ) -> httpx.Response:
+        """Send one request through the PEP under this client's token.
+
+        Args:
+            method: HTTP method.
+            url: Full URL, the PEP's address included.
+            json: Request body, serialized as JSON. Money in it should be a string or an
+                integer, never a float (rule 4).
+            intent: What this specific action is for, in English — the action intent the
+                PEP's drift detection compares against the task (spec 06).
+
+        Returns:
+            The PEP's response, whatever its status. A refusal is an answer, not an error.
+        """
+        return await self._send(method, url, json=json, headers=self.headers(intent))
+
+    async def call_with_escalation_wait(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any = None,  # noqa: ANN401 — as `call()`
+        intent: str | None = None,
+        timeout_s: float = 120.0,
+        poll_s: float = 1.0,
+        fit_to_grant: bool = False,
+    ) -> httpx.Response:
+        """`call()`, and on a refusal that opened an escalation, wait for it and retry once.
+
+        On `403` with `APPROVAL_REQUIRED` or `DRIFT_ESCALATION` and an `escalation_id`, polls
+        the control plane's status route with backoff, authenticated by this client's own
+        token. Once approved, the request is sent again exactly once under the elevated
+        token, and that response is returned whatever it is — except that a
+        `429 LEASE_UNAVAILABLE` is re-sent a few times, briefly, because an approved amount
+        larger than the PEP's standing lease is refused once while the PEP acquires enough to
+        cover it. Any other response is returned as it came.
+
+        Args:
+            method: HTTP method.
+            url: Full URL, the PEP's address included.
+            json: Request body, as `call()`.
+            intent: The action intent, as `call()`; sent again with the retry.
+            timeout_s: How long to wait for a decision before giving up.
+            poll_s: The first interval between status polls; later ones back off.
+            fit_to_grant: If the approver granted less than a top-level `amount` in `json`
+                asked for, retry with the granted amount instead. Off by default: paying
+                less than was asked is a decision for the caller, not a side effect.
+
+        Returns:
+            The PEP's response to the original request, or to the one retry.
+
+        Raises:
+            ValueError: This client has no `control_plane_url`.
+            EscalationDenied: An approver refused; the message carries their reason.
+            EscalationExpired: Nobody decided within the escalation's own window.
+            EscalationWaitTimeout: `timeout_s` passed with the escalation still pending.
+            EscalationError: The control plane will not tell this token about the
+                escalation (401/404), or approved it without a token to collect.
+        """
+        if self._control_plane_url is None:
+            raise ValueError(
+                "call_with_escalation_wait() needs a control_plane_url to collect the grant from"
+            )
+        response = await self.call(method, url, json=json, intent=intent)
+        escalation_id = _escalation_id(response)
+        if escalation_id is None:
+            return response
+
+        grant = await self._await_grant(escalation_id, timeout_s=timeout_s, poll_s=poll_s)
+        elevated = AgentIAM(
+            token=grant["elevated_token"],
+            key_set=self._key_set,
+            role=self._identity.role,
+            agent_id=self._identity.agent_id,
+            task_intent=self._task_intent,
+            clock=self._clock,
+            http=self._http,
+            control_plane_url=self._control_plane_url,
+        )
+        if fit_to_grant:
+            json = _fit_to_grant(json, grant["amount"])
+        delay = min(poll_s, 0.25)
+        for _ in range(_LEASE_RETRIES):
+            response = await elevated.call(method, url, json=json, intent=intent)
+            if not _lease_unavailable(response):
+                return response
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _LEASE_RETRY_CAP_S)
+        return await elevated.call(method, url, json=json, intent=intent)
+
+    async def _await_grant(
+        self, escalation_id: uuid.UUID, *, timeout_s: float, poll_s: float
+    ) -> dict[str, Any]:
+        """Poll the status route until the escalation is decided or `timeout_s` passes."""
+        assert self._control_plane_url is not None  # noqa: S101 — checked by the caller
+        status_url = f"{self._control_plane_url.rstrip('/')}/v1/escalations/{escalation_id}/status"
+        deadline = time.monotonic() + timeout_s
+        interval = poll_s
+        while True:
+            status = await self._poll(status_url, escalation_id)
+            state = status.get("state") if status is not None else None
+            if state == "approved":
+                if not isinstance(status, dict) or "elevated_token" not in status:
+                    raise EscalationError(
+                        f"escalation {escalation_id} was approved without a token to collect",
+                        escalation_id=escalation_id,
+                    )
+                return status
+            if state == "denied":
+                reason = (status or {}).get("reason") or "no reason given"
+                raise EscalationDenied(
+                    f"escalation {escalation_id} was denied: {reason}",
+                    escalation_id=escalation_id,
+                )
+            if state == "expired":
+                raise EscalationExpired(
+                    f"escalation {escalation_id} expired before anyone decided it",
+                    escalation_id=escalation_id,
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise EscalationWaitTimeout(
+                    f"stopped waiting on escalation {escalation_id} after {timeout_s}s; "
+                    f"it may still be approved",
+                    escalation_id=escalation_id,
+                )
+            await asyncio.sleep(min(interval, remaining))
+            interval = min(interval * _BACKOFF, poll_s * _BACKOFF_CAP)
+
+    async def _poll(self, status_url: str, escalation_id: uuid.UUID) -> dict[str, Any] | None:
+        """One status read. `None` for a transient failure worth polling through."""
+        try:
+            response = await self._send(
+                "GET", status_url, json=None, headers={"Authorization": f"Bearer {self.token}"}
+            )
+        except httpx.TransportError:
+            return None
+        if response.status_code >= 500:
+            return None
+        if response.status_code != 200:
+            # A 401 or 404 is this token's answer for this id, and will not change.
+            raise EscalationError(
+                f"the control plane answered {response.status_code} for escalation {escalation_id}",
+                escalation_id=escalation_id,
+            )
+        body = response.json()
+        return body if isinstance(body, dict) else None
+
+    async def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any,  # noqa: ANN401 — as `call()`
+        headers: dict[str, str],
+    ) -> httpx.Response:
+        if self._http is not None:
+            return await self._http.request(method, url, json=json, headers=headers)
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as http:
+            return await http.request(method, url, json=json, headers=headers)
 
     def _keyword_caveats(
         self,
@@ -269,6 +481,47 @@ class AgentIAM:
         if tools_deny is not None:
             built.append(ToolDeny(tools=frozenset(tools_deny)))
         return built
+
+
+def _escalation_id(response: httpx.Response) -> uuid.UUID | None:
+    """The escalation a refusal opened, if it opened one an agent can wait on."""
+    if response.status_code != 403:
+        return None
+    try:
+        body = response.json()
+        if not isinstance(body, dict) or body.get("reason_code") not in _ESCALATING:
+            return None
+        return uuid.UUID(str(body["escalation_id"]))
+    except (ValueError, KeyError):
+        return None
+
+
+def _lease_unavailable(response: httpx.Response) -> bool:
+    """Whether the PEP refused only because its lease is being topped up (spec 09 §4)."""
+    if response.status_code != 429:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("reason_code") == "LEASE_UNAVAILABLE"
+
+
+def _fit_to_grant(body: Any, granted: object) -> Any:  # noqa: ANN401 — a JSON body
+    """`body` with a top-level `amount` above the grant lowered to it; otherwise unchanged.
+
+    Compared as `Decimal` and written back as the grant's own string, so no float touches
+    the money on the way (rule 4).
+    """
+    if not isinstance(body, dict) or "amount" not in body:
+        return body
+    try:
+        requested, ceiling = Decimal(str(body["amount"])), Decimal(str(granted))
+    except InvalidOperation:
+        return body
+    if requested <= ceiling:
+        return body
+    return {**body, "amount": str(granted)}
 
 
 __all__ = ["AgentIAM"]

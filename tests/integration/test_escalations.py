@@ -209,7 +209,7 @@ async def test_resolve_approve_persists_the_resolution_and_returns_a_grant(
     escalation = await _an_escalation(factory)
 
     async with factory() as s:
-        resolved, grant = await resolve_approve(
+        resolved, grant, _ = await resolve_approve(
             s,
             escalation.id,
             approver="kc:manager",

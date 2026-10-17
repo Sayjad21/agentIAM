@@ -462,6 +462,69 @@ DEFAULT_SPAWN_DELAY_S: Final = 3.5
 DEFAULT_CALL_DELAY_S: Final = 0.3
 
 
+def _is_held(who: str, method: str) -> bool:
+    """Whether this call is the one the PEP holds for a human (`_APPROVAL_REQUIRED`)."""
+    return who in _APPROVAL_REQUIRED and method == "POST"
+
+
+async def _complete_held_call(
+    call: _Call,
+    *,
+    token: str,
+    key_file: Path,
+    pep_url: str,
+    control_plane_url: str,
+    console_url: str,
+    timeout_s: float,
+) -> int:
+    """APICTA-03's beat: the agent asks, waits for a human, and finishes on what was granted.
+
+    Goes through the SDK rather than raw HTTP because that is the claim — an agent holding
+    only its own token collects the elevated one and retries by itself. `fit_to_grant` is on:
+    if the approver lowered the amount, the agent pays what it was allowed, not nothing.
+    """
+    from biscuit_auth import Algorithm, PublicKey
+
+    from agentiam_core.tokens import RootKeySet
+    from agentiam_sdk import AgentIAM, EscalationError, EscalationWaitTimeout
+
+    label, who, method, path, body = call
+    key_set = RootKeySet(
+        [
+            PublicKey.from_bytes(  # type: ignore[call-arg]
+                bytes.fromhex(key_file.read_text(encoding="utf-8").strip()),
+                Algorithm.Ed25519,  # type: ignore[attr-defined]
+            )
+        ]
+    )
+    agent = AgentIAM(
+        token=token, key_set=key_set, agent_id=who, control_plane_url=control_plane_url
+    )
+    amount = (body or {}).get("amount")
+    print(f"\n{who} asks for {amount} and waits for a human ({label}).")
+    print(f"  approve it: {console_url}/escalations  — sign in as Tanvir Ahmed (CFO);")
+    print("  lower the amount if you like, the agent pays what it is granted.")
+    try:
+        response = await agent.call_with_escalation_wait(
+            method, f"{pep_url}{path}", json=body, timeout_s=timeout_s, fit_to_grant=True
+        )
+    except EscalationWaitTimeout as exc:
+        print(f"  gave up after {timeout_s:.0f}s; escalation {exc.escalation_id} is still open")
+        return 1
+    except EscalationError as exc:
+        # A denial or an expiry is a human's answer, and the demo shows it as one.
+        print(f"  {type(exc).__name__}: {exc}")
+        return 0
+    try:
+        sent = json.loads(response.request.content or b"{}").get("amount")
+    except ValueError:
+        sent = None
+    outcome = "completed" if response.is_success else "refused"
+    print(f"  approved; {who} retried with the elevated token for {sent}: {outcome}")
+    print(f"  ({response.status_code} {response.text[:120]})")
+    return 0 if response.is_success else 1
+
+
 def drive(
     tokens_file: Path,
     pep_url: str,
@@ -469,11 +532,18 @@ def drive(
     *,
     spawn_delay: float = DEFAULT_SPAWN_DELAY_S,
     call_delay: float = DEFAULT_CALL_DELAY_S,
+    await_approval_s: float = 0.0,
+    control_plane_api_url: str | None = None,
 ) -> int:
     """Phase two: send the scenario's traffic so the console pages have content.
 
     Paced on purpose. Open the identity tree before running this and each agent appears as
     it makes its first call; ``spawn_delay=0, call_delay=0`` sends everything at once.
+
+    With ``await_approval_s`` the held payment is taken out of the stream and sent last,
+    through the SDK, which then waits up to that long for someone to approve it in the
+    console and completes it by itself (APICTA-03). ``control_plane_api_url`` is where the
+    agent polls, when that differs from the address a browser uses (inside compose).
     """
     import time
 
@@ -488,8 +558,12 @@ def drive(
     spawned: set[str] = set()
     escalations: list[str] = []
     unqueued: list[str] = []
+    deferred: _Call | None = None
     with httpx.Client(timeout=30.0) as client:
         for label, who, method, path, body in _TRAFFIC:
+            if await_approval_s > 0 and _is_held(who, method):
+                deferred = (label, who, method, path, body)
+                continue
             if who not in spawned:
                 if spawned and spawn_delay > 0:
                     time.sleep(spawn_delay)
@@ -538,6 +612,18 @@ def drive(
             "`escalation_sink` wired in pep_service? " + "; ".join(unqueued)
         )
         return 1
+    if deferred is not None:
+        return asyncio.run(
+            _complete_held_call(
+                deferred,
+                token=tokens[deferred[1]],
+                key_file=tokens_file.parent / "root_public_key.hex",
+                pep_url=pep_url,
+                control_plane_url=control_plane_api_url or control_plane_url,
+                console_url=control_plane_url,
+                timeout_s=await_approval_s,
+            )
+        )
     return 0
 
 
@@ -577,6 +663,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--control-plane-url", default="http://localhost:8000")
     parser.add_argument(
+        "--control-plane-api-url",
+        default=None,
+        help="Where the agent polls its escalation, if not --control-plane-url (in compose).",
+    )
+    parser.add_argument(
+        "--await-approval",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="Send the held payment last and wait this long for it to be approved, then "
+        "let the agent complete it on what was granted. 0 leaves it pending.",
+    )
+    parser.add_argument(
         "--tokens",
         type=Path,
         default=None,
@@ -598,6 +697,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.control_plane_url.rstrip("/"),
             spawn_delay=args.spawn_delay,
             call_delay=args.call_delay,
+            await_approval_s=args.await_approval,
+            control_plane_api_url=(
+                args.control_plane_api_url.rstrip("/") if args.control_plane_api_url else None
+            ),
         )
 
     database_url = (

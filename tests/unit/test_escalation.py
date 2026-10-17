@@ -33,6 +33,7 @@ from agentiam_core.escalation import (
     EscalationState,
     NarrowingWidensRequest,
     approve,
+    belongs_to,
     deny,
     request_escalation,
 )
@@ -425,3 +426,97 @@ class TestImmutability:
         escalation = an_escalation()
         with pytest.raises((AttributeError, TypeError)):
             escalation.state = EscalationState.APPROVED  # type: ignore[misc]
+
+
+class TestDelivery:
+    """APICTA-03: the grant reaches the agent that asked, under the mandate it asked from.
+
+    An elevated token minted under a fresh mandate is spent against a pool no PEP leases from,
+    and one minted without the agent's delegation path is a different principal to Cedar —
+    measured on the demo stack, where it was refused by the `critical`-resource forbid at
+    every amount. So the escalation records both, and the grant carries them to the minter.
+    """
+
+    MANDATE = uuid.UUID("d0d0d0d0-0000-4000-8000-000000000001")
+    PATH = ("agt-treasury", "agt-bulk-buyer")
+
+    def delivered(self, **over: object) -> Escalation:
+        return an_escalation(
+            **(
+                {"agent_id": "agt-bulk-buyer", "mandate_id": self.MANDATE, "agent_path": self.PATH}
+                | over
+            )
+        )
+
+    def test_the_grant_keeps_the_mandate_and_the_path(self) -> None:
+        _, grant = approve(
+            self.delivered(),
+            approver="kc:cfo",
+            authorized=APPROVERS,
+            now=NOW,
+            elevation_ttl=timedelta(minutes=5),
+        )
+        assert grant.mandate_id == self.MANDATE
+        assert grant.agent_path == self.PATH
+
+    def test_an_escalation_opened_without_them_records_neither(self) -> None:
+        escalation = an_escalation()
+        assert escalation.mandate_id is None
+        assert escalation.agent_path is None
+
+    def test_the_requesting_agent_owns_it(self) -> None:
+        escalation = self.delivered()
+        assert belongs_to(
+            escalation,
+            task_id=escalation.task_id,
+            mandate_id=self.MANDATE,
+            agent_path=self.PATH,
+            agent_id="agt-bulk-buyer",
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("task_id", uuid.uuid4()),
+            ("mandate_id", uuid.uuid4()),
+            ("agent_path", ("agt-treasury",)),
+            ("agent_path", ("agt-payer", "agt-bulk-buyer")),
+        ],
+    )
+    def test_any_other_caller_does_not(self, field: str, value: object) -> None:
+        escalation = self.delivered()
+        caller: dict[str, object] = {
+            "task_id": escalation.task_id,
+            "mandate_id": self.MANDATE,
+            "agent_path": self.PATH,
+            "agent_id": "agt-bulk-buyer",
+        }
+        assert not belongs_to(escalation, **(caller | {field: value}))  # type: ignore[arg-type]
+
+    def test_a_sibling_of_the_same_name_elsewhere_in_the_tree_does_not(self) -> None:
+        # The name alone is the parent's word; the path is what the agent could not forge.
+        escalation = self.delivered()
+        assert not belongs_to(
+            escalation,
+            task_id=escalation.task_id,
+            mandate_id=self.MANDATE,
+            agent_path=("agt-payer", "agt-bulk-buyer"),
+            agent_id="agt-bulk-buyer",
+        )
+
+    def test_without_a_recorded_path_the_agent_id_decides(self) -> None:
+        escalation = an_escalation(agent_id="agt-1")
+        assert belongs_to(
+            escalation,
+            task_id=escalation.task_id,
+            mandate_id=uuid.uuid4(),
+            agent_path=("x",),
+            agent_id="agt-1",
+        )
+        assert not belongs_to(
+            escalation,
+            task_id=escalation.task_id,
+            mandate_id=uuid.uuid4(),
+            agent_path=("x",),
+            agent_id="agt-2",
+        )

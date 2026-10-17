@@ -312,6 +312,13 @@ class EscalationRow(Base):
     resolved_by: Mapped[str | None] = mapped_column(nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_reason: Mapped[str | None] = mapped_column(nullable=True)
+    #: The requesting token's mandate and delegation path, recorded by the PEP (APICTA-03).
+    mandate_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    agent_path: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    #: The elevated token and what it grants, written with the approval — a bearer
+    #: credential at rest, readable only through the requesting agent's own token
+    #: (`docs/threat-model.md` TM-28).
+    grant: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 _REVOCATION_SCOPES_SQL = ", ".join(f"'{s}'" for s in ("token", "subtree", "mandate"))

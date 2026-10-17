@@ -130,6 +130,9 @@ class _Held:
     lease: LocalLease
     topping_up: bool = False
     mandate_exhausted: bool = False
+    #: The largest request `check()` has refused for want of budget and that no ACQUIRE
+    #: has yet been sized for. Zero when there is none. Spec 04 §4.1a.
+    wanted: Decimal = Decimal(0)
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
 
@@ -208,11 +211,17 @@ class LeasePool:
 
     async def _acquire(self, dimension: BudgetDimension) -> LeaseGrant | None:
         now = self._now()
+        # **Sized for the request that is waiting, if it is larger** (spec 04 §4.1a). A fixed
+        # `lease_size` meant no single request above it could ever pass: each refusal topped
+        # up another `lease_size` and was refused again. The ledger grants
+        # `min(requested, available)`, so asking for more cannot overdraw the pool.
+        pending = self._held.get(dimension)
+        requested = max(self._settings.lease_size, pending.wanted if pending else Decimal(0))
         try:
             grant = await self._client.acquire(
                 mandate_id=self._mandate_id,
                 dimension=dimension,
-                requested=self._settings.lease_size,
+                requested=requested,
                 pep_id=self._settings.pep_id,
                 ttl=self._settings.ttl,
                 now=now,
@@ -259,6 +268,9 @@ class LeasePool:
             state=LeaseState.ACTIVE,
         )
         held.mandate_exhausted = False
+        # Served, or superseded: a request still too large is refused again on its retry,
+        # and that refusal records it afresh — keeping it here was measured to change nothing.
+        held.wanted = Decimal(0)
         # The old lease is always active here: nothing in this module moves a lease out of
         # ACTIVE except aclose(), and aclose() stops top-ups before it does. When T-038's
         # revocation gossip starts marking leases from outside, this is where an already
@@ -331,6 +343,12 @@ class LeasePool:
                 # CH-1: Postgres goes away, the held lease drains, and every later ACQUIRE
                 # would have been scheduled by a `reserve()` that never runs again. The PEP
                 # stayed dead after the database came back. Measured, then fixed here.
+                #
+                # A request larger than what is left is remembered, so the top-up is sized
+                # to cover it (spec 04 §4.1a) — not only refilled to `lease_size`.
+                if lease.remaining_local < amount:
+                    held.wanted = max(held.wanted, amount)
+                    self._schedule_topup(dimension, held)
                 self._maybe_schedule_topup(dimension, held)
                 return BudgetVerdict(
                     ok=False,

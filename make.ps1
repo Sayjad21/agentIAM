@@ -173,12 +173,15 @@ switch ($Target) {
     'sbom' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_sbom.py', '--write') }
     'demo-seed' {
         # The tokens live in the `demo-secrets` volume, not on the host, so this runs
-        # inside a container that mounts it.
+        # inside a container that mounts it. Ends waiting on the bulk buyer's escalation:
+        # approve it in the console as the CFO and the agent completes it (APICTA-03).
         Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
                       'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
                       'python', 'scripts/seed_demo.py', '--drive',
                       '--tokens', '/secrets/demo-tokens.json',
-                      '--pep-url', 'http://pep:8080')
+                      '--pep-url', 'http://pep:8080',
+                      '--control-plane-api-url', 'http://controlplane:8000',
+                      '--await-approval', '600')
     }
     'demo-conc' {
         # The sibling race, live. Every run is a fresh mandate - one run spends the pool -

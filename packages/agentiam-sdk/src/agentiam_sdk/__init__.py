@@ -30,6 +30,10 @@ from agentiam_sdk.context import (
 )
 from agentiam_sdk.decorators import requires_scope
 from agentiam_sdk.errors import (
+    EscalationDenied,
+    EscalationError,
+    EscalationExpired,
+    EscalationWaitTimeout,
     IdentityContextError,
     NoIdentityError,
     ScopeDeniedError,
@@ -43,6 +47,10 @@ __version__ = "0.1.0"
 __all__ = [
     "AgentIAM",
     "AgentIdentity",
+    "EscalationDenied",
+    "EscalationError",
+    "EscalationExpired",
+    "EscalationWaitTimeout",
     "IdentityContextError",
     "NoIdentityError",
     "SDKError",

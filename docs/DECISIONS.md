@@ -4562,3 +4562,96 @@ outright, and the hosted client's retries could hold it for minutes.
   quarantine tests (1/2 → 2/2); it is not in the dataset prompt.
 - CH-8's compiler scenario now asserts the fallback rather than its absence; DEMO.md F-1/F-2 have
   a recovery.
+
+---
+
+## ADR-075 — An approved escalation is minted where the agent stands and collected with the agent's own token
+
+**Status:** accepted · **Ticket:** APICTA-03 · **Relates to:** ADR-041, ADR-046, ADR-057, ADR-076
+
+### Context
+
+T-037's approval minted the elevated token under a brand-new `mandate_id` and returned it to the
+*approver* in the HTTP response. Nothing stored it and nothing delivered it to the agent that
+asked. It also could not have worked if delivered: a fresh mandate is a pool no PEP leases from,
+and a bare root token is a different principal to Cedar from the agent that asked — the demo
+policy's role assignment is keyed on the delegation path (ADR-057), so a root token gets the
+default role and the `critical`-resource forbid refused it at every amount, measured on the demo
+stack. The SDK made no HTTP calls at all.
+
+### Decision
+
+1. **The PEP records the requesting token's `mandate_id` and delegation path** on the escalation
+   it opens (migration `0009`). The path is read once, on the escalating path only.
+2. **The approval mints under the recorded mandate and re-attenuates along the recorded path**,
+   one block per segment, with role `elevated` (display only). `max_depth` is the path's length,
+   so the elevated token cannot be delegated further. An escalation opened without them — the
+   API route, or a row from before `0009` — mints as T-037 did.
+3. **The token is minted and stored in the approving transaction**, under the row lock. A mint
+   that fails (token over the size limit) rolls the approval back, so an approved row always
+   carries the token its agent is waiting for.
+4. **`GET /v1/escalations/{id}/status` is authenticated by the agent's own token**, not a session.
+   The token must verify, must not be revoked (read from the control plane's own revocations
+   table), and must match the row's task, mandate and **path** — the agent id alone is the
+   parent's word and is used only for a row recorded without a path. Any mismatch is the same
+   404 as an unknown id, so a valid token for one task learns nothing about another's ids.
+5. **The SDK gains `httpx`** (rule 7: a new dependency of `agentiam-sdk`, already a dependency of
+   the PEP and control plane, so nothing new enters the lock file). `AgentIAM.call()` and
+   `call_with_escalation_wait()`: poll with backoff (×1.5, capped at 5× `poll_s`), retry once
+   under the elevated token, `fit_to_grant` opt-in. Giving up waiting raises
+   `EscalationWaitTimeout`, deliberately not `EscalationExpired` — the escalation is still
+   pending and still collectable. 401/404 from the status route raise at once; 5xx and transport
+   errors are polled through.
+
+### Consequences
+
+- The elevated token is a bearer credential at rest in `escalations.grant` until it expires
+  (`docs/threat-model.md` TM-28). Bounded by its TTL (default 300 s) and by the status route's
+  identity check; not bounded against a reader of the database.
+- **Revoking the requester does not revoke an elevated token it already collected**: it is its own
+  root, with its own revocation ids. Revoking first does stop the collection (the route's
+  revocation check, pinned by a test). Closing the remaining window needs revocation by mandate
+  to cover every root minted under it — not done here.
+- Measured live on the demo stack: refusal → Farhana 403 → Tanvir approves ৳50,000 of ৳75,000 →
+  the agent collects the token and pays ৳50,000 by itself, once ADR-076 let a PEP lease that much.
+
+---
+
+## ADR-076 — A PEP asks the ledger for enough to cover the request that is waiting
+
+**Status:** accepted · **Ticket:** APICTA-03 · **Specified in:** spec 04 §4.1a · **Relates to:**
+ADR-015, gap 8, T-015
+
+### Context
+
+`LeasePool._acquire` always asked for `lease_size`. A request larger than one lease was refused,
+the refusal topped up another `lease_size`, and the retry was refused again — forever. Ordinary
+demo traffic fits inside a ৳5,000 lease, so nothing had hit it; the first thing that did was
+APICTA-03's beat, where the CFO approves ৳50,000 and the agent's retry met `LEASE_UNAVAILABLE`
+every time. A real deployment has single payments larger than any sensible standing lease.
+Separately, `check()` only scheduled a top-up when the lease was drained or stale, so a request
+larger than a *healthy* lease's remainder scheduled nothing at all.
+
+### Decision
+
+The team chose to fix this in APICTA-03 rather than raise the demo PEP's lease size, which would
+have hidden a product limit behind configuration.
+
+1. A budget refusal for an amount above the lease's remainder records it as the dimension's
+   `wanted` and schedules a top-up (single-flight, as before).
+2. `ACQUIRE` asks for `max(lease_size, wanted)`; any successful grant clears `wanted`.
+3. The SDK's approved retry re-sends a `429 LEASE_UNAVAILABLE` up to five times (from
+   `min(poll_s, 0.25)` s, doubling to 1 s), because the refusal that triggers the larger acquire
+   is itself one round trip early.
+
+### Consequences
+
+- Safe by construction: the ledger grants `min(requested, available)`; G1–G6 are untouched.
+- One authorized request can pull up to its own amount of the pool into one PEP for one TTL.
+  Bounded by the requesting token's ceiling, which the policy and the human already allowed.
+  Gap 8's `max_fraction` clamp, when it lands, must not clamp below the waiting request.
+- Keeping `wanted` across a smaller in-flight grant was written, measured, and removed: the
+  retry's own refusal records it again, so the guard changed nothing (4 of 5 new pool tests fail
+  without the explicit top-up; 0 fail without the keep).
+- Measured on the demo stack: the ৳5,000 lease was replaced by a ৳50,000 lease, settled in full
+  and released, and the next top-up was back to ৳5,000.

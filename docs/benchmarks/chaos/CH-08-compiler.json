@@ -2,9 +2,9 @@
   "scenario": "CH-08-compiler",
   "title": "Ollama down \u2014 the NL compiler",
   "expected": "typed error inside the timeout; the template compiler answers",
-  "run_id": "70112bff-b997-4fa5-b100-7bdcb1abd923",
-  "started_at": "2026-10-17T12:44:31.075847+00:00",
-  "duration_s": 0.061,
+  "run_id": "b84dda92-b42b-4da7-b48c-fe5057809f04",
+  "started_at": "2026-10-17T14:22:20.403520+00:00",
+  "duration_s": 0.049,
   "invariant": {
     "interval_s": 0.25,
     "samples": 1,
@@ -20,17 +20,17 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.026,
+      "t_s": 0.022,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.026,
+      "t_s": 0.023,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "warm_returned": false,
-    "warm_s": 0.012,
+    "warm_s": 0.009,
     "generate_failed_after_s": 0.005,
     "generate_error": "OllamaError",
     "compiled_by": "template",

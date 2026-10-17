@@ -29,8 +29,10 @@ demo-up: ## Build and start the full demo stack (control plane, PEP, tools) and 
 # The tokens live in the `demo-secrets` volume, written by the `seed` one-shot service
 # during `demo-up` — not on the host — so this runs inside a container that mounts it.
 # `--no-deps` because everything it needs is already up by the time you run this.
+# It ends waiting up to 10 minutes on the bulk buyer's escalation: approve it in the console
+# as the CFO and the agent completes the order itself (APICTA-03). Ctrl-C leaves it pending.
 demo-seed: ## Drive the demo scenario through a running stack, so the console has content (T-057)
-	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/seed_demo.py --drive --tokens /secrets/demo-tokens.json --pep-url http://pep:8080 --control-plane-api-url http://controlplane:8000 --await-approval 600
 
 # The sibling race, live (`scripts/demo_concurrency.py`). Every run is a fresh mandate —
 # one run spends the pool — so: seed a new one, recreate the three PEPs bound to it, fire.

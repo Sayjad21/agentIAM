@@ -823,3 +823,90 @@ class TestALeaseThatExpiresUnspentIsReplaced:
         await pool.drain()
 
         assert len(ledger.acquired) == 2
+
+
+class TestARequestLargerThanALease:
+    """APICTA-03 — a single request the standing lease size can never cover.
+
+    Every ACQUIRE asked for exactly `lease_size`, so no request larger than one lease could
+    ever be authorized: `check()` refused it, scheduled a top-up for another `lease_size`,
+    and refused it again. Found by the escalation beat on the demo stack — a CFO approves
+    ৳50,000, the agent collects the elevated token and retries, and a PEP leasing ৳5,000 at
+    a time answers `LEASE_UNAVAILABLE` on every retry. Ordinary traffic fits inside a lease,
+    which is why nothing had hit it before. Spec 04 §4.1a.
+    """
+
+    async def test_the_refusal_asks_for_enough_to_cover_the_request(self) -> None:
+        ledger = FakeLedger()
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)
+
+        assert not pool.check({SPEND: Decimal(500)}).ok, "the first request still waits"
+        await pool.drain()
+
+        assert ledger.acquired[-1] == Decimal(500)
+        assert pool.check({SPEND: Decimal(500)}).ok, "the retry is covered"
+        pool.reserve(SPEND, Decimal(500))
+
+    async def test_once_served_the_next_top_up_is_back_to_lease_size(self) -> None:
+        ledger = FakeLedger()
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)
+        pool.check({SPEND: Decimal(500)})
+        await pool.drain()
+
+        pool.reserve(SPEND, Decimal(500))  # drains the large lease, scheduling a top-up
+        await pool.drain()
+
+        assert ledger.acquired == [Decimal(100), Decimal(500), Decimal(100)]
+
+    async def test_a_request_inside_the_lease_size_asks_for_the_lease_size(self) -> None:
+        ledger = FakeLedger()
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)
+        pool.reserve(SPEND, Decimal(95))
+        await pool.drain()
+        ledger.acquired.clear()
+
+        pool.reserve(SPEND, Decimal(100))
+        pool.check({SPEND: Decimal(60)})
+        await pool.drain()
+
+        assert ledger.acquired == [Decimal(100)]
+
+    async def test_demand_arriving_during_a_smaller_top_up_is_not_lost(self) -> None:
+        """A top-up already in flight was sized before the large request arrived.
+
+        Single flight means the refusal cannot start a second ACQUIRE, so the first retry
+        finds a lease-size grant. What matters is that the *retry's* refusal then asks for
+        enough — the pool converges in one more round trip rather than never.
+        """
+        ledger = FakeLedger()
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)
+
+        ledger.gate = asyncio.Event()
+        pool.reserve(SPEND, Decimal(80))  # schedules a lease-size top-up, held at the gate
+        await asyncio.sleep(0)
+        assert not pool.check({SPEND: Decimal(500)}).ok
+        ledger.gate.set()
+        await pool.drain()
+        assert ledger.acquired[-1] == Decimal(100)
+
+        assert not pool.check({SPEND: Decimal(500)}).ok
+        await pool.drain()
+        assert ledger.acquired[-1] == Decimal(500)
+        assert pool.check({SPEND: Decimal(500)}).ok
+
+    async def test_a_short_pool_grants_what_it_has_and_the_request_still_waits(self) -> None:
+        """Asking for more is safe: the ledger grants `min(requested, available)`."""
+        ledger = FakeLedger(available=Decimal(400))
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)  # 100 of the 400
+
+        pool.check({SPEND: Decimal(500)})
+        await pool.drain()
+
+        assert ledger.acquired[-1] == Decimal(500)
+        assert pool.remaining(SPEND) == Decimal(300)
+        assert not pool.check({SPEND: Decimal(500)}).ok

@@ -3759,6 +3759,70 @@ version.
 Live on the demo stack, both ways: compile, activate, and the running PEP refusing the quarantined
 agent ~16 ms later — 2.4 s to compile by model, 0.1 s offline.
 
+### APICTA-03 · The approval reaches the agent, and a payment no lease could cover
+
+T-037's approval minted the elevated token under a fresh mandate and handed it to the approver.
+Delivering it was the ticket; making it *usable* once delivered was the work. A bare root token is
+a different principal to Cedar from the agent that asked — the role assignment is keyed on the
+delegation path (ADR-057) — so the `critical`-resource forbid refused it at every amount, measured
+on the demo stack before anything was written. The PEP now records the requesting token's mandate
+and path on the escalation; the approval mints under that mandate and re-attenuates along that
+path, in the same transaction that approves the row. The agent collects it from a status route
+that checks the caller's token, its revocation, and its full path — not the agent id, which is the
+parent's word. A sibling, the agent's own parent, and a valid token from another task all get the
+same 404 as an id that does not exist.
+
+The live run then failed one step from the end. Tanvir approved ৳50,000, the agent collected the
+token, retried, and the PEP answered `LEASE_UNAVAILABLE` — every time. `LeasePool` had only ever
+asked the ledger for `lease_size` (৳5,000 on the demo PEP), so no single request larger than one
+lease could ever be authorized: each refusal topped up another ৳5,000 and was refused again.
+Ordinary traffic fits in a lease, which is why 138 calls a run had never shown it. The team chose
+to fix the pool rather than raise the demo's lease size: a refusal now records the amount it was
+refused for and the top-up asks for that much (spec 04 §4.1a, ADR-076), which is safe because the
+ledger grants `min(requested, available)`. The ledger afterwards read exactly as intended — the
+৳5,000 lease replaced by a ৳50,000 one, settled in full and released, then ৳5,000 again.
+
+One guard was written and removed: keeping the demand across a smaller top-up already in flight.
+Removing it failed no test, because the retry's own refusal records the demand again — so it was
+protecting nothing. Removing the explicit top-up on refusal failed four of the five new tests.
+
+TM-28 is what delivery costs: a live bearer credential at rest in the escalation row, and — found
+while writing it down, then checked against spec 07 — an elevated token is its own root, so
+revoking the requester's subtree or even its mandate does not reach a token it already collected.
+Revoking first does stop the collection.
+
+### APICTA-03 · The approval reaches the agent, and a PEP that could never pay a large bill
+
+The ticket was delivery: the approval minted the elevated token and handed it to the *approver*.
+Probing what the agent would do with it once delivered found that it could not have used it.
+Minted under a fresh mandate, it drew on a pool no PEP leases from; minted as a bare root, it was
+a different principal to Cedar from the agent that asked — the role map is keyed on the
+delegation path (ADR-057), so the demo policy's `critical`-resource forbid refused it at every
+amount. So the PEP now records the requesting token's mandate and path when it opens the
+escalation, and the approval mints under that mandate and re-attenuates along that path, inside
+the approving transaction. The agent collects it from a status route authenticated by its own
+token; the path, not the agent's parent-given name, decides ownership, and every mismatch is the
+same 404 as an unknown id.
+
+Then the live run. Farhana refused (403, her own task), Tanvir approved ৳50,000 of ৳75,000, the
+agent collected the token, retried — and got `LEASE_UNAVAILABLE` on every attempt. The PEP had
+never been able to authorize a single request larger than its lease: `_acquire` always asked for
+`lease_size` (৳5,000 on the demo PEP), each refusal topped up another ৳5,000, and the retry was
+refused again. Ordinary traffic fits inside a lease, which is why nothing had hit it. Worse, a
+request larger than a *healthy* lease's remainder scheduled no top-up at all — the drained/stale
+test said "fine". The team chose to fix it in the pool rather than raise the demo lease size:
+the refusal records the amount and asks the ledger for `max(lease_size, wanted)`, which the ledger
+already clamps to what is available (spec 04 §4.1a, ADR-076).
+
+One guard did not survive its own test: keeping `wanted` across a smaller top-up already in
+flight. Removed, nothing failed — the retry's own refusal records the demand again — so it went.
+The explicit top-up on refusal fails four of five new tests when removed.
+
+Live, second run: a ৳50,000 lease granted, settled in full and released, then a ৳5,000 lease
+again; the agent printed the payment id. Found in passing: Ryuk, testcontainers' reaper, cannot
+reach the Docker socket under SELinux on this host; `TESTCONTAINERS_RYUK_PRIVILEGED=true` fixes it
+without disabling the reaper.
+
 ### CI's first run in days, and one `None` that meant two things
 
 The first CI run after the billing block lifted passed eight of nine jobs and failed CH-01:

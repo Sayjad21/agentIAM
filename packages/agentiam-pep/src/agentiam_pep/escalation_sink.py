@@ -39,8 +39,14 @@ class EscalationSink(Protocol):
         reason: str,
         now: datetime,
         ttl: timedelta,
+        mandate_id: UUID | None = None,
+        agent_path: tuple[str, ...] | None = None,
     ) -> Escalation:
         """Persist a new pending escalation.
+
+        `mandate_id` and `agent_path` identify the requesting token's pool and delegation path,
+        so the grant can be minted under both and collected only by the agent that asked
+        (APICTA-03).
 
         Raises:
             Exception: Whatever the underlying store raised. The caller treats this as a

@@ -28,6 +28,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Final, Protocol
 
 from agentiam_core.attenuation import effective_bound, grant_caveats
+from agentiam_core.datalog import chain_identity
 from agentiam_core.decision import DriftOracle, decide
 from agentiam_core.errors import ReasonCode, TokenError
 from agentiam_core.models import (
@@ -416,6 +417,11 @@ class Pipeline:
                     reason=decision.reason_detail,
                     now=self._now(),
                     ttl=timedelta(seconds=self._settings.escalation_ttl_s),
+                    # What an approval needs to mint a token this PEP will accept (APICTA-03):
+                    # the pool it spends from, and the path its role assignment is keyed on.
+                    # A block-source parse, paid only on the escalating path.
+                    mandate_id=token.mandate_id,
+                    agent_path=chain_identity(token).path,
                 )
             except Exception as exc:
                 # ADR-026's reasoning, applied here: a system that cannot record *that a

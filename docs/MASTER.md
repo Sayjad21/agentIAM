@@ -72,7 +72,7 @@ today.
 | C5 | Cedar policy in the hot path | **Built.** Signed bundles, published by the control plane and hot-reloaded by every PEP (push + 30 s pull); stale bundles refused. Measured: console click to PEP enforcement 42 ms |
 | C6 | Natural language → Cedar compiler with verification | **Built.** Scores 27/30 on hosted inference. Compiles an *update of the current policy*, which the corpus gate judges; an approver's activation is enforced by the running PEPs. Falls back to an offline template compiler (six demo shapes) when the model is down or slow |
 | C7 | Intent binding and drift detection | **Partial.** Intent binding is enforced. Drift is a rule-based v0 using three of six features, needs the opt-in Ollama profile, and its false-positive rate (NFR-9) has never been measured |
-| C8 | Just-in-time elevation with human approval | **Partial.** The PEP opens escalations itself; approval can only narrow the request and enforces separation of duties. The elevated token goes back to the approver, not the agent |
+| C8 | Just-in-time elevation with human approval | **Built.** The PEP opens escalations itself; approval can only narrow the request and enforces separation of duties. The elevated token is minted under the task's own mandate and delegation path, and the agent that asked collects it with its own token and retries by itself (SDK `call_with_escalation_wait`). Measured live: ৳75,000 asked, ৳50,000 approved, ৳50,000 paid |
 | C9 | Fast subtree revocation | **Built.** One click in the identity tree for a signed-in approver, or the API with an operator token |
 | C10 | Hash-chained audit and custody query | **Built.** Verifiable live from the console |
 | C11 | MCP gateway and HTTP PEP | **HTTP PEP only.** MCP is deferred (T-041, T-042) |
@@ -163,9 +163,9 @@ and model training beyond a small classifier.
 | | |
 |---|---|
 | **Tickets** | 49 of the 53 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 8 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
-| **Tests** | 3,144 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,805 |
+| **Tests** | 3,208 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,860 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 74 in `DECISIONS.md` |
+| **ADRs** | 76 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -403,6 +403,12 @@ personas:
 The point to make: *approval can only narrow what was requested, and never for your own
 agent.*
 
+`make demo-seed` ends on this escalation and waits for it (up to 10 minutes). Once Tanvir
+approves ৳50,000, the bulk buyer — holding only its own token — collects the elevated token from
+the control plane and pays ৳50,000 by itself; the terminal prints the payment id. Denying it
+prints the reason instead. A PEP leasing ৳5,000 at a time acquires a ৳50,000 lease for that one
+payment (spec 04 §4.1a), which `/budgets` shows as a single large lease, settled and released.
+
 ### 7.5 Step 3 — the sibling race (`make demo-conc`)
 
 `make demo-seed` sends one call at a time through one PEP and never approaches the pool, so it
@@ -480,7 +486,6 @@ From the 2026-10-16 audit ([`STATUS.md`](STATUS.md) §3). Until each one is wire
 | Do not say | Because |
 |---|---|
 | "The judge sets the ceiling for a new task" | Every task reuses `DEMO_MANDATE_ID` |
-| "Approval elevates the agent" | The elevated token is returned to the approver, not delivered to the agent |
 | "Agents act; the console watches" | No AI agent exists yet; the traffic is scripted |
 | "One URL change to install" (MCP) | No MCP code exists |
 | "mTLS in place" | No TLS between any services |
@@ -503,7 +508,7 @@ for it.
 | What to build | [`PLAN.md`](PLAN.md) (§3 architecture, §6 protocols, §21 deferred) |
 | What is left | [`APICTA_TICKETS.md`](APICTA_TICKETS.md) (the sprint), [`STATUS.md`](STATUS.md) §2 and §5 |
 | Status and gaps | [`STATUS.md`](STATUS.md) |
-| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 74 ADRs |
+| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 76 ADRs |
 | Exact protocol contracts | [`specs/`](specs/) 01–10 |
 | Running the stack by hand | [`RUNNING.md`](RUNNING.md) |
 | The presentation script and judge handling | [`DEMO.md`](DEMO.md) |

@@ -12,7 +12,12 @@ programming errors in the agent, not authorization outcomes. A decision record f
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from agentiam_core.errors import AgentIAMError, ReasonCode
+
+if TYPE_CHECKING:
+    from uuid import UUID
 
 
 class SDKError(AgentIAMError):
@@ -66,7 +71,42 @@ class TokenSizeWarning(UserWarning):
     """
 
 
+class EscalationError(SDKError):
+    """An escalation the agent waited on did not end in a grant it could use.
+
+    Raised directly when the control plane answers the status poll with something other
+    than a state — a 401 or 404 means this token cannot collect this escalation, and no
+    amount of polling will change that.
+    """
+
+    def __init__(self, message: str, *, escalation_id: UUID) -> None:
+        """Record which escalation this was, so the caller can follow it up elsewhere."""
+        super().__init__(message, reason_code=ReasonCode.APPROVAL_REQUIRED)
+        self.escalation_id = escalation_id
+
+
+class EscalationDenied(EscalationError):
+    """An approver refused the escalation. The message carries their reason."""
+
+
+class EscalationExpired(EscalationError):
+    """The escalation's own window closed before anyone resolved it."""
+
+
+class EscalationWaitTimeout(EscalationError):
+    """The agent stopped waiting; the escalation itself may still be pending.
+
+    Deliberately not an `EscalationExpired`: nothing about the escalation changed, only this
+    caller's patience ran out, and an approval that lands a minute later is still
+    collectable with the same token.
+    """
+
+
 __all__ = [
+    "EscalationDenied",
+    "EscalationError",
+    "EscalationExpired",
+    "EscalationWaitTimeout",
     "IdentityContextError",
     "NoIdentityError",
     "SDKError",

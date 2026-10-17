@@ -46,6 +46,7 @@ __all__ = [
     "EscalationState",
     "NarrowingWidensRequest",
     "approve",
+    "belongs_to",
     "deny",
     "request_escalation",
 ]
@@ -112,6 +113,12 @@ class ElevationGrant:
     not_before: datetime
     expires_at: datetime
     approved_by: str
+    #: The mandate the request was made under, so the elevated token draws on the same pool
+    #: and is revoked with it. `None` for an escalation opened without one (APICTA-03).
+    mandate_id: uuid.UUID | None = None
+    #: The requesting agent's delegation path, root-first, so the elevated token names the
+    #: same principal to the PEP. `None` when it was not recorded.
+    agent_path: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +140,10 @@ class Escalation:
     resolved_by: str | None = None
     resolved_at: datetime | None = None
     resolution_reason: str | None = None
+    #: Recorded by the PEP when it opens the escalation (APICTA-03); `None` for one opened
+    #: through the API without them, which mints as T-037 did.
+    mandate_id: uuid.UUID | None = None
+    agent_path: tuple[str, ...] | None = None
 
     def is_expired(self, now: datetime) -> bool:
         """Whether the request's window has closed.
@@ -166,6 +177,8 @@ def request_escalation(
     reason: str,
     now: datetime,
     ttl: timedelta,
+    mandate_id: uuid.UUID | None = None,
+    agent_path: tuple[str, ...] | None = None,
 ) -> Escalation:
     """Open a pending escalation.
 
@@ -191,6 +204,8 @@ def request_escalation(
         reason=reason,
         created_at=now,
         expires_at=now + ttl,
+        mandate_id=mandate_id,
+        agent_path=agent_path,
     )
 
 
@@ -257,6 +272,8 @@ def approve(
         not_before=now,
         expires_at=now + elevation_ttl,
         approved_by=approver,
+        mandate_id=escalation.mandate_id,
+        agent_path=escalation.agent_path,
     )
     return resolved, grant
 
@@ -291,6 +308,31 @@ def deny(
         resolved_at=now,
         resolution_reason=reason,
     )
+
+
+def belongs_to(
+    escalation: Escalation,
+    *,
+    task_id: uuid.UUID,
+    mandate_id: uuid.UUID,
+    agent_path: tuple[str, ...],
+    agent_id: str,
+) -> bool:
+    """Whether a verified token's holder is the agent that raised `escalation`.
+
+    The elevated token is a bearer credential, so who may collect it is the whole question.
+    The task alone is not enough — every agent in the tree shares it — and neither is the
+    agent's name, which its parent chose. The *path* is what an agent cannot forge for
+    anyone but its own descendants (`datalog.chain_identity`), so where one was recorded it
+    must match exactly; only an escalation recorded without one falls back to the name.
+    """
+    if task_id != escalation.task_id:
+        return False
+    if escalation.mandate_id is not None and mandate_id != escalation.mandate_id:
+        return False
+    if escalation.agent_path is not None:
+        return agent_path == escalation.agent_path
+    return agent_id == escalation.agent_id
 
 
 def _check_resolvable(

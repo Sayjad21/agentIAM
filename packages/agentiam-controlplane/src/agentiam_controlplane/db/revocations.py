@@ -15,6 +15,7 @@ tell anyone about it, so a dead Redis instance loses only latency, not correctne
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -26,7 +27,7 @@ from agentiam_controlplane.db.models import RevocationRow
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["RevocationPublisher", "pull", "revoke"]
+__all__ = ["RevocationPublisher", "any_revoked", "pull", "revoke"]
 
 
 class RevocationPublisher(Protocol):
@@ -126,3 +127,17 @@ async def pull(session: AsyncSession, *, since_seq: int) -> list[RevocationRow]:
         .all()
     )
     return list(rows)
+
+
+async def any_revoked(session: AsyncSession, block_ids: Sequence[str]) -> bool:
+    """Whether any of a chain's revocation ids has been revoked.
+
+    The control plane's own read of the table it writes, for routes that authenticate an
+    agent by its token (APICTA-03) — the PEP's in-memory set is not reachable from here.
+    """
+    if not block_ids:
+        return False
+    found = await session.execute(
+        select(RevocationRow.block_id).where(RevocationRow.block_id.in_(block_ids)).limit(1)
+    )
+    return found.first() is not None

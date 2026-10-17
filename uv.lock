@@ -187,10 +187,14 @@ version = "0.1.0"
 source = { editable = "packages/agentiam-sdk" }
 dependencies = [
     { name = "agentiam-core" },
+    { name = "httpx" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "agentiam-core", editable = "packages/agentiam-core" }]
+requires-dist = [
+    { name = "agentiam-core", editable = "packages/agentiam-core" },
+    { name = "httpx", specifier = ">=0.28" },
+]
 
 [[package]]
 name = "aiofiles"

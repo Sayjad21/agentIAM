@@ -44,6 +44,8 @@ class LedgerEscalationSink:
         reason: str,
         now: datetime,
         ttl: timedelta,
+        mandate_id: UUID | None = None,
+        agent_path: tuple[str, ...] | None = None,
     ) -> Escalation:
         """Persist a new pending escalation and return it, id included."""
         async with self._session_factory() as session:
@@ -59,4 +61,6 @@ class LedgerEscalationSink:
                 reason=reason,
                 now=now,
                 ttl=ttl,
+                mandate_id=mandate_id,
+                agent_path=agent_path,
             )

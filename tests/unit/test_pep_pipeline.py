@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from agentiam_core.attenuation import attenuate
 from agentiam_core.decision import DriftOracle
 from agentiam_core.errors import ReasonCode
 from agentiam_core.escalation import Escalation, request_escalation
@@ -41,7 +42,7 @@ from agentiam_core.models import (
     ScopeSubset,
     ToolDeny,
 )
-from agentiam_core.tokens import RootKeySet, VerifiedToken, generate_keypair, mint_root
+from agentiam_core.tokens import RootKeySet, VerifiedToken, generate_keypair, mint_root, verify
 from agentiam_pep.app import create_app
 from agentiam_pep.config import PepSettings
 from agentiam_pep.drift import AssessingDriftOracle, FeatureExtractor
@@ -63,6 +64,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from agentiam_core.tokens import VerifiedToken
+    from agentiam_pep.escalation_sink import EscalationSink
 
 NOW = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
 ROOT = generate_keypair()
@@ -147,9 +149,13 @@ class FakeEscalationSink:
         reason: str,
         now: datetime,
         ttl: timedelta,
+        mandate_id: uuid.UUID | None = None,
+        agent_path: tuple[str, ...] | None = None,
     ) -> Escalation:
         self.calls.append(
             {
+                "mandate_id": mandate_id,
+                "agent_path": agent_path,
                 "decision_id": decision_id,
                 "task_id": task_id,
                 "agent_id": agent_id,
@@ -249,7 +255,7 @@ async def a_pipeline(
     drift: DriftOracle | AssessingDriftOracle | None = None,
     features: FeatureExtractor | None = None,
     caveats: tuple[Caveat, ...] = (),
-    escalation_sink: FakeEscalationSink | None = None,
+    escalation_sink: EscalationSink | None = None,
 ) -> tuple[Pipeline, CollectingSink, LeasePool]:
     sink = CollectingSink()
     pool = LeasePool(
@@ -540,6 +546,43 @@ class TestEscalation:
         assert call["principal_id"] == mandate.principal_id
         assert call["requested_scopes"] == frozenset({"invoice:read"})
         assert call["requested_amount"] == Decimal(0)
+
+    async def test_the_escalation_names_the_mandate_and_the_delegation_path(self) -> None:
+        """APICTA-03: what an approval needs to mint a token the PEP will accept.
+
+        The mandate, so the elevated token spends from the task's own pool rather than a
+        fresh mandate no pool serves; the path, because the role assignment that lets this
+        agent pay at all is keyed on it (ADR-057) — a bare root token gets the default role.
+        """
+        sink = FakeEscalationSink()
+        pipeline, _, _ = await a_pipeline(
+            caveats=(RequiresApproval(scopes=frozenset({"invoice:read"})),),
+            escalation_sink=sink,
+        )
+        mandate = a_mandate()
+        parent = verify(mint_root(mandate, ROOT.private_key), KEY_SET, now=NOW)
+        child = attenuate(
+            parent,
+            [ScopeSubset(scopes=frozenset({"invoice:read", "payment:initiate"}))],
+            agent_id="agt-treasury",
+            role="payer",
+        )
+        grandchild = attenuate(
+            verify(child, KEY_SET, now=NOW),
+            [ScopeSubset(scopes=frozenset({"invoice:read"}))],
+            agent_id="agt-bulk-buyer",
+            role="payer",
+        )
+        result = await pipeline.authorize(
+            method="GET",
+            path="/invoices/inv_001",
+            headers=[("authorization", f"Bearer {grandchild}")],
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.APPROVAL_REQUIRED
+        (call,) = sink.calls
+        assert call["mandate_id"] == mandate.mandate_id
+        assert call["agent_path"] == ("agt-treasury", "agt-bulk-buyer")
 
     async def test_a_sink_that_fails_denies_closed_rather_than_hiding_the_escalation(self) -> None:
         sink = FakeEscalationSink(fail=True)

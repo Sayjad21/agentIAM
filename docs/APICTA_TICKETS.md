@@ -56,7 +56,7 @@ fallback) and T-059 (submission package).
 | APICTA-07 | DONE — verified locally; CI pending (Actions billing block) |
 | APICTA-04 | DONE — verified locally and live on the demo stack; CI pending |
 | APICTA-01 | DONE — Parts A–D; gap 26 and T-031 closed; beat 5 live online and offline. CI green at Part C |
-| APICTA-03 | TODO |
+| APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
 | APICTA-05 | TODO |
 | APICTA-02 | TODO |
 | APICTA-06 | TODO |
@@ -299,7 +299,11 @@ table; `MASTER.md` C5, C6, §7.8 beat 5, §8.
 
 ## APICTA-03 — An approved escalation reaches the agent that asked
 
-- **Status:** TODO
+- **Status:** DONE (ADR-075, ADR-076, spec 04 §4.1a, TM-28). Local: `make check`,
+  `make test-integration`, `make chaos`; live on the demo stack — Farhana 403, Tanvir approves
+  ৳50,000 of ৳75,000, the agent pays ৳50,000 by itself. Beyond the ticket: a PEP could never
+  authorize a single request larger than its lease, which the beat's retry hit; fixed in the
+  pool rather than by raising the demo lease size (the team's choice)
 - **Maps to:** C8; STATUS.md §3 "An approved escalation elevates the agent" row
 
 **Problem statement.**
