@@ -3733,6 +3733,26 @@ Running the full suite also turned up a flake unrelated to the change: a shape a
 mandates and needed depths 1 and 8 both present, and missed in 3 of 300 campaigns because
 hypothesis biases toward simple draws. 600 samples missed 0 of 300.
 
+### CI's first run in days, and one `None` that meant two things
+
+The first CI run after the billing block lifted passed eight of nine jobs and failed CH-01:
+with Postgres stopped, the PEP refused payments as `BUDGET_EXHAUSTED_MANDATE` — *the
+human-approved budget is spent* — instead of the retryable `LEASE_UNAVAILABLE`. It passed three
+times out of three locally.
+
+The pool's ledger contract used `None` for two different facts. `dca459f` had made `None` mean
+"the pool is empty" and mark the mandate exhausted, which is right; the chaos harness's client
+also returned `None` when the ledger was unreachable, by design, because an exception would
+have escaped a background task. So a top-up that failed during the outage told every agent
+its budget was gone. On CI's runner the failed top-up happened to land before the drained
+lease's requests; here it did not. The deployed client raised instead, so it never mislabelled
+— it leaked an unretrieved task exception per failed top-up instead.
+
+Now `None` means only *empty*, an unreachable ledger raises, and the pool catches and counts
+that itself and leaves the mandate's status alone. Pinned by unit tests rather than by timing:
+a ledger that raises leaves the verdict `LEASE_UNAVAILABLE`, and one that returns `None` marks
+the mandate spent.
+
 ---
 
 ## What the numbers looked like at T-033

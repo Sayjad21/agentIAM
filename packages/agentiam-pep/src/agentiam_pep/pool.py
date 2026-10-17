@@ -25,6 +25,7 @@ Losing this state costs the PEP its ability to spend, never the ledger's account
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -47,6 +48,8 @@ __all__ = [
     "LedgerClient",
     "PoolSettings",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +79,15 @@ class LedgerClient(Protocol):
         ttl: timedelta,
         now: datetime,
     ) -> LeaseGrant | None:
-        """Grant `min(requested, available)`, or None when the pool has nothing left."""
+        """Grant `min(requested, available)`, or None when the pool has nothing left.
+
+        **`None` means exactly one thing: the mandate's pool is empty.** A ledger that cannot
+        be reached must *raise*. The pool reports the two differently — `None` marks the
+        mandate exhausted (`BUDGET_EXHAUSTED_MANDATE`, the human-approved budget is spent),
+        an exception leaves a retryable `LEASE_UNAVAILABLE` — and a client that returned
+        `None` for an outage told agents their budget was gone while the database was down
+        (CH-01 in CI, 2026-10-16).
+        """
         ...
 
     async def release(self, *, lease_id: uuid.UUID) -> None:
@@ -151,6 +162,9 @@ class LeasePool:
         self._held: dict[BudgetDimension, _Held] = {}
         self._closed = False
         self._renewer: asyncio.Task[None] | None = None
+        #: `ACQUIRE`s that could not reach the ledger. Each leaves the mandate's status as it
+        #: was: an outage says nothing about whether the budget is spent.
+        self.acquire_failures = 0
 
     async def _release(self, lease_id: uuid.UUID) -> None:
         """`RELEASE` one lease, after letting anything owed against it settle first.
@@ -194,14 +208,25 @@ class LeasePool:
 
     async def _acquire(self, dimension: BudgetDimension) -> LeaseGrant | None:
         now = self._now()
-        grant = await self._client.acquire(
-            mandate_id=self._mandate_id,
-            dimension=dimension,
-            requested=self._settings.lease_size,
-            pep_id=self._settings.pep_id,
-            ttl=self._settings.ttl,
-            now=now,
-        )
+        try:
+            grant = await self._client.acquire(
+                mandate_id=self._mandate_id,
+                dimension=dimension,
+                requested=self._settings.lease_size,
+                pep_id=self._settings.pep_id,
+                ttl=self._settings.ttl,
+                now=now,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Unreachable, not empty: count it and leave `mandate_exhausted` alone, so the
+            # request path keeps answering the retryable `LEASE_UNAVAILABLE`. Caught here
+            # because every caller but `prime()` is a background task whose exception nobody
+            # reads — the deployed client's raise used to escape each failed top-up unseen.
+            self.acquire_failures += 1
+            logger.warning("lease ACQUIRE for %s could not reach the ledger: %r", dimension, exc)
+            return None
         held = self._held.get(dimension)
         if grant is None:
             # The ledger has nothing left. Distinct from "our lease is empty" — spec 09

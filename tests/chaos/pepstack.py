@@ -192,13 +192,14 @@ class PoolLedgerClient:
         ttl: timedelta,
         now: datetime,
     ) -> LeaseGrant | None:
-        """Take a lease, or report the ledger unreachable by returning None.
+        """Take a lease, `None` when the pool is empty, or raise when unreachable.
 
-        A failed `ACQUIRE` is counted and swallowed rather than raised, because that is what
-        the pool's contract already assumes: `_acquire` treats `None` as *the ledger has
-        nothing left*, and a top-up runs in a background task whose exception nobody reads.
-        Letting it propagate would make a partition look like a crashed task, which is a
-        different failure with a different fix.
+        A failed `ACQUIRE` is counted and **re-raised**. It used to be swallowed into `None`,
+        which the pool's contract reads as *the pool has nothing left*: during CH-01's Postgres
+        outage a failed top-up marked the mandate exhausted and the PEP answered
+        `BUDGET_EXHAUSTED_MANDATE` for a database that was merely down — failing CI on
+        2026-10-16, where the top-up happened to land first. The pool now catches the
+        exception itself and keeps the retryable `LEASE_UNAVAILABLE`.
         """
         try:
             async with self._factory() as session:
@@ -213,7 +214,7 @@ class PoolLedgerClient:
                 )
         except Exception:
             self.acquire_failures += 1
-            return None
+            raise
         if lease is None or lease.granted <= 0:
             return None
         return LeaseGrant(id=lease.id, granted=lease.granted, expires_at=lease.expires_at)

@@ -42,6 +42,8 @@ class FakeLedger:
         self.released: list[uuid.UUID] = []
         self.available = available
         self.fail = fail
+        #: Raise on acquire, as the deployed client does when the ledger cannot be reached.
+        self.unreachable = False
         self.gate: asyncio.Event | None = None
 
     async def acquire(
@@ -57,6 +59,8 @@ class FakeLedger:
         if self.gate is not None:
             await self.gate.wait()
         self.acquired.append(requested)
+        if self.unreachable:
+            raise ConnectionError("ledger unreachable")
         if self.fail:
             return None
         granted = requested if self.available is None else min(requested, self.available)
@@ -228,6 +232,46 @@ class TestTopUp:
         verdict = pool.check({SPEND: Decimal(50)})
         assert not verdict.ok
         assert verdict.mandate_exhausted
+
+    async def test_an_unreachable_ledger_is_not_mandate_exhaustion(self) -> None:
+        """An outage is not a spent budget — CH-01 in CI, 2026-10-16.
+
+        `None` from `acquire` means *the pool has nothing left*; an unreachable ledger raises.
+        The chaos harness's client returned `None` for both, so a top-up that failed during
+        the Postgres outage marked the mandate exhausted and the PEP told agents their budget
+        was gone (`BUDGET_EXHAUSTED_MANDATE`) when the database was merely down — the retryable
+        `LEASE_UNAVAILABLE` is what that is. Whether the failed top-up landed first was timing,
+        which is why it passed locally and failed on CI's runner.
+        """
+        ledger = FakeLedger(available=Decimal(1000))
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)
+        pool.reserve(SPEND, Decimal(80))
+        ledger.unreachable = True
+        await pool.drain()
+
+        verdict = pool.check({SPEND: Decimal(50)})
+        assert not verdict.ok
+        assert not verdict.mandate_exhausted
+        assert pool.acquire_failures == 1
+
+    async def test_an_unreachable_ledger_does_not_escape_the_top_up_task(self) -> None:
+        # The deployed client raised here and nothing caught it: one unretrieved task
+        # exception per failed top-up for the length of an outage.
+        ledger = FakeLedger(available=Decimal(1000))
+        pool = a_pool(ledger)
+        await pool.prime(SPEND)
+        pool.reserve(SPEND, Decimal(80))
+        ledger.unreachable = True
+        pool.check({SPEND: Decimal(50)})  # schedules the top-up as it refuses
+        await pool.drain()
+        assert pool.acquire_failures >= 1
+
+    async def test_priming_against_an_unreachable_ledger_reports_false(self) -> None:
+        ledger = FakeLedger()
+        ledger.unreachable = True
+        pool = a_pool(ledger)
+        assert await pool.prime(SPEND) is False
 
     async def test_a_top_up_failure_does_not_lose_the_existing_lease(self) -> None:
         ledger = FakeLedger(available=Decimal(100))
