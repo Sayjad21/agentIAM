@@ -2,9 +2,9 @@
   "scenario": "CH-10",
   "title": "Rolling restart under load",
   "expected": "zero dropped requests; invariant holds",
-  "run_id": "7f1d2253-cf94-4b08-b720-691f120a584b",
-  "started_at": "2026-10-17T16:52:12.113401+00:00",
-  "duration_s": 3.576,
+  "run_id": "b0d78aed-1fb2-4752-804e-77d60b274a4f",
+  "started_at": "2026-10-17T17:00:29.428540+00:00",
+  "duration_s": 3.617,
   "invariant": {
     "interval_s": 0.25,
     "samples": 15,
@@ -20,63 +20,63 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.508,
+      "t_s": 0.522,
       "event": "draining pep-roll-0"
     },
     {
-      "t_s": 0.519,
+      "t_s": 0.522,
       "event": "stopping pep-roll-0 (RELEASE)"
     },
     {
-      "t_s": 1.3,
+      "t_s": 1.303,
       "event": "starting pep-roll-0 (ACQUIRE)"
     },
     {
-      "t_s": 1.366,
+      "t_s": 1.353,
       "event": "pep-roll-0 back in rotation"
     },
     {
-      "t_s": 1.366,
+      "t_s": 1.353,
       "event": "draining pep-roll-1"
     },
     {
-      "t_s": 1.366,
+      "t_s": 1.353,
       "event": "stopping pep-roll-1 (RELEASE)"
     },
     {
-      "t_s": 2.131,
+      "t_s": 2.134,
       "event": "starting pep-roll-1 (ACQUIRE)"
     },
     {
-      "t_s": 2.194,
+      "t_s": 2.19,
       "event": "pep-roll-1 back in rotation"
     },
     {
-      "t_s": 2.194,
+      "t_s": 2.19,
       "event": "draining pep-roll-2"
     },
     {
-      "t_s": 2.194,
+      "t_s": 2.19,
       "event": "stopping pep-roll-2 (RELEASE)"
     },
     {
-      "t_s": 2.971,
+      "t_s": 2.966,
       "event": "starting pep-roll-2 (ACQUIRE)"
     },
     {
-      "t_s": 3.035,
+      "t_s": 3.038,
       "event": "pep-roll-2 back in rotation"
     },
     {
-      "t_s": 3.567,
+      "t_s": 3.604,
       "event": "settlement queues drained"
     },
     {
-      "t_s": 3.575,
+      "t_s": 3.614,
       "event": "scenario ended"
     },
     {
-      "t_s": 3.575,
+      "t_s": 3.614,
       "event": "final sweep"
     }
   ],
@@ -86,19 +86,19 @@
     "requests_sent": 182,
     "requests_dropped": 0,
     "sweeps_during_restarts": 12,
-    "settlement_backlog_when_load_stopped": 1,
+    "settlement_backlog_when_load_stopped": 2,
     "settlement_counters": {
-      "applied": 94,
+      "applied": 92,
       "declined": 0,
       "dropped": 0,
       "failed_attempts": 0,
       "still_pending": 0,
       "shutdown_timeouts": 0
     },
-    "leased_after_restarts": "14530.0000",
+    "leased_after_restarts": "14540.0000",
     "committed_after_restarts": "910.0000",
     "spent_locally": "910.0000",
-    "pool_available_after_restarts": "184560.0000",
+    "pool_available_after_restarts": "184550.0000",
     "lease_rows_by_state": {
       "active": 3,
       "released": 3
@@ -117,10 +117,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 5.15,
-        "p99": 92.405,
-        "max": 95.65,
-        "mean": 6.231
+        "p50": 5.163,
+        "p99": 16.973,
+        "max": 19.135,
+        "mean": 5.657
       }
     }
   ],

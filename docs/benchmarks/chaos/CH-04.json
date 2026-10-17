@@ -2,9 +2,9 @@
   "scenario": "CH-04",
   "title": "Partition PEP <-> ledger",
   "expected": "bounded spend, then fail closed",
-  "run_id": "8ffeb394-8319-4992-94c8-2bd59f3cb176",
-  "started_at": "2026-10-17T16:51:49.218606+00:00",
-  "duration_s": 0.146,
+  "run_id": "99db3e1e-f02f-45d6-b983-79ec8638c7cd",
+  "started_at": "2026-10-17T17:00:06.646850+00:00",
+  "duration_s": 0.116,
   "invariant": {
     "interval_s": 0.25,
     "samples": 3,
@@ -20,33 +20,33 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.041,
+      "t_s": 0.04,
       "event": "cutting PEP -> ledger (blackhole)"
     },
     {
-      "t_s": 0.071,
+      "t_s": 0.07,
       "event": "healing the partition"
     },
     {
-      "t_s": 0.144,
+      "t_s": 0.114,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.144,
+      "t_s": 0.114,
       "event": "final sweep"
     }
   ],
   "measurements": {
-    "leased_at_cut": "200.0000",
-    "committed_at_cut": "0.0000",
+    "leased_at_cut": "120.0000",
+    "committed_at_cut": "80.0000",
     "local_remaining_at_cut": "120.0000",
     "served_during_partition": 6,
     "spent_during_partition": "120.0000",
-    "hot_path_p99_ms_partitioned": 3.761,
-    "hot_path_p99_ms_healthy": 6.07,
-    "committed_during_partition": "0.0000",
+    "hot_path_p99_ms_partitioned": 4.521,
+    "hot_path_p99_ms_healthy": 6.714,
+    "committed_during_partition": "80.0000",
     "invariant_held_during_partition": true,
-    "blackholed_connections": 2,
+    "blackholed_connections": 1,
     "final_sweep_readable": true
   },
   "loads": [
@@ -61,10 +61,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 4.579,
-        "p99": 6.07,
-        "max": 6.07,
-        "mean": 4.53
+        "p50": 4.891,
+        "p99": 6.714,
+        "max": 6.714,
+        "mean": 4.936
       }
     },
     {
@@ -81,10 +81,10 @@
       },
       "errors": [],
       "latency_ms": {
-        "p50": 1.986,
-        "p99": 3.761,
-        "max": 3.761,
-        "mean": 2.311
+        "p50": 2.593,
+        "p99": 4.521,
+        "max": 4.521,
+        "mean": 2.461
       }
     },
     {
@@ -98,10 +98,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 2.112,
-        "p99": 2.741,
-        "max": 2.741,
-        "mean": 2.274
+        "p50": 2.372,
+        "p99": 3.025,
+        "max": 3.025,
+        "mean": 2.578
       }
     }
   ],

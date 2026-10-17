@@ -2,9 +2,9 @@
   "scenario": "CH-01-audit",
   "title": "Kill Postgres for 30 s \u2014 the audit path",
   "expected": "every record buffered during the outage reaches the chain afterwards",
-  "run_id": "54aabc6f-876c-490e-90d6-c3a637980a51",
-  "started_at": "2026-10-17T16:51:00.767863+00:00",
-  "duration_s": 31.386,
+  "run_id": "11cbb2ea-a3b0-47c5-9465-ecdda26bc5d6",
+  "started_at": "2026-10-17T16:59:18.179557+00:00",
+  "duration_s": 31.431,
   "invariant": {
     "interval_s": 0.25,
     "samples": 125,
@@ -14,8 +14,7 @@
     "violations": [],
     "unavailable_reasons": [
       "InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: connection is closed\n[SQL: \n    SELECT\n        b.id  ",
-      "OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 35605, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 35605)",
-      "ConnectionResetError: [Errno 104] Connection reset by peer"
+      "OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 52543, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 52543)"
     ]
   },
   "timeline": [
@@ -24,19 +23,19 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.042,
+      "t_s": 0.041,
       "event": "stopping postgres"
     },
     {
-      "t_s": 30.737,
+      "t_s": 30.783,
       "event": "starting postgres"
     },
     {
-      "t_s": 31.384,
+      "t_s": 31.429,
       "event": "scenario ended"
     },
     {
-      "t_s": 31.384,
+      "t_s": 31.429,
       "event": "final sweep"
     }
   ],

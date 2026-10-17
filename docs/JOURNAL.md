@@ -3871,6 +3871,19 @@ issuance: the typed ceiling becomes the task's own pool. That made an unauthenti
 to create budget, so it now takes a signed-in approver. Live: a ৳15,000 task from `/run`, ৳1,000
 paid through its `agt-treasury`, committed on its own row, its own gauge on `/budgets`.
 
+### CH-04's "before" was read mid-flush
+
+APICTA-02 Part C's CI run failed CH-04 — *"the ledger moved while the PEP could not reach it"*,
+committed 0 → 80 and leased 200 → 120, exactly the four healthy ৳20 payments — after passing
+locally four times and in Parts A and B's CI. Part C had not touched the settlement path, so
+the theory was a race in the test, and it was proved before anything changed: the snapshot
+read awaits Postgres, the settlement queue's 50 ms tick can fire during that await, and its
+batch commits through the still-open proxy after the SELECT has read. "Before" is stale; the
+next reading shows the healthy spend. Holding the snapshot's return for 200 ms reproduced the
+failure with the identical numbers every time. The partitioned PEP never moved the books; the
+test now drains the healthy phase's settlements before the reading it judges against, and
+passes with the race forced on.
+
 ### CI's first run in days, and one `None` that meant two things
 
 The first CI run after the billing block lifted passed eight of nine jobs and failed CH-01:

@@ -103,6 +103,15 @@ class TestPartition:
             run.load(healthy)
             assert healthy.ok == 4
 
+            # The healthy phase's settlements reach the ledger *before* the reading the
+            # partition is judged against. Without this the settlement queue's 50 ms tick could
+            # fire while the reading below was awaiting Postgres: the batch committed through
+            # the still-open proxy after the SELECT had read, so "before" was stale and the
+            # healthy spend appeared to land during the partition. Seen once in CI (run
+            # 39051345773); reproduced deterministically by delaying this reading's return.
+            await stack.settlement.drain()
+            assert stack.settlement.pending == 0, "the healthy phase did not settle"
+
             committed_before, leased_before, _ = await available(
                 migrated_engine, stack.mandate.mandate_id
             )
