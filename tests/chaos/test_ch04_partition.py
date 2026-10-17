@@ -188,8 +188,16 @@ class TestPartition:
             )
             run.load(after)
             run.measure("blackholed_connections", proxy.connections_blackholed)
-            assert proxy.connections_blackholed > 0, (
-                "no connection was ever black-holed, so the partition was not exercised — "
+            run.measure("frozen_chunks", proxy.chunks_frozen)
+            # The cut must have held real ledger traffic: a new connection it refused to answer,
+            # or bytes an established one sent into the freeze. Either counts. Asserting only on
+            # new connections was flaky (3 of 8 local runs, and CI run 39053914031): once the
+            # healthy phase is drained before the snapshot, the partition's one ledger call can
+            # reuse a pooled connection, which the cut freezes rather than refuses. The failure
+            # this guards against — a proxy that *closes* connections, so the client errors in
+            # a millisecond and nothing ever waits — produces neither.
+            assert proxy.connections_blackholed + proxy.chunks_frozen > 0, (
+                "the cut held no ledger traffic, so the partition was not exercised — "
                 "this is the failure mode the proxy's first draft actually had"
             )
             assert after.ok == 4, f"the PEP never recovered its lease: {after.as_dict()}"

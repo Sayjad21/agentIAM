@@ -3884,6 +3884,26 @@ failure with the identical numbers every time. The partitioned PEP never moved t
 test now drains the healthy phase's settlements before the reading it judges against, and
 passes with the race forced on.
 
+### And the fix for that one made the next assertion flaky
+
+The very next CI run failed CH-04 again, on a different line: *"no connection was ever
+black-holed, so the partition was not exercised"*. Draining the healthy phase is what caused
+it. With the settlements flushed first, the one ledger call made during the partition reuses a
+pooled connection instead of opening a new one — and `BLACKHOLE` deliberately does not close
+established connections, it freezes them. So the cut held real traffic while
+`connections_blackholed` stayed at zero. Reproduced locally in 3 of 8 runs.
+
+The counter was measuring the wrong half of the mode. A black hole stops traffic two ways:
+new connections it accepts and never answers, and established ones whose bytes it holds at
+the gate. Only the first was counted. `chunks_frozen` counts the second, and the assertion
+now takes either.
+
+Checked that the widened guard still fails for the reason it was written — the proxy's first
+draft, which *closed* connections so the client errored in a millisecond and nothing ever
+waited. A `RESET` cut over a warm pooled connection is exactly that behaviour, and it leaves
+both counters at zero: the assertion fires. The same connection under `BLACKHOLE` reads
+`blackholed=0, frozen=1`, which is the CI failure in miniature. Ten CH-04 runs green after.
+
 ### CI's first run in days, and one `None` that meant two things
 
 The first CI run after the billing block lifted passed eight of nine jobs and failed CH-01:

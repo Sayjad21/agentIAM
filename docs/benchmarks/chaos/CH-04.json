@@ -2,9 +2,9 @@
   "scenario": "CH-04",
   "title": "Partition PEP <-> ledger",
   "expected": "bounded spend, then fail closed",
-  "run_id": "7b6e79f2-5e1c-4e07-bd31-2b83f089d340",
-  "started_at": "2026-10-17T17:22:14.698894+00:00",
-  "duration_s": 0.093,
+  "run_id": "1b8762b0-cda4-4e8c-8231-639b01680052",
+  "started_at": "2026-10-17T18:08:04.436606+00:00",
+  "duration_s": 0.099,
   "invariant": {
     "interval_s": 0.25,
     "samples": 3,
@@ -20,19 +20,19 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.028,
+      "t_s": 0.029,
       "event": "cutting PEP -> ledger (blackhole)"
     },
     {
-      "t_s": 0.054,
+      "t_s": 0.053,
       "event": "healing the partition"
     },
     {
-      "t_s": 0.091,
+      "t_s": 0.097,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.091,
+      "t_s": 0.097,
       "event": "final sweep"
     }
   ],
@@ -42,11 +42,12 @@
     "local_remaining_at_cut": "120.0000",
     "served_during_partition": 6,
     "spent_during_partition": "120.0000",
-    "hot_path_p99_ms_partitioned": 2.983,
-    "hot_path_p99_ms_healthy": 6.152,
+    "hot_path_p99_ms_partitioned": 3.261,
+    "hot_path_p99_ms_healthy": 5.94,
     "committed_during_partition": "80.0000",
     "invariant_held_during_partition": true,
-    "blackholed_connections": 1,
+    "blackholed_connections": 2,
+    "frozen_chunks": 1,
     "final_sweep_readable": true
   },
   "loads": [
@@ -61,10 +62,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 4.551,
-        "p99": 6.152,
-        "max": 6.152,
-        "mean": 4.807
+        "p50": 4.646,
+        "p99": 5.94,
+        "max": 5.94,
+        "mean": 4.462
       }
     },
     {
@@ -81,10 +82,10 @@
       },
       "errors": [],
       "latency_ms": {
-        "p50": 2.137,
-        "p99": 2.983,
-        "max": 2.983,
-        "mean": 2.024
+        "p50": 1.729,
+        "p99": 3.261,
+        "max": 3.261,
+        "mean": 1.737
       }
     },
     {
@@ -98,10 +99,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 2.526,
-        "p99": 3.453,
-        "max": 3.453,
-        "mean": 2.896
+        "p50": 2.125,
+        "p99": 2.799,
+        "max": 2.799,
+        "mean": 2.299
       }
     }
   ],

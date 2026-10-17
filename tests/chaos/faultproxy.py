@@ -78,6 +78,11 @@ class FaultProxy:
         self.connections_forwarded = 0
         self.connections_refused = 0
         self.connections_blackholed = 0
+        #: Chunks an *established* connection tried to send while black-holed, held at the
+        #: gate. The other half of "the cut stopped ledger traffic": a client reusing a pooled
+        #: connection never opens a new one, so `connections_blackholed` alone can read zero
+        #: on a partition that froze real traffic (CH-04 in CI, run 39053914031).
+        self.chunks_frozen = 0
         self._server: asyncio.Server | None = None
         self._port: int | None = None
         self._live: set[asyncio.Task[None]] = set()
@@ -300,9 +305,8 @@ class FaultProxy:
                 with contextlib.suppress(Exception):
                     side.close()
 
-    @staticmethod
     async def _pump(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gate: asyncio.Event
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gate: asyncio.Event
     ) -> None:
         """Copy one direction, stalling on `gate` so a black hole freezes rather than closes."""
         try:
@@ -310,6 +314,8 @@ class FaultProxy:
                 chunk = await reader.read(_CHUNK)
                 if not chunk:
                     return
+                if not gate.is_set():
+                    self.chunks_frozen += 1
                 # Awaited *after* the read and *before* the write, so a cut can land in the
                 # middle of a message and the bytes are held rather than dropped.
                 await gate.wait()
