@@ -2,12 +2,11 @@
 
 *Expected: template fallback; no hot-path impact.*
 
-Half of that expectation cannot be met and the results table says so rather than quietly
-scoring the scenario green. **T-031, the template fallback, is deferred** (`PLAN.md` §21,
-`STATUS.md`), so when the compiler's backend is unreachable there is nothing to fall back
-*to*. What the scenario checks instead is the honest remainder: the failure is typed, it is
-bounded by the client's own timeout rather than hanging, and — the part that actually
-matters for a running system — it never touches the request path.
+Both halves hold as of APICTA-01. **The template fallback (T-031) exists since Part D**: when
+the compiler's model is unreachable, a sentence in one of the demo's policy shapes is compiled
+by the offline template compiler, and anything else gets the list of shapes it understands. The
+model's own failure is still checked to be typed and bounded rather than hanging, and — the part
+that matters for a running system — it never touches the request path.
 
 Ollama sits behind two unrelated callers, and only one of them is on the hot path:
 
@@ -53,7 +52,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy
 from agentiam_controlplane.nl_compiler.ollama_client import OllamaClient, OllamaError
+from agentiam_core.corpus import CORPUS_SOURCE
 from agentiam_pep.drift import DEFAULT_ASSESS_TIMEOUT_S, RuleBasedDriftOracle
 from tests.chaos.faultproxy import FaultMode, FaultProxy
 from tests.chaos.harness import chaos_run, drive_load
@@ -182,9 +183,9 @@ class TestOllamaDown:
             )
 
             run.note(
-                "The template fallback PLAN.md §13.2 expects for CH-8 does not exist yet: "
-                "T-031 is deferred until APICTA-01 Part D. CH-8 is therefore PARTIAL — the "
-                "fallback is unimplemented; 'no hot-path impact' holds."
+                "Both halves of the expectation hold: the template fallback (T-031) answers "
+                "the compiler when the model is down (CH-08-compiler), and the hot path is "
+                "unaffected."
             )
             run.note(
                 f"An unreachable Ollama costs the hot path p50 {report.percentile(50)} ms / "
@@ -304,10 +305,13 @@ class TestOllamaDown:
             proxy.heal()
             await proxy.aclose()
 
-    async def test_the_compiler_fails_typed_and_bounded_with_no_template_fallback(
+    async def test_the_compiler_fails_over_to_templates_inside_the_bound(
         self, migrated_engine: AsyncEngine
     ) -> None:
-        """The operator path: a dead model must not hang the authoring flow.
+        """The operator path: a dead model must not hang the authoring flow, and beat 5 survives.
+
+        The client fails typed and bounded, and — since APICTA-01 Part D — the compiler then
+        answers a sentence in one of the demo's shapes with the offline template compiler.
 
         `OllamaClient` hardcodes `http://127.0.0.1:11434` — deliberately, as T-028's
         no-egress guarantee — so there is no injection point and the base URL is overridden
@@ -316,7 +320,7 @@ class TestOllamaDown:
         async with chaos_run(
             "CH-08-compiler",
             title="Ollama down — the NL compiler",
-            expected="typed error inside the timeout; template fallback is unimplemented",
+            expected="typed error inside the timeout; the template compiler answers",
             engine=migrated_engine,
         ) as run:
             client = OllamaClient(timeout=COMPILER_TIMEOUT_S)
@@ -343,10 +347,28 @@ class TestOllamaDown:
                 f"{COMPILER_TIMEOUT_S} s budget — a dead model must not hang the console"
             )
 
+            # And the whole compile, through the same dead client, still produces a policy.
+            started = time.perf_counter()
+            output = await compile_nl_to_policy(
+                "Quarantine agent agt-payer",
+                client=client,
+                current_policy=CORPUS_SOURCE,
+                timeout_s=COMPILER_TIMEOUT_S * 3,
+            )
+            fallback_s = time.perf_counter() - started
+            run.measure("compiled_by", output.compiled_by)
+            run.measure("fallback_compile_s", round(fallback_s, 3))
+            assert output.compiled_by == "template", output.fallback_reason
+            assert output.cedar_source is not None
+            assert 'Agent::"agt-payer"' in output.cedar_source
+            assert fallback_s < COMPILER_TIMEOUT_S * 3
+
             run.note(
-                "No template fallback exists to exercise: T-031 is deferred (PLAN.md §21), "
-                "so demo beat 5 has no F-2 recovery while that stays true. This is the "
-                "resumption trigger STATUS.md records for T-031."
+                f"With Ollama unreachable the compiler fails over to the offline template "
+                f"compiler (APICTA-01 Part D, T-031): a quarantine sentence compiled in "
+                f"{fallback_s:.2f} s, appended to the current policy. DEMO.md drill F-2 now has "
+                f"a recovery for the demo's policy shapes; other sentences get the list of "
+                f"shapes the offline compiler understands."
             )
 
         assert run.sidecar.clean, f"invariant violated: {run.sidecar.violations}"

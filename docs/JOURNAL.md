@@ -3733,6 +3733,32 @@ Running the full suite also turned up a flake unrelated to the change: a shape a
 mandates and needed depths 1 and 8 both present, and missed in 3 of 300 campaigns because
 hypothesis biases toward simple draws. 600 samples missed 0 of 300.
 
+### APICTA-01 Part D · The offline compiler, and why no sentence had ever been activatable
+
+The ticket was T-031's template fallback. Probing what a template should produce found a larger
+problem first: the compiler returned only the rule a sentence described, the console tested that
+rule alone against the 51-case corpus, and every rule scored 27/51 — a quarantine, a new permit,
+a payment cap, all of them. Beat 5 had never been able to activate a judge's sentence. The same
+rules added to the current policy behave as the demo needs: compatible rules pass 51/51, and a
+rule that breaks an approved workflow is refused with the cases it breaks.
+
+The team chose to give the model the current policy and ask for the whole updated one, keeping
+the 30-case dataset valid because the prompt without a current policy is unchanged. Measured on
+Gemini, six sentences: four compatible ones kept every existing statement and passed; two
+conflicting ones were refused by name. The model's quarantine tests forgot `agent_id` until a
+one-line hint, which exposed a second gap — the console's evaluator ignored `agent_id`
+altogether and asked Cedar about a hardcoded `agent-1`, so no rule about one agent was testable.
+
+The template compiler covers six shapes from the demo's own vocabulary, not from the evaluation
+dataset, and lists them for anything else rather than guessing. It answers on a model error, a
+20 s bound, a malformed answer, or the console's *offline* box. Its label is set after parsing and
+kept out of the model's schema, so the model cannot claim it — and kept out of dumps, because the
+red-team A-26 test pins the model-facing shape at exactly three fields and caught the first
+version.
+
+Live on the demo stack, both ways: compile, activate, and the running PEP refusing the quarantined
+agent ~16 ms later — 2.4 s to compile by model, 0.1 s offline.
+
 ### CI's first run in days, and one `None` that meant two things
 
 The first CI run after the billing block lifted passed eight of nine jobs and failed CH-01:

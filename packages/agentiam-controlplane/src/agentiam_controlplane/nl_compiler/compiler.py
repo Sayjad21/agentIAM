@@ -1,13 +1,26 @@
-"""NL to Cedar Compiler module."""
+"""NL to Cedar Compiler module.
 
+Two compilers behind one call. The model (hosted by default, ADR-040) handles any sentence;
+the offline template matcher (`templates.py`, APICTA-01 Part D) handles the demo's policy
+shapes when the model is unreachable, too slow, gives an unusable answer, or is switched off.
+The output says which one answered and, for a fallback, why.
+
+Given the current policy, the model is asked for the **whole updated policy** and a template's
+statements are appended to it, so what the console tests and activates is a complete policy.
+Measured before: every single-rule policy scored 27/51 on the corpus gate standalone, so no
+English sentence could be activated at all.
+"""
+
+import asyncio
 import hashlib
 import logging
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+from pydantic.json_schema import SkipJsonSchema
 
-from agentiam_controlplane.nl_compiler.llm import LLMClient, client_from_env
+from agentiam_controlplane.nl_compiler.llm import LLMClient, LLMError, client_from_env
 from agentiam_core.policy_testing import PolicyTestCase
 
 logger = logging.getLogger(__name__)
@@ -50,6 +63,9 @@ class CompilerTestCase(BaseModel):
     depth: int = Field(default=1, description="The agent's delegation depth, 1 for a root agent.")
     elevated: bool = Field(default=False, description="Whether an approver elevated the request.")
     environment: str = Field(default="production", description="Usually 'production'.")
+    agent_id: str = Field(
+        default="agt-1", description="The agent making the request, for a rule about one agent."
+    )
 
     def as_policy_test_case(self) -> PolicyTestCase:
         """The core `PolicyTestCase` this describes, for the shared evaluator."""
@@ -64,6 +80,7 @@ class CompilerTestCase(BaseModel):
             depth=self.depth,
             elevated=self.elevated,
             environment=self.environment,
+            agent_id=self.agent_id,
         )
 
 
@@ -82,6 +99,13 @@ class CompilerOutput(BaseModel):
         default_factory=list,
         description="Test cases to verify the policy. Omit if ambiguous. Must include Allow/Deny.",
     )
+    #: Which compiler answered. Kept out of the schema the model sees, and overwritten after
+    #: the model's answer is parsed — a label the model could set would label nothing.
+    #: Excluded from dumps as well, so the model-facing shape stays exactly three fields
+    #: (`tests/security/test_redteam_suite.py` A-26 pins that).
+    compiled_by: SkipJsonSchema[Literal["model", "template"]] = Field(default="model", exclude=True)
+    #: Why the template compiler answered instead of the model, when it did.
+    fallback_reason: SkipJsonSchema[str | None] = Field(default=None, exclude=True)
 
 
 _SYSTEM_PROMPT = """You are a Cedar policy compiler for AgentIAM. Translate the requirement
@@ -165,30 +189,95 @@ Put the policy in `cedar_source` and give `tests` covering both an allowed case
 """
 
 
+_CURRENT_POLICY_INSTRUCTIONS = """
+
+CURRENT POLICY — the organization's policy today, which your output replaces:
+{current}
+
+Return the COMPLETE updated policy in `cedar_source`: every statement above that the
+requirement does not change, plus the statements the requirement adds or changes. Do not drop
+or weaken an existing statement unless the requirement says to. The current policy already
+permits ordinary work, so do NOT add a blanket permit(principal, action, resource) — to
+restrict something, add a forbid. Write `tests` about the requirement; a test about
+one named agent must set `agent_id` to that agent.
+"""
+
+
 async def compile_nl_to_policy(
-    nl_statement: str, client: LLMClient | None = None
+    nl_statement: str,
+    client: LLMClient | None = None,
+    *,
+    current_policy: str | None = None,
+    timeout_s: float | None = None,
+    offline: bool = False,
 ) -> CompilerOutput:
     """Compile a natural language statement into a Cedar policy and auto-generate tests.
 
     Args:
         nl_statement: The English description of the policy.
-        client: An optional backend. Defaults to whichever `AGENTIAM_LLM_BACKEND` selects
-            — Groq while this is a prototype, Ollama in production (ADR-040).
+        client: An optional backend. Defaults to whichever `AGENTIAM_LLM_BACKEND` selects.
+        current_policy: The policy in force. When given, the model returns the whole updated
+            policy and a template's statements are appended to it. When absent, the prompt is
+            exactly the one the 30-case dataset was measured with.
+        timeout_s: How long to wait for the model before falling back. `None` waits as long
+            as the client does — which, with rate-limit backoff, can be minutes.
+        offline: Skip the model entirely and use the template compiler.
 
     Returns:
-        CompilerOutput containing the Cedar source and the generated tests.
+        The compiled policy and tests, or a clarifying question; labelled with the compiler
+        that produced it.
     """
-    if client is None:
-        client = client_from_env()
+    digest = statement_digest(nl_statement)
+    if offline:
+        return _from_templates(nl_statement, current_policy, reason="offline mode")
 
     prompt = f"{_SYSTEM_PROMPT}\n\nREQUIREMENT:\n{nl_statement}\n"
+    if current_policy is not None:
+        prompt += _CURRENT_POLICY_INSTRUCTIONS.format(current=current_policy.strip())
     schema: dict[str, Any] = CompilerOutput.model_json_schema()
 
-    logger.info(
-        "compiling NL statement (sha256[:16]=%s, length=%d)",
-        statement_digest(nl_statement),
-        len(nl_statement),
-    )
-    raw_output = await client.generate_structured(prompt=prompt, schema=schema)
+    logger.info("compiling NL statement (sha256[:16]=%s, length=%d)", digest, len(nl_statement))
+    try:
+        model = client if client is not None else client_from_env()
+        raw_output = await asyncio.wait_for(
+            model.generate_structured(prompt=prompt, schema=schema), timeout=timeout_s
+        )
+        output = CompilerOutput.model_validate(raw_output)
+        output.compiled_by, output.fallback_reason = "model", None
+        return output
+    except TimeoutError:
+        reason = f"the model did not answer within {timeout_s} s"
+    except LLMError as exc:
+        reason = f"the model was unreachable ({exc})"
+    except ValidationError:
+        reason = "the model's answer was not in the expected shape"
+    logger.warning("falling back to the template compiler for sha256[:16]=%s: %s", digest, reason)
+    return _from_templates(nl_statement, current_policy, reason=reason)
 
-    return CompilerOutput.model_validate(raw_output)
+
+def _from_templates(
+    nl_statement: str, current_policy: str | None, *, reason: str
+) -> CompilerOutput:
+    """The template compiler's answer, or the shapes it knows when it has none."""
+    # Imported here: `templates` builds `CompilerTestCase`s, so it imports this module.
+    from agentiam_controlplane.nl_compiler.templates import SHAPES, compose, match
+
+    found = match(nl_statement)
+    if found is None:
+        shapes = "; ".join(f'"{example}"' for _, example in SHAPES)
+        return CompilerOutput(
+            clarifying_question=(
+                f"The offline compiler answered because {reason}, and it only understands "
+                f"these shapes: {shapes}. Rephrase the rule as one of them, or edit the Cedar "
+                f"directly."
+            ),
+            compiled_by="template",
+            fallback_reason=reason,
+        )
+    source = compose(current_policy, found) if current_policy is not None else found.cedar
+    return CompilerOutput(
+        cedar_source=source,
+        tests=found.tests,
+        compiled_by="template",
+        fallback_reason=reason,
+    )

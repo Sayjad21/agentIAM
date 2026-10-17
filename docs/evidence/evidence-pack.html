@@ -423,32 +423,32 @@ Timeline:
 
 **Expected:** template fallback; no hot-path impact
 
-Run `3d4930d7-5fd6-47e7-8c0c-f7c5c6725bd1` at `2026-10-16T18:28:28.611421+00:00`, 0.044 s. Verdict: **held**.
+Run `9a0eb476-72d5-407b-aa72-87ada65d6ccc` at `2026-10-17T12:44:29.730833+00:00`, 0.046 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **2 sweeps** — 2 held, 0 violated, 0 unavailable.
 
 | Measurement | Value |
 |---|---|
 | `served_with_ollama_down` | `12` |
-| `hot_path_p99_ms` | `13.718` |
-| `hot_path_p50_ms` | `8.98` |
+| `hot_path_p99_ms` | `15.934` |
+| `hot_path_p50_ms` | `8.548` |
 | `embedding_timeout_s` | `2.0` |
 | `final_sweep_readable` | yes |
 
 | Load | Sent | 2xx | Dropped | Statuses | Reason codes | p50 ms | p99 ms |
 |---|---|---|---|---|---|---|---|
-| ollama refusing connections | 12 | 12 | 0 | `200`: 12 | — | 8.98 | 13.718 |
+| ollama refusing connections | 12 | 12 | 0 | `200`: 12 | — | 8.548 | 15.934 |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.042 s`  scenario ended
-- `  0.042 s`  final sweep
+- `  0.044 s`  scenario ended
+- `  0.044 s`  final sweep
 
 **Notes:**
 
-- The template fallback PLAN.md §13.2 expects for CH-8 does not exist yet: T-031 is deferred until APICTA-01 Part D. CH-8 is therefore PARTIAL — the fallback is unimplemented; &#x27;no hot-path impact&#x27; holds.
-- An unreachable Ollama costs the hot path p50 8.98 ms / p99 13.718 ms: each request waits at most 120 ms for the model and then goes on with drift unassessed (spec 09 §5 fails it open). Before APICTA-07 the same scenario measured p99 6,066 ms, because the embedding client was synchronous and called from the event loop (STATUS gap 22, closed). All 12 requests were allowed.
+- Both halves of the expectation hold: the template fallback (T-031) answers the compiler when the model is down (CH-08-compiler), and the hot path is unaffected.
+- An unreachable Ollama costs the hot path p50 8.548 ms / p99 15.934 ms: each request waits at most 120 ms for the model and then goes on with drift unassessed (spec 09 §5 fails it open). Before APICTA-07 the same scenario measured p99 6,066 ms, because the embedding client was synchronous and called from the event loop (STATUS gap 22, closed). All 12 requests were allowed.
 - Measured on the Windows development host, and it invalidated this scenario&#x27;s first premise: a connect to a *closed* 127.0.0.1 port does not refuse, it raises ConnectTimeout after ~3 s — port 9 included. There is no cheap-failure mode for an unreachable local service on Windows.
 
 
@@ -458,7 +458,7 @@ Timeline:
 
 **Expected:** requests still allowed; each waits at most the assess bound
 
-Run `59c03310-8b2f-4d90-919d-bcd215028a69` at `2026-10-16T18:28:29.095188+00:00`, 0.406 s. Verdict: **held**.
+Run `fb9623a7-8024-41fd-b533-760501c0faf1` at `2026-10-17T12:44:30.253888+00:00`, 0.401 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0 unavailable.
 
@@ -466,8 +466,8 @@ Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0
 |---|---|
 | `embedding_timeout_s` | `2.0` |
 | `assess_timeout_ms` | `120.0` |
-| `baseline_p99_ms` | `6.329` |
-| `blackholed_p99_ms` | `132.283` |
+| `baseline_p99_ms` | `5.927` |
+| `blackholed_p99_ms` | `131.147` |
 | `nine_requests_three_at_a_time_wall_s` | `0.39` |
 | `blackholed_connections` | `10` |
 | `assessments_timed_out` | `9` |
@@ -475,47 +475,49 @@ Invariant sidecar, sweeping every 0.25 s: **3 sweeps** — 3 held, 0 violated, 0
 
 | Load | Sent | 2xx | Dropped | Statuses | Reason codes | p50 ms | p99 ms |
 |---|---|---|---|---|---|---|---|
-| no intent headers (oracle not consulted) | 6 | 6 | 0 | `200`: 6 | — | 5.226 | 6.329 |
-| ollama black-holed | 9 | 9 | 0 | `200`: 9 | — | 126.639 | 132.283 |
+| no intent headers (oracle not consulted) | 6 | 6 | 0 | `200`: 6 | — | 4.916 | 5.927 |
+| ollama black-holed | 9 | 9 | 0 | `200`: 9 | — | 129.037 | 131.147 |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.401 s`  scenario ended
-- `  0.401 s`  final sweep
+- `  0.399 s`  scenario ended
+- `  0.399 s`  final sweep
 
 **Notes:**
 
-- A black-holed Ollama now costs a request at most the 120 ms assess bound: p99 132.283 ms against a baseline p99 of 6.329 ms, nine requests three at a time in 0.4 s. Before APICTA-07 each uncached request paid the full 2.0 s embedding timeout on the event loop, and three concurrent requests took over 6 s. Outcomes are unchanged — spec 09 §5 fails drift open.
+- A black-holed Ollama now costs a request at most the 120 ms assess bound: p99 131.147 ms against a baseline p99 of 5.927 ms, nine requests three at a time in 0.4 s. Before APICTA-07 each uncached request paid the full 2.0 s embedding timeout on the event loop, and three concurrent requests took over 6 s. Outcomes are unchanged — spec 09 §5 fails drift open.
 
 
 ---
 
 ## CH-08-compiler — Ollama down — the NL compiler
 
-**Expected:** typed error inside the timeout; template fallback is unimplemented
+**Expected:** typed error inside the timeout; the template compiler answers
 
-Run `e23a97b9-0b05-4be9-94cf-075a8acc24b9` at `2026-10-16T18:28:29.926410+00:00`, 0.044 s. Verdict: **held**.
+Run `70112bff-b997-4fa5-b100-7bdcb1abd923` at `2026-10-17T12:44:31.075847+00:00`, 0.061 s. Verdict: **held**.
 
 Invariant sidecar, sweeping every 0.25 s: **1 sweeps** — 1 held, 0 violated, 0 unavailable.
 
 | Measurement | Value |
 |---|---|
 | `warm_returned` | no |
-| `warm_s` | `0.009` |
-| `generate_failed_after_s` | `0.007` |
+| `warm_s` | `0.012` |
+| `generate_failed_after_s` | `0.005` |
 | `generate_error` | `OllamaError` |
+| `compiled_by` | `template` |
+| `fallback_compile_s` | `0.008` |
 | `final_sweep_readable` | yes |
 
 Timeline:
 
 - `  0.000 s`  scenario started
-- `  0.016 s`  scenario ended
-- `  0.016 s`  final sweep
+- `  0.026 s`  scenario ended
+- `  0.026 s`  final sweep
 
 **Notes:**
 
-- No template fallback exists to exercise: T-031 is deferred (PLAN.md §21), so demo beat 5 has no F-2 recovery while that stays true. This is the resumption trigger STATUS.md records for T-031.
+- With Ollama unreachable the compiler fails over to the offline template compiler (APICTA-01 Part D, T-031): a quarantine sentence compiled in 0.01 s, appended to the current policy. DEMO.md drill F-2 now has a recovery for the demo&#x27;s policy shapes; other sentences get the list of shapes the offline compiler understands.
 
 
 ---

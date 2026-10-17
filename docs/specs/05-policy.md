@@ -437,6 +437,40 @@ second** by push, within one pull interval without it. Measured:
 A load costs the hot path one bundle parse, once per change. A confirmation costs one signature
 check (~0.2 ms) per pull.
 
+
+### 5.8 From an English sentence to an activatable policy (APICTA-01 Part D)
+
+**A compiled sentence is an update of the current policy, not a policy of its own.** Measured
+before: the compiler returned only the rule a sentence described, the console tested that rule
+alone against the corpus, and every one scored 27/51 — no English sentence could ever be
+activated. Added to the current policy, the same rules behave as intended: a quarantine or a new
+permit scores 51/51, and a rule that would break an approved workflow is refused with the cases
+it breaks (a ৳100,000 payment cap names `beat4_payment_at_ceiling`).
+
+| Compiler | Given the current policy, it returns |
+|---|---|
+| The model | The **whole updated policy**: every statement it does not deliberately change, plus the new ones, and no blanket `permit(principal, action, resource)`. Without a current policy (the 30-case dataset) the prompt is byte-for-byte the one that scored 27/30 |
+| The offline templates (`nl_compiler/templates.py`) | The current policy with the sentence's statements **appended** under a `// added by the offline compiler:` label |
+
+Measured on Gemini (`gemini-3.5-flash-lite`), six sentences against the real corpus policy: all
+six compiled; the four compatible ones kept all 7 existing statements and passed 51/51; the two
+that conflict with approved workflows were refused naming the cases. Live on the demo stack:
+model compile 2.4 s, offline compile 0.1 s, and the running PEP enforcing either ~16 ms after
+activation.
+
+**The offline compiler** answers when the model is unreachable, takes longer than the console's
+bound (`AGENTIAM_CONTROLPLANE_COMPILE_TIMEOUT_S`, default 20 s — about 8× the measured 2.6 s
+median), returns an answer not in the expected shape, or is switched off (the console's
+*offline* box, or `AGENTIAM_CONTROLPLANE_COMPILER_OFFLINE`). It understands six shapes:
+quarantine an agent, cap a payment, cap a payment unless approved, restrict an action to one
+role, limit an action by delegation depth, block external email. Anything else gets that list,
+never a guess. Its output is labelled, and the label is set by the compiler after parsing — it is
+not in the schema the model sees, so the model cannot claim it.
+
+**Testing a rule about one agent.** `PolicyTestCase.agent_id` is now the principal the console's
+evaluator asks Cedar about. It used to be a hardcoded `agent-1`, which made a rule naming an
+agent untestable by the gate; no corpus case names an agent, so the corpus is unchanged.
+
 ---
 
 ## 6. Cost, and what it does to NFR-1's headroom

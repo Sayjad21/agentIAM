@@ -1,10 +1,10 @@
 {
   "scenario": "CH-08-compiler",
   "title": "Ollama down \u2014 the NL compiler",
-  "expected": "typed error inside the timeout; template fallback is unimplemented",
-  "run_id": "e23a97b9-0b05-4be9-94cf-075a8acc24b9",
-  "started_at": "2026-10-16T18:28:29.926410+00:00",
-  "duration_s": 0.044,
+  "expected": "typed error inside the timeout; the template compiler answers",
+  "run_id": "70112bff-b997-4fa5-b100-7bdcb1abd923",
+  "started_at": "2026-10-17T12:44:31.075847+00:00",
+  "duration_s": 0.061,
   "invariant": {
     "interval_s": 0.25,
     "samples": 1,
@@ -20,24 +20,26 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.016,
+      "t_s": 0.026,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.016,
+      "t_s": 0.026,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "warm_returned": false,
-    "warm_s": 0.009,
-    "generate_failed_after_s": 0.007,
+    "warm_s": 0.012,
+    "generate_failed_after_s": 0.005,
     "generate_error": "OllamaError",
+    "compiled_by": "template",
+    "fallback_compile_s": 0.008,
     "final_sweep_readable": true
   },
   "loads": [],
   "notes": [
-    "No template fallback exists to exercise: T-031 is deferred (PLAN.md \u00a721), so demo beat 5 has no F-2 recovery while that stays true. This is the resumption trigger STATUS.md records for T-031."
+    "With Ollama unreachable the compiler fails over to the offline template compiler (APICTA-01 Part D, T-031): a quarantine sentence compiled in 0.01 s, appended to the current policy. DEMO.md drill F-2 now has a recovery for the demo's policy shapes; other sentences get the list of shapes the offline compiler understands."
   ],
   "verdict": "held"
 }

@@ -1,3 +1,10 @@
+{% if compiled_by == "template" %}
+<div class="alert warning">
+    <strong>Compiled offline by the template compiler</strong> — {{ fallback_reason }}. It understands
+    the demo's policy shapes only, and its rule is added to the current policy rather than written by
+    the model.
+</div>
+{% endif %}
 {% if error %}
 <div class="alert error">
     <strong>Error:</strong> {{ error }}
@@ -8,7 +15,7 @@
 </div>
 {% else %}
 <div class="alert success">
-    <strong>Success:</strong> Policy compiled successfully.
+    <strong>Success:</strong> {% if compiled_by == "template" %}the rule was added to the current policy{% else %}the model returned the updated policy{% endif %}. Review the diff below before activating.
 </div>
 
 <script>

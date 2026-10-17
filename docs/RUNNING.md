@@ -358,6 +358,14 @@ enforces, the last sync's outcome, and `confirmed_at`, which the pull refreshes 
 changes. A PEP that cannot reach the control plane for `AGENTIAM_PEP_POLICY_MAX_STALENESS_S`
 (default 300 s) refuses with `POLICY_BUNDLE_STALE`: fail closed on age, by design.
 
+**Compiling English offline.** Tick **offline** beside *Compile & test*, or set
+`AGENTIAM_CONTROLPLANE_COMPILER_OFFLINE=1`, and the offline template compiler answers instead
+of the model; it also answers automatically when the model fails or takes longer than
+`AGENTIAM_CONTROLPLANE_COMPILE_TIMEOUT_S` (default 20 s). It understands six shapes —
+quarantine an agent, cap a payment, cap a payment unless approved, restrict an action to one
+role, limit by delegation depth, block external email — and lists them for anything else.
+Either way the compiler returns the *current policy updated*, which the corpus then judges.
+
 The task id is fixed for the demo and printed by the seed script:
 `d0d0d0d0-0000-4000-8000-000000000002`.
 

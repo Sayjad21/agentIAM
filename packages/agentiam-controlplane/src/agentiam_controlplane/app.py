@@ -79,7 +79,12 @@ def _as_cedar_decimal(value: Decimal) -> dict[str, dict[str, str]]:
 
 
 def evaluate_case(engine: cedarpy.PolicySet, case: PolicyTestCase) -> PolicyVerdict:
-    """Evaluate one case using Cedar."""
+    """Evaluate one case using Cedar.
+
+    The principal is `Agent::"<case.agent_id>"`. It used to be a hardcoded `agent-1`, which
+    ignored the case's own `agent_id` and made a rule about one agent untestable by the gate
+    (APICTA-01 Part D). No corpus case names an agent, so the corpus is unaffected.
+    """
     tool = CORPUS_TOOLS.get(case.tool or "")
     if tool is None:
         tool_facts = {"tool_id": "", "server": "", "sensitivity": "low", "is_external": False}
@@ -93,7 +98,7 @@ def evaluate_case(engine: cedarpy.PolicySet, case: PolicyTestCase) -> PolicyVerd
 
     entities = [
         {
-            "uid": {"type": "Agent", "id": "agent-1"},
+            "uid": {"type": "Agent", "id": case.agent_id},
             "attrs": {
                 "role": case.role,
                 "depth": case.depth,
@@ -110,7 +115,7 @@ def evaluate_case(engine: cedarpy.PolicySet, case: PolicyTestCase) -> PolicyVerd
     ]
 
     request = {
-        "principal": 'Agent::"agent-1"',
+        "principal": f'Agent::"{case.agent_id}"',
         "action": f'Action::"{case.operation}"',
         "resource": f'Tool::"{case.tool or ""}"',
         "context": {
@@ -173,6 +178,23 @@ def _reaper_interval_s() -> float | None:
 
 
 _BDT_PER_USD_ENV = "AGENTIAM_CONTROLPLANE_BDT_PER_USD"
+_COMPILE_TIMEOUT_ENV = "AGENTIAM_CONTROLPLANE_COMPILE_TIMEOUT_S"
+
+
+def _compile_timeout_s() -> float:
+    """How long `/policy/compile` waits for the model. Unset keeps 20 s."""
+    import os
+
+    raw = os.environ.get(_COMPILE_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return 20.0
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{_COMPILE_TIMEOUT_ENV} is not a number: {raw!r}") from exc
+    if not value > 0:
+        raise ValueError(f"{_COMPILE_TIMEOUT_ENV} must be greater than zero, got {raw!r}")
+    return value
 
 
 def _bdt_per_usd() -> Decimal:
@@ -291,6 +313,8 @@ def create_app(
     bdt_per_usd: Decimal | None = None,
     policy_publishing: PolicyPublishingSettings | None = None,
     policy_publisher: PolicyPublisher | None = None,
+    compile_timeout_s: float = 20.0,
+    compiler_offline: bool = False,
 ) -> FastAPI:
     """Create the FastAPI application for the Control Plane.
 
@@ -329,6 +353,10 @@ def create_app(
 
     `bdt_per_usd` is the console's fixed display rate for the dollar figure shown beside
     every taka amount (`console/money.py`). Display only: nothing is converted.
+
+    `compile_timeout_s` bounds how long `/policy/compile` waits for the model before the offline
+    template compiler answers instead (about 8x the measured 2.6 s median compile);
+    `compiler_offline` skips the model altogether, for a venue with no network (DEMO.md F-1/F-2).
 
     `policy_publishing` turns on publication (spec 05 §5.7): with it and a database, an
     approver's activation is signed and stored, and the lifespan imports the boot bundle.
@@ -749,10 +777,22 @@ def create_app(
         )
 
     @app.post("/policy/compile", response_class=HTMLResponse)
-    async def compile_policy(request: Request, nl_source: str = Form(...)) -> HTMLResponse:
-        """Compile a natural language statement into Cedar policy and evaluate."""
+    async def compile_policy(
+        request: Request, nl_source: str = Form(...), offline: str = Form("")
+    ) -> HTMLResponse:
+        """Compile a sentence into an updated policy, then test it like any other candidate.
+
+        The compiler is given the current policy, so what comes back — from the model or the
+        offline templates — is the whole updated policy, and the corpus gate judges that. A
+        single rule tested on its own scored 27/51 every time, so nothing could be activated.
+        """
         try:
-            output = await compile_nl_to_policy(nl_source)
+            output = await compile_nl_to_policy(
+                nl_source,
+                current_policy=await _current_source(),
+                timeout_s=compile_timeout_s,
+                offline=compiler_offline or bool(offline),
+            )
         except Exception as exc:
             return templates.TemplateResponse(
                 request=request,
@@ -760,11 +800,12 @@ def create_app(
                 context={"error": str(exc)},
             )
 
+        compiler = {"compiled_by": output.compiled_by, "fallback_reason": output.fallback_reason}
         if output.clarifying_question:
             return templates.TemplateResponse(
                 request=request,
                 name="nl_results.html",
-                context={"clarifying_question": output.clarifying_question},
+                context={"clarifying_question": output.clarifying_question, **compiler},
             )
 
         # We have a valid generated policy, let's test it!
@@ -849,6 +890,7 @@ def create_app(
                 # Carried to the activation form so the bundle records which English it came
                 # from without ever storing the English (spec 05 §5.7.3).
                 "nl_digest": statement_digest(nl_source),
+                **compiler,
             },
         )
 
@@ -1164,6 +1206,11 @@ def create_app_from_env() -> FastAPI:
         bdt_per_usd=_bdt_per_usd(),
         policy_publishing=PolicyPublishingSettings.from_env(),
         policy_publisher=policy_publisher,
+        compile_timeout_s=_compile_timeout_s(),
+        compiler_offline=os.environ.get("AGENTIAM_CONTROLPLANE_COMPILER_OFFLINE", "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"},
     )
 
 

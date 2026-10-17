@@ -133,7 +133,7 @@ def test_compile_valid_policy(mock_compile: MagicMock) -> None:
 
     response = client.post("/policy/compile", data={"nl_source": "Admins can do anything"})
     assert response.status_code == 200
-    assert "Success:</strong> Policy compiled successfully." in response.text
+    assert "Success:</strong> the model returned the updated policy" in response.text
     assert "Auto-Generated Tests" in response.text
     assert "Corpus Evaluation" in response.text
 
@@ -307,3 +307,37 @@ def test_compiled_cedar_reaches_the_editor_as_a_string_not_as_script(
         handle.write(script.group(1))
     result = subprocess.run([node, "--check", handle.name], capture_output=True, text=True)  # noqa: S603
     assert result.returncode == 0, result.stderr
+
+
+class TestOfflineCompile:
+    """APICTA-01 Part D: beat 5 with no network — the offline compiler, through the console."""
+
+    def test_an_offline_compile_adds_the_rule_and_can_be_activated(self) -> None:
+        response = client.post(
+            "/policy/compile", data={"nl_source": "Quarantine agent agt-payer", "offline": "1"}
+        )
+        html = response.text
+        assert "Compiled offline by the template compiler" in html
+        assert "offline mode" in html
+        # The editor receives the whole current policy with the rule appended, and that
+        # composed policy passes the corpus — so the Activate button is offered.
+        assert "added by the offline compiler: quarantine agt-payer" in html
+        assert 'permit(principal, action == Action::\\"invoice:read\\", resource);' in html
+        assert "Ready for Activation" in html
+
+    def test_an_offline_rule_that_breaks_an_approved_workflow_is_blocked_by_name(self) -> None:
+        html = client.post(
+            "/policy/compile", data={"nl_source": "No payments over 100000", "offline": "1"}
+        ).text
+        assert "Activation Blocked" in html
+        assert "beat4_payment_at_ceiling" in html
+
+    def test_an_unrecognised_sentence_offline_lists_what_it_understands(self) -> None:
+        html = client.post(
+            "/policy/compile", data={"nl_source": "Make everything safer", "offline": "1"}
+        ).text
+        assert "only understands these shapes" in html
+        assert "No payments over 100000" in html
+
+    def test_the_policy_page_offers_the_offline_switch(self) -> None:
+        assert 'name="offline"' in client.get("/policy").text

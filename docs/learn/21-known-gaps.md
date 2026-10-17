@@ -58,7 +58,6 @@ Each of these has a written reason and a trigger for revisiting it.
 | Drift dataset (2,000+ labelled pairs) | Weeks of irreducible human labelling | Research phase |
 | Calibrated ML drift classifier | The rule-based version gives the same demo experience | After the dataset exists |
 | Drift features f3, f4, f6 | Three features measured sufficient for the ship | Research phase |
-| NL-compiler template fallback | The compiler path demonstrates without it | Preparing the failure drill for real |
 | MCP transport | The generic HTTP enforcement point covers the demo | Adoption work |
 
 Notice the first row. The deferral is backed by a **number**, so it can be revisited

@@ -15,13 +15,16 @@
 <div class="split-view">
     <div class="editor-section">
         <h2>Natural language</h2>
-        <p class="dim" style="margin-top:-0.4rem;">Compiled to Cedar, then tested. Backed by the configured LLM, with a template fallback if it is unreachable.</p>
+        <p class="dim" style="margin-top:-0.4rem;">Compiled into an update of the current policy, then tested against the corpus. Uses the configured model; if it is unreachable or slow, an offline template compiler handles the demo's policy shapes.</p>
         <form id="nl-form" hx-post="/policy/compile" hx-target="#results-container" hx-indicator="#loading-nl">
             <textarea name="nl_source" id="nl-editor" spellcheck="false"
                       placeholder="Contractors may read invoices but must never issue payments over 1000 taka."></textarea>
 
             <div class="actions">
                 <button type="submit" class="btn primary">Compile &amp; test</button>
+                <label class="dim" title="Skip the model and use the offline template compiler (no network needed)">
+                    <input type="checkbox" name="offline" value="1"> offline
+                </label>
                 <span id="loading-nl" class="htmx-indicator">Compiling…</span>
             </div>
         </form>

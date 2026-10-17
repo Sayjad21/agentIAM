@@ -4519,3 +4519,46 @@ restarted PEP fetched serial 3 before serving rather than enforcing its serial-1
 unchanged policy was confirmed by the pull and `confirmed_at` moved. Also fixed while running
 the full suite: `test_mandates_reach_the_full_depth_range` missed depth 1 or 8 in 3 of 300
 campaigns at 200 samples (hypothesis biases toward simple draws); 600 samples missed 0 of 300.
+
+---
+
+## ADR-074 — An English sentence compiles to an update of the current policy, with an offline fallback
+
+**Status:** accepted · **Ticket:** APICTA-01 Part D (T-031) · **Specified in:** spec 05 §5.8
+
+### Context
+
+Beat 5 — a judge's sentence becomes enforced policy — could not complete. The compiler returned
+only the rule the sentence described; the console tested that alone against the 51-case corpus;
+every rule scored 27/51 and the Activate button never lit. Separately, the compiler had no
+fallback (T-031, deferred), so with the hosted model unreachable or rate-limited beat 5 failed
+outright, and the hosted client's retries could hold it for minutes.
+
+### Decision
+
+1. **The model is given the current policy and returns the whole updated policy** (chosen by the
+   team over "the model writes only the new rule", which would have invalidated the 30-case
+   dataset). Without a current policy the prompt is unchanged, and a test pins that.
+2. **The offline template compiler appends its statements to the current policy.** Six shapes from
+   the demo's own vocabulary, not from the evaluation dataset; anything else gets the list of
+   shapes. PLAN's T-031 asked for ten, and for a "low confidence" trigger the model provides no
+   signal for — both recorded as not met.
+3. **Fallback on model error, a 20 s bound, or a malformed answer.** The bound is the console's;
+   the model call is abandoned at it.
+4. **Which compiler answered is labelled outside the model's schema** and set after parsing, so
+   the model cannot claim the template label; excluded from dumps so A-26's exact-shape check
+   still holds.
+5. **The gate's evaluator honours `agent_id`**, so a rule about one agent can be tested.
+
+### Consequences
+
+- Measured live: compile → activate → running PEP enforcing in ~16 ms, by model (2.4 s compile)
+  and offline (0.1 s). On Gemini, 4 of 4 compatible sentences kept every existing statement and
+  passed the corpus; 2 of 2 conflicting ones were refused naming the cases.
+- The model can still rewrite or drop an existing statement; the corpus gate and the diff are
+  what catch it. In the measurement one existing statement was not kept verbatim (changed or
+  dropped) in each of the two conflicting cases — both of which the gate refused.
+- A one-line hint for full-edit mode (`agent_id` for a test about one agent) fixed the model's
+  quarantine tests (1/2 → 2/2); it is not in the dataset prompt.
+- CH-8's compiler scenario now asserts the fallback rather than its absence; DEMO.md F-1/F-2 have
+  a recovery.

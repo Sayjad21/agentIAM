@@ -13,13 +13,13 @@ than none.
 
 | | |
 |---|---|
-| **Tickets** | **48 of 52 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 9 deferred · 61 defined (`PLAN.md` §9) |
+| **Tickets** | **49 of 53 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 8 deferred · 61 defined (`PLAN.md` §9) |
 | **Milestones** | Everything through hardening (T-051…T-056) is complete. Demo and submission (T-057…T-061) is in progress |
-| **Tests** | 3,086 collected. `make check` runs 2,747, all passing; the other 339 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
+| **Tests** | 3,144 collected. `make check` runs 2,805, all passing; the other 339 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 73 (ADR-001…ADR-073) |
+| **ADRs** | 74 (ADR-001…ADR-074) |
 
 ---
 
@@ -32,7 +32,7 @@ than none.
 | Specs, models, tokens, attenuation, SDK (T-001…T-011) | T-001…T-009, T-011 | T-010 |
 | Ledger, leases, invariants, sibling budgets (T-012…T-017) | T-012…T-014, T-016, T-017 | T-015 |
 | PEP, decision pipeline, extractor, pool, emitter, Cedar, thin slice, bundles (T-018…T-025) | all | — |
-| Activation gate, Cedar UI, NL compiler (T-026…T-031) | T-026…T-030 | T-031 |
+| Activation gate, Cedar UI, NL compiler (T-026…T-031) | all (T-031 in APICTA-01 Part D) | — |
 | Drift (T-032…T-036) | T-032, T-033, T-036 | T-034, T-035 |
 | Escalation, revocation, Bloom cache, subtree revocation (T-037…T-040) | all | — |
 | MCP, Keycloak, SPIRE (T-041…T-044) | T-043 | T-041, T-042, T-044 |
@@ -54,11 +54,11 @@ this page is updated as each ticket closes a gap.
 | Ticket | State |
 |---|---|
 | **T-057** Demo scenario scripting | **Partly done.** `make demo-seed` (paced 138-call scenario over a 14-agent tree, one refusal per enforcement layer), `make demo-conc` (three-PEP sibling race), `make demo-tamper` / `demo-untamper`, `make demo-reset`. Not met: `PLAN.md`'s "all 8 beats scripted, each individually runnable" — beats 1, 4, 5, 6 and 7 cannot be shown as written today (`MASTER.md` §7.8) |
-| **T-058** Failure drills | Not started. `DEMO.md` §2 lists F-1…F-7. F-2 has no fallback while T-031 is deferred |
+| **T-058** Failure drills | Not started. `DEMO.md` §2 lists F-1…F-7. F-1/F-2 now have a real recovery: the offline template compiler (T-031) |
 | **T-059** Submission package | Not started. `PLAN.md` §19 |
 | **T-061** OSS release (reduced) | Public repo, README, demo video. Whether the repo goes public is a team decision |
 
-### Deferred — 9 tickets
+### Deferred — 8 tickets
 
 Each has a resumption trigger, recorded in `PLAN.md` §21.
 
@@ -66,7 +66,6 @@ Each has a resumption trigger, recorded in `PLAN.md` §21.
 |---|---|---|
 | T-010 | Token reference for oversized chains. **Measured unreachable**: at `max_depth = 8` a token is 4,892 base64 chars — 60% of the 8 KB limit (ADR-006) | `max_depth` above ~16 |
 | T-015 | Adaptive lease sizing. Fixed leases behave identically for the demo; the algorithm is specified in spec 04 §12. Also where gap 8's `max_fraction` clamp belongs | Production traffic with variable rate |
-| T-031 | Template fallback for the NL compiler. Without it, F-2 has no fallback: the compiler returns promptly with a visible error when the model is unreachable, and `DEMO.md` F-2 says so | Preparing the F-2 drill (T-058) |
 | T-034 | Drift dataset — 2,000+ labelled pairs, weeks of human labelling | Research phase |
 | T-035 | Calibrated drift classifier | After T-034 |
 | T-041 | MCP streamable-HTTP gateway. The HTTP PEP proves the pipeline; MCP is the adoption path | Adoption push |
