@@ -2,9 +2,9 @@
   "scenario": "CH-08-compiler",
   "title": "Ollama down \u2014 the NL compiler",
   "expected": "typed error inside the timeout; the template compiler answers",
-  "run_id": "136450b2-c0c9-4c2f-b6ea-e565076600fe",
-  "started_at": "2026-10-17T18:08:19.116451+00:00",
-  "duration_s": 0.08,
+  "run_id": "57b2c547-5252-4b1c-a9dd-37a5c4172745",
+  "started_at": "2026-10-17T18:37:06.633399+00:00",
+  "duration_s": 0.077,
   "invariant": {
     "interval_s": 0.25,
     "samples": 1,
@@ -20,26 +20,26 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.04,
+      "t_s": 0.041,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.04,
+      "t_s": 0.041,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "warm_returned": false,
-    "warm_s": 0.01,
+    "warm_s": 0.008,
     "generate_failed_after_s": 0.006,
     "generate_error": "OllamaError",
     "compiled_by": "template",
-    "fallback_compile_s": 0.024,
+    "fallback_compile_s": 0.027,
     "final_sweep_readable": true
   },
   "loads": [],
   "notes": [
-    "With Ollama unreachable the compiler fails over to the offline template compiler (APICTA-01 Part D, T-031): a quarantine sentence compiled in 0.02 s, appended to the current policy. DEMO.md drill F-2 now has a recovery for the demo's policy shapes; other sentences get the list of shapes the offline compiler understands."
+    "With Ollama unreachable the compiler fails over to the offline template compiler (APICTA-01 Part D, T-031): a quarantine sentence compiled in 0.03 s, appended to the current policy. DEMO.md drill F-2 now has a recovery for the demo's policy shapes; other sentences get the list of shapes the offline compiler understands."
   ],
   "verdict": "held"
 }

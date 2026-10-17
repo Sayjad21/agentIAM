@@ -1,9 +1,15 @@
-"""Getting a pool ready for a mandate before its first request — APICTA-02 Part B.
+"""Noting a mandate the control plane has issued — APICTA-02 Part B, ADR-081.
 
 The control plane announces each issued mandate on `agentiam:mandates`
-(`agentiam_controlplane.db.mandates`). On each announcement this asks the PEP's
-`LeasePoolRegistry` to create the mandate's pool, so the mandate's first request finds a lease
-instead of the retryable `LEASE_UNAVAILABLE` it would otherwise get while the pool is created.
+(`agentiam_controlplane.db.mandates`). On each announcement this tells the PEP's
+`LeasePoolRegistry` that the mandate exists, which forgets any cached refusal for it so the
+next request asks the ledger instead of waiting out `unknown_ttl`.
+
+**It does not lease.** The first draft called `ensure()`, priming a pool with a real
+`ACQUIRE`, so every PEP on the channel took `lease_size` from every mandate as it was minted
+— starving the one PEP that actually served it on any mandate smaller than their combined
+lease size. `note_created` is the whole of what an announcement may do; the lease waits for a
+token. See `LeasePoolRegistry.note_created`.
 
 **Latency only, never correctness.** Redis pub/sub is at-most-once, and a PEP that was down
 or partitioned misses the announcement; the registry creates the pool when the mandate's first
@@ -32,11 +38,11 @@ CHANNEL: Final = "agentiam:mandates"
 
 
 class _Registry(Protocol):
-    async def ensure(self, mandate_id: uuid.UUID) -> object: ...
+    def note_created(self, mandate_id: uuid.UUID) -> None: ...
 
 
 class MandateWatch:
-    """Subscribes to `agentiam:mandates` and ensures a pool per announced mandate."""
+    """Subscribes to `agentiam:mandates` and notes each announced mandate."""
 
     def __init__(
         self,
@@ -67,7 +73,7 @@ class MandateWatch:
                 await task
 
     async def handle_push(self, raw: bytes | str) -> bool:
-        """Act on one message. Returns whether it named a mandate to get ready for."""
+        """Act on one message. Returns whether it named a mandate to note."""
         try:
             payload = json.loads(raw)
             if not isinstance(payload, dict) or payload.get("event") != "mandate:created":
@@ -77,7 +83,7 @@ class MandateWatch:
             logger.warning("malformed mandate announcement ignored")
             return False
         self.received += 1
-        await self._registry.ensure(mandate_id)
+        self._registry.note_created(mandate_id)
         return True
 
     async def _subscribe_loop(self, redis: Redis) -> None:

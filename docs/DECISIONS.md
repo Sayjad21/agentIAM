@@ -4838,3 +4838,62 @@ pool that already existed, not once it issues budget.
 - The live demo now needs a sign-in before beat 4; the persona picker is one click.
 - Every console task now creates a mandate row and a funded pool that nothing deletes — fine
   for a demo database that `make demo-reset` wipes, a cost to record for anything longer-lived.
+
+---
+
+## ADR-081 — Hearing that a mandate exists is not a reason to lease from it
+
+**Status:** accepted · **Ticket:** APICTA-02 (follow-up) · **Supersedes:** spec 04 §4.8's
+"Each PEP's `MandateWatch` answers with `CREATE`" · **Relates to:** ADR-078, ADR-079
+
+### Context
+
+Part B gave the control plane an announcement — `{"event": "mandate:created"}` on
+`agentiam:mandates` — and had each PEP's `MandateWatch` answer it by calling
+`LeasePoolRegistry.ensure()`. `ensure()` primes the pool, and priming is a real `ACQUIRE`.
+
+The intent was latency: a mandate's first request should find a lease rather than the
+retryable `LEASE_UNAVAILABLE` it gets while the pool is created. The spec said so, and this
+section of it was wrong in the same way spec 04's `ACQUIRE` formula (ADR-015) and its
+`LEDGER_COMMIT` ordering (ADR-017) were wrong — defensible on paper, false against a running
+system.
+
+Pub/sub is a broadcast. **Every** PEP subscribed to the channel answered **every**
+announcement, so each one leased `lease_size` from each mandate as it was minted, whether or
+not it would ever serve a request for it. Measured with three PEPs against a mandate funded
+with 1,500 and a 1,000 lease size: pep-1 took 1,000, pep-2 took the remaining 500, pep-3 took
+nothing, and the ledger was empty before a single request existed. The PEP that then served
+the task was refused `BUDGET_EXHAUSTED_MANDATE` — *the human-approved budget is spent* —
+while every taka of it sat unspent on two idle PEPs. It did not heal, because an idle PEP
+renews its lease for as long as it holds one.
+
+So the announcement converted a broadcast into a race for the money, and the losing PEP
+reported a false reason: not "retry", but "the human's budget is gone".
+
+### Decision
+
+1. **An announcement never acquires.** `MandateWatch.handle_push` calls a new
+   `LeasePoolRegistry.note_created(mandate_id)`, which is synchronous, does no I/O, and only
+   drops any `refused[mandate]` entry the registry holds.
+2. **The token remains the only thing that causes a lease** — ADR-078's rule, now without an
+   exception. A pool is created when a verified token for its mandate arrives, and that token
+   reaches exactly the PEP that will spend from it.
+3. **The watch keeps a purpose, a smaller one.** A PEP that asked about a mandate before its
+   budget row existed caches `UNKNOWN` for `unknown_ttl` (30 s); the announcement is the
+   control plane saying it exists now, so the cache is dropped and the next request asks the
+   ledger instead of waiting the cache out. That is latency, with no money moved.
+
+### Consequences
+
+- The starvation is gone: after the change the same three-PEP, 1,500-mandate probe leaves the
+  ledger untouched at 1,500, and the serving PEP's lookup returns `PENDING` — a retryable
+  `LEASE_UNAVAILABLE` — rather than a false `BUDGET_EXHAUSTED_MANDATE`.
+- **The latency the announcement was added for is given up in the common case.** A mandate's
+  first request now always finds `PENDING` and retries, where before it could find a primed
+  pool. That is the right trade: the retry is bounded and honest, and ADR-080's `/run/call`
+  already retries once on `LEASE_UNAVAILABLE` for exactly this reason. Pre-warming the PEP
+  that will serve a mandate needs routing information the announcement does not carry.
+- An idle PEP now holds no leases at all, which also removes the unbounded growth spec 04
+  §4.8's last bullet described as the control plane's problem to limit.
+- `_Registry`'s protocol changes from `async def ensure` to `def note_created`; the watch no
+  longer awaits anything, so a slow ledger cannot back up the subscription loop.

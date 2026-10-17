@@ -679,6 +679,24 @@ class LeasePoolRegistry:
         self._task_for(mandate_id)
         return PoolStatus.PENDING
 
+    def note_created(self, mandate_id: uuid.UUID) -> None:
+        """Record that `mandate_id` exists now. Acquires nothing.
+
+        What the control plane's `mandate:created` announcement is allowed to do. It used to
+        call `ensure()`, which primes a pool with a real `ACQUIRE` — so every PEP on the
+        channel took `lease_size` from every mandate the moment it was minted, whether or
+        not it would ever serve one. On a mandate smaller than the PEPs' combined lease size
+        that emptied the ledger before the first request arrived (measured 1000 / 500 / 0 of
+        1500 across three PEPs), and the PEP that actually served the task was refused
+        `BUDGET_EXHAUSTED_MANDATE` — *the human-approved budget is spent* — while every taka
+        of it sat unspent on idle PEPs that renewed those leases indefinitely. ADR-081.
+
+        So the announcement only forgets a cached refusal: a PEP that asked before the budget
+        row existed holds `UNKNOWN` for `unknown_ttl`, and this is the control plane saying it
+        exists now. The lease itself waits for a token, which is the signal (ADR-078).
+        """
+        self._refused_until.pop(mandate_id, None)
+
     async def ensure(self, mandate_id: uuid.UUID) -> LeasePool | None:
         """Create, prime and start the pool for `mandate_id`; `None` if it could not be.
 

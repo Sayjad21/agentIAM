@@ -58,7 +58,7 @@ fallback) and T-059 (submission package).
 | APICTA-01 | DONE — Parts A–D; gap 26 and T-031 closed; beat 5 live online and offline. CI green at Part C |
 | APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
-| APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live |
+| APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live. CI green on `apicta-sprint` (run 39056894243), after two CH-04 harness fixes its own settlement drain exposed |
 | APICTA-06 | TODO |
 | APICTA-08 | TODO |
 

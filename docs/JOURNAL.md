@@ -3904,6 +3904,41 @@ waited. A `RESET` cut over a warm pooled connection is exactly that behaviour, a
 both counters at zero: the assertion fires. The same connection under `BLACKHOLE` reads
 `blackholed=0, frozen=1`, which is the CI failure in miniature. Ten CH-04 runs green after.
 
+### An announcement that everybody answered
+
+APICTA-02 Part B let the control plane tell every PEP when a mandate was issued, so the
+mandate's first request would find a lease instead of a retry. Spec 04 §4.8 said each PEP's
+`MandateWatch` answers the announcement with `CREATE`, and `CREATE` ends in a real `ACQUIRE`.
+
+Pub/sub is a broadcast, so *every* PEP answered *every* announcement. Each one leased
+`lease_size` from each mandate the moment it was minted, whether or not it would ever serve a
+request for it. Three PEPs against a mandate funded with 1,500 and a 1,000 lease size: pep-1
+took 1,000, pep-2 took the remaining 500, pep-3 took nothing, and the ledger was empty before
+a single request existed. Whichever PEP then served the task was refused
+`BUDGET_EXHAUSTED_MANDATE` — *the human-approved budget is spent* — while all 1,500 of it sat
+unspent on two idle PEPs, renewed indefinitely because a PEP renews whatever it holds.
+
+The announcement had turned a broadcast into a race for the money, and the PEP that lost it
+reported the wrong reason: not "retry", but "the human's budget is gone". A false statement
+about someone's money is the worst kind of bug this system can have, and no test had it
+because every test had one PEP.
+
+Fixed in ADR-081: an announcement may not acquire. `MandateWatch` now calls
+`note_created()`, which is synchronous, does no I/O, and only drops a cached `UNKNOWN`
+refusal so a PEP that asked before the budget row existed stops waiting out `unknown_ttl`.
+The token is once again the only thing that causes a lease (ADR-078, now without its
+exception). The same probe afterwards leaves the ledger at 1,500 untouched and the serving
+PEP gets a retryable `PENDING`.
+
+What it costs is written into the ADR rather than glossed: the latency the announcement
+existed for is mostly given up, because pre-warming *the PEP that will actually serve a
+mandate* needs routing the announcement does not carry. ADR-080's `/run/call` already retries
+once on `LEASE_UNAVAILABLE` for exactly this case.
+
+This is the third of our own specs to be wrong against a running system, after ADR-015's
+`ACQUIRE` formula and ADR-017's `LEDGER_COMMIT` ordering — and like both, it read as correct
+until something ran it.
+
 ### CI's first run in days, and one `None` that meant two things
 
 The first CI run after the billing block lifted passed eight of nine jobs and failed CH-01:

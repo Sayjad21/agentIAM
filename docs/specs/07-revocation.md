@@ -61,24 +61,20 @@ no distinct `REVOKE_SUBTREE` operation.
 
 ### 2.1 Where the block id comes from
 
-No `agents` SQL table exists. A `mandates` table does, since APICTA-02's migration `0010`
-closed `STATUS.md` gap 7 — `T-005` had built `Mandate` as a pure Pydantic model with no
-persistence — and because it carries `task_id`, "the mandate belonging to task X" is now a
-question that resolves. It does not resolve to what this API needs. The row records that a
-mandate was *issued* (`mandate_id`, `task_id`, `principal_id`, `created_at`, `expires_at`);
-it does not record the block ids of the tokens minted under it, and no other table does
-either. A revoke call therefore still cannot reach a block id by querying a table.
-It doesn't need to: `DecisionRecord.token_chain_ids` (`pipeline.py`'s `_record()`
-already sets this from `token.revocation_ids`) is written to `audit_records` on every
-decision, so **every block id that has ever made a request is already recoverable** from the
-audit trail (`GET /audit/custody?action_id=...`, or a direct query). A human operator or the
-console resolves "revoke this agent" to a block id by looking up its most recent decision
-record — the revoke endpoint itself only ever takes a block id.
+No `agents` SQL table exists, and the `mandates` table that APICTA-02's migration `0010`
+added records only that a mandate was issued, never a block id. A revoke call therefore
+cannot resolve "the mandate belonging to task X" to a block id by querying such a table,
+because nothing stores one. It doesn't need to: `DecisionRecord.token_chain_ids`
+(`pipeline.py`'s `_record()` already sets this from `token.revocation_ids`) is written to
+`audit_records` on every decision, so **every block id that has ever made a request is
+already recoverable** from the audit trail (`GET /audit/custody?action_id=...`, or a direct
+query). A human operator or the console resolves "revoke this agent" to a block id by
+looking up its most recent decision record — the revoke endpoint itself only ever takes a
+block id.
 
-If a later issuance service starts recording the block id it mints alongside the `mandates`
-row, resolving a friendlier identifier to a block id becomes that table's job, layered in
-front of this API without changing it. T-045's identity tree is not that service: it derives
-the tree from `audit_records`, the same source described above.
+If a later issuance service records the block id it mints alongside the `mandates` row,
+resolving a friendlier identifier to a block id becomes that row's job, layered in front of
+this API without changing it.
 
 ## 3. State
 

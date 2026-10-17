@@ -293,12 +293,21 @@ CREATE(mandate):
 - **Shutdown releases every pool** (§4.5), each draining the shared settlement queue first.
 - **Issuing a mandate** (Part B, ADR-079) writes its `mandates` row and its spend pool in one
   transaction, then publishes `{"event": "mandate:created", "mandate_id"}` on
-  `agentiam:mandates` — persist, then best-effort publish, as revocation does. Each PEP's
-  `MandateWatch` answers with `CREATE` above. There is no pull loop: the first token is the
-  backstop for a missed event.
+  `agentiam:mandates` — persist, then best-effort publish, as revocation does. There is no
+  pull loop: the first token is the backstop for a missed event.
+- **An announcement does not `CREATE`** (ADR-081). Each PEP's `MandateWatch` only drops any
+  `refused[mandate]` entry it holds, so a PEP that asked before the budget row existed stops
+  waiting out `unknown_ttl`. It acquires nothing. Answering an announcement with `CREATE`, as
+  this section first specified, made **every** PEP on the channel lease `lease_size` from
+  **every** mandate the moment it was minted: on a mandate smaller than the subscribers'
+  combined lease size the ledger was empty before the first request (1000 / 500 / 0 of 1500,
+  three PEPs), the PEP that actually served the task was refused `BUDGET_EXHAUSTED_MANDATE`
+  — *the human-approved budget is spent* — and idle PEPs renewed the leases indefinitely, so
+  it did not heal. The token is the only thing that may cause a lease.
 - **Not yet bounded:** how many pools one PEP may hold. Each costs one lease of `lease_size`
-  for one TTL; the bound is how many mandates have been minted, which is the control plane's to
-  limit.
+  for one TTL; the bound is how many mandates this PEP has been sent a token for. Since
+  ADR-081 that is no longer "every mandate ever minted" — an announcement alone costs
+  nothing — so an idle PEP holds no leases.
 
 ---
 
