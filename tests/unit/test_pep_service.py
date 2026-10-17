@@ -535,7 +535,12 @@ class TestLeasePriming:
         assert started == ["pool"]
 
     @staticmethod
-    async def _run_lifespan(service: pep_service.Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run_lifespan(
+        service: pep_service.Service,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        stub_watch: bool = True,
+    ) -> None:
         """Enter and exit the app's lifespan with the I/O-bound workers stubbed out.
 
         Only the workers are stubbed. `prime` is left alone — it is the thing under test —
@@ -550,12 +555,17 @@ class TestLeasePriming:
         async def noop(*_args: object, **_kwargs: object) -> None:
             return None
 
-        for cls, names in (
+        from agentiam_pep.mandate_watch import MandateWatch
+
+        stubbed: list[tuple[type, tuple[str, ...]]] = [
             (DecisionEmitter, ("start", "aclose")),
             (SettlementQueue, ("start", "aclose")),
             (RedisRevocationSet, ("start", "aclose")),
             (LeasePool, ("aclose",)),
-        ):
+        ]
+        if stub_watch:
+            stubbed.append((MandateWatch, ("start", "aclose")))
+        for cls, names in stubbed:
             for name in names:
                 monkeypatch.setattr(cls, name, noop)
 
@@ -670,6 +680,27 @@ class TestLeasePriming:
             await self._run_lifespan(service, monkeypatch)
 
         assert any("lease" in r.message.lower() for r in caplog.records), caplog.text
+
+    async def test_the_lifespan_starts_and_stops_the_mandate_watch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """APICTA-02 Part B: announcements are listened for while the PEP serves."""
+        from agentiam_pep.mandate_watch import MandateWatch
+
+        calls: list[str] = []
+
+        async def started(_self: object) -> None:
+            calls.append("start")
+
+        async def closed(_self: object) -> None:
+            calls.append("aclose")
+
+        monkeypatch.setattr(MandateWatch, "start", started)
+        monkeypatch.setattr(MandateWatch, "aclose", closed)
+        _base_env(monkeypatch, tmp_path)
+        service = pep_service.build_service(pep_service.ServiceSettings.from_env())
+        await self._run_lifespan(service, monkeypatch, stub_watch=False)
+        assert calls == ["start", "aclose"]
 
     def test_the_pool_is_reachable_from_the_assembled_service(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

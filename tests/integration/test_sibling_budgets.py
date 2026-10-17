@@ -42,6 +42,7 @@ from sqlalchemy.pool import NullPool
 from agentiam_controlplane.db.base import make_engine, make_session_factory
 from agentiam_controlplane.db.invariants import InvariantKind, check_invariants
 from agentiam_controlplane.db.ledger import acquire, ledger_commit, split_budget
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow
 from agentiam_controlplane.errors import (
     AllocationError,
@@ -61,6 +62,7 @@ async def a_pool(
     """One mandate-level pool row. Returns `(mandate_id, budget_id)`."""
     mandate_id = uuid.uuid4()
     async with make_session_factory(engine)() as s, s.begin():
+        await ensure_row(s, mandate_id, now=datetime.now(UTC))
         row = BudgetRow(mandate_id=mandate_id, dimension=DIMENSION, total=total)
         s.add(row)
         await s.flush()

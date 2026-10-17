@@ -2,9 +2,9 @@
   "scenario": "CH-04",
   "title": "Partition PEP <-> ledger",
   "expected": "bounded spend, then fail closed",
-  "run_id": "6b9b3140-825f-4acf-9f10-a1f023b840f2",
-  "started_at": "2026-10-17T15:54:24.041062+00:00",
-  "duration_s": 0.138,
+  "run_id": "01492d3d-2a45-4248-8af1-8125a18003ed",
+  "started_at": "2026-10-17T16:20:05.552250+00:00",
+  "duration_s": 0.155,
   "invariant": {
     "interval_s": 0.25,
     "samples": 3,
@@ -20,19 +20,19 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.035,
+      "t_s": 0.042,
       "event": "cutting PEP -> ledger (blackhole)"
     },
     {
-      "t_s": 0.065,
+      "t_s": 0.076,
       "event": "healing the partition"
     },
     {
-      "t_s": 0.136,
+      "t_s": 0.152,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.136,
+      "t_s": 0.152,
       "event": "final sweep"
     }
   ],
@@ -42,8 +42,8 @@
     "local_remaining_at_cut": "120.0000",
     "served_during_partition": 6,
     "spent_during_partition": "120.0000",
-    "hot_path_p99_ms_partitioned": 3.809,
-    "hot_path_p99_ms_healthy": 6.269,
+    "hot_path_p99_ms_partitioned": 5.182,
+    "hot_path_p99_ms_healthy": 5.546,
     "committed_during_partition": "0.0000",
     "invariant_held_during_partition": true,
     "blackholed_connections": 2,
@@ -61,10 +61,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 3.998,
-        "p99": 6.269,
-        "max": 6.269,
-        "mean": 4.416
+        "p50": 4.365,
+        "p99": 5.546,
+        "max": 5.546,
+        "mean": 4.506
       }
     },
     {
@@ -81,10 +81,10 @@
       },
       "errors": [],
       "latency_ms": {
-        "p50": 2.048,
-        "p99": 3.809,
-        "max": 3.809,
-        "mean": 2.119
+        "p50": 2.124,
+        "p99": 5.182,
+        "max": 5.182,
+        "mean": 2.462
       }
     },
     {
@@ -98,10 +98,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 1.914,
-        "p99": 3.153,
-        "max": 3.153,
-        "mean": 2.238
+        "p50": 3.254,
+        "p99": 3.824,
+        "max": 3.824,
+        "mean": 3.342
       }
     }
   ],

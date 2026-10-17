@@ -147,6 +147,7 @@ async def _ensure_budget(database_url: str, mandate_id: uuid.UUID) -> bool:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from agentiam_controlplane.db.base import make_session_factory
+    from agentiam_controlplane.db.mandates import ensure_row
     from agentiam_controlplane.db.models import BudgetRow
     from agentiam_core.models import BudgetDimension
 
@@ -163,6 +164,7 @@ async def _ensure_budget(database_url: str, mandate_id: uuid.UUID) -> bool:
             )
             if existing.scalar_one_or_none() is not None:
                 return False
+            await ensure_row(session, mandate_id, now=datetime.now(UTC))
             session.add(
                 BudgetRow(
                     mandate_id=mandate_id,

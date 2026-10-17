@@ -101,6 +101,14 @@ async def _insert(engine: AsyncEngine, **values: object) -> None:
         **values,
     }
     async with engine.begin() as conn:
+        # The mandate row `budgets.mandate_id` references since migration 0010 (gap 7).
+        await conn.execute(
+            text(
+                "INSERT INTO mandates (mandate_id, created_at) VALUES (:mandate_id, now()) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"mandate_id": row["mandate_id"]},
+        )
         await conn.execute(
             text(
                 "INSERT INTO budgets "

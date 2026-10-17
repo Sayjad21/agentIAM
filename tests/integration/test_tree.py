@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agentiam_controlplane.db.base import make_session_factory
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import (
     AuditRecordRow,
     BudgetRow,
@@ -58,7 +59,8 @@ async def test_single_root_agent_node(migrated_engine: AsyncEngine) -> None:
                 created_at=now,
             )
         )
-        # Insert budget
+        # Insert budget, under the mandate row `budgets` references since 0010.
+        await ensure_row(session, mandate_id, now=datetime.now(UTC))
         session.add(
             BudgetRow(
                 id=uuid.uuid4(),
@@ -520,6 +522,7 @@ async def test_a_ledger_row_naming_the_agent_overrides_its_token_ceiling(
         # check constraint that a row is one or the other and never half of each, because a
         # row with an agent but no parent is a pool wearing a name tag.
         pool_id = uuid.uuid4()
+        await ensure_row(session, mandate_id, now=datetime.now(UTC))
         session.add(
             BudgetRow(
                 id=pool_id,

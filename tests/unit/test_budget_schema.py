@@ -59,6 +59,11 @@ def test_invariant_check_constraint_present() -> None:
     assert "committed + leased + allocated <= total" in sqltext.replace("\n", " ")
 
 
-def test_mandate_id_carries_no_foreign_key() -> None:
-    """No `mandates` table exists yet (ADR-014) — this pins the gap, not just leaves it."""
-    assert _TABLE.columns["mandate_id"].foreign_keys == set()
+def test_mandate_id_references_an_issued_mandate() -> None:
+    """Gap 7, closed by APICTA-02 (migration 0010): a budget references an issued mandate.
+
+    This test pinned the gap while it was open (ADR-014); it now pins the key, so a model
+    change that drops it is caught here and not in a database.
+    """
+    (key,) = _TABLE.columns["mandate_id"].foreign_keys
+    assert key.target_fullname == "mandates.mandate_id"

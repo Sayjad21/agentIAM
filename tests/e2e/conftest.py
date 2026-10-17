@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Generator, Iterator
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from testcontainers.community.postgres import PostgresContainer
 
 from agentiam_controlplane.db.base import make_engine, make_session_factory
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "packages" / "agentiam-controlplane"
@@ -84,6 +86,7 @@ async def make_budget(
     """Insert a `BudgetRow` directly (bypassing any ledger op) and return its id."""
     factory = make_session_factory(engine)
     async with factory() as s, s.begin():
+        await ensure_row(s, mandate_id, now=datetime.now(UTC))
         budget = BudgetRow(mandate_id=mandate_id, dimension=dimension, total=total)
         s.add(budget)
         await s.flush()

@@ -30,6 +30,7 @@ from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.decisions_api import build_router as build_decisions_router
 from agentiam_controlplane.demo_auth import build_router as build_demo_auth_router
 from agentiam_controlplane.escalations_api import build_router as build_escalations_router
+from agentiam_controlplane.mandates_api import build_router as build_mandates_router
 from agentiam_controlplane.metrics_api import build_router as build_metrics_router
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy, statement_digest
 from agentiam_controlplane.policy_api import build_router as build_policy_router
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from agentiam_controlplane.db.mandates import MandatePublisher
     from agentiam_controlplane.db.policy_bundles import PolicyPublisher
     from agentiam_controlplane.db.revocations import RevocationPublisher
     from agentiam_controlplane.settings import (
@@ -308,6 +310,7 @@ def create_app(
     oidc_settings: OIDCSettings | None = None,
     demo_login_settings: DemoLoginSettings | None = None,
     revocation_publisher: RevocationPublisher | None = None,
+    mandate_publisher: MandatePublisher | None = None,
     reaper_interval_s: float | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     bdt_per_usd: Decimal | None = None,
@@ -453,6 +456,16 @@ def create_app(
                 session_factory=session_factory,
                 settings=escalation_settings,
                 publisher=revocation_publisher,
+                now=now,
+            )
+        )
+        # APICTA-02: issuing a mandate allocates money, so it sits behind the same session
+        # middleware and approver set as revocation.
+        app.include_router(
+            build_mandates_router(
+                session_factory=session_factory,
+                settings=escalation_settings,
+                publisher=mandate_publisher,
                 now=now,
             )
         )
@@ -1176,16 +1189,19 @@ def create_app_from_env() -> FastAPI:
     redis_url = os.environ.get("AGENTIAM_CONTROLPLANE_REDIS_URL")
     revocation_publisher = None
     policy_publisher = None
+    mandate_publisher = None
     if redis_url:
         from redis.asyncio import Redis
 
+        from agentiam_controlplane.db.mandates import RedisMandatePublisher
         from agentiam_controlplane.db.policy_bundles import RedisPolicyPublisher
         from agentiam_controlplane.db.revocation_publisher import RedisRevocationPublisher
 
-        # One client, two channels: the same "one pool for the process" reasoning.
+        # One client, three channels: the same "one pool for the process" reasoning.
         redis_client = Redis.from_url(redis_url)
         revocation_publisher = RedisRevocationPublisher(redis_client)
         policy_publisher = RedisPolicyPublisher(redis_client)
+        mandate_publisher = RedisMandatePublisher(redis_client)
 
     return create_app(
         session_factory=session_factory,
@@ -1193,6 +1209,7 @@ def create_app_from_env() -> FastAPI:
         oidc_settings=oidc_settings,
         demo_login_settings=demo_login_settings,
         revocation_publisher=revocation_publisher,
+        mandate_publisher=mandate_publisher,
         # Spec 04 §4.6 prescribes `REAP() # background, every TTL/4`, and until now
         # nothing anywhere called it outside a test: not this module, not
         # `scripts/pep_service.py`, not `serve_pep.py`, not either compose file, not

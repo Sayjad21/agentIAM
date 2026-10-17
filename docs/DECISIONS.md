@@ -4751,3 +4751,47 @@ money. Every pipeline unit test had been building its pool and its tokens under 
 - A PEP that cannot reach the ledger at boot no longer holds an unprimed pool that could never
   recover; it holds none, and the next request schedules the creation again.
 - The number of pools a PEP holds is bounded only by the number of minted mandates.
+
+---
+
+## ADR-079 — Mandates are rows the ledger checks, issued by an approver and announced to PEPs
+
+**Status:** accepted · **Ticket:** APICTA-02 (Part B) · **Specified in:** spec 04 §4.8 ·
+**Closes:** gap 7 · **Relates to:** ADR-014, ADR-078
+
+### Context
+
+ADR-014 left `budgets.mandate_id` without a foreign key because no `mandates` table existed:
+a mandate was only ever a signed token. Nothing stopped a budget being created for a mandate
+nobody issued, and nothing could issue a new mandate's pool short of a seed script — every
+console task reused the demo mandate (gap 25).
+
+### Decision
+
+1. **Migration `0010`**: a `mandates` table, backfilled with a row for every `mandate_id` an
+   existing budget names, then the foreign key. Backfill first, or the key refuses the upgrade
+   on any ledger with budgets. `task_id`, `principal_id` and `expires_at` are nullable because
+   backfilled rows have none of them.
+2. **No `total` column**, unlike the ticket. A mandate's budget is per dimension on `budgets`
+   rows; a second figure on the mandate is a second source that could disagree with the pool
+   it describes, and the pool invariant is stated over `budgets` alone.
+3. **`db.mandates.create`** writes the mandate and its spend pool in one transaction, then
+   publishes `mandate:created` on `agentiam:mandates` — persist, then best-effort publish, as
+   revocation does (spec 07 §5.1). A Redis outage does not undo the mandate: a PEP that misses
+   the event creates the pool on the mandate's first token (ADR-078), costing one retryable
+   refusal. So the PEP's `MandateWatch` has a push loop and no pull loop.
+4. **`POST /v1/mandates` takes revocation's evidence** — a session or an operator token,
+   belonging to an approver — because issuing a mandate allocates the organization's money.
+   The mandate's `principal_id` is the caller, never the body; its id is minted by the control
+   plane, so a caller cannot claim one a PEP already serves.
+5. **Every code path that creates a budget directly** (three scripts, the chaos and e2e
+   harnesses, the integration helpers) calls `ensure_row` first, inside its transaction.
+
+### Consequences
+
+- Measured: the upgrade from `0009` with an existing budget backfills its mandate and then
+  enforces the key; a budget for an unissued mandate is refused; issuing the same mandate twice
+  writes nothing more; an announced mandate is pooled by a PEP through a real Redis before any
+  request for it.
+- A mandate cannot be deleted while a budget references it. Nothing deletes either today.
+- The console still mints every task under the demo mandate until Part C.

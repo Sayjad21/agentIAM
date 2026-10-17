@@ -40,6 +40,7 @@ from agentiam_controlplane.db.invariants import (
     check_invariants,
 )
 from agentiam_controlplane.db.ledger import acquire, ledger_commit, release
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow
 
 pytestmark = pytest.mark.integration
@@ -58,6 +59,7 @@ async def seed_budget(
     mandate_id = uuid.uuid4()
     factory = make_session_factory(engine)
     async with factory() as s, s.begin():
+        await ensure_row(s, mandate_id, now=datetime.now(UTC))
         row = BudgetRow(mandate_id=mandate_id, dimension=dimension, total=total)
         s.add(row)
         await s.flush()

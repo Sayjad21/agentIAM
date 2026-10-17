@@ -58,7 +58,7 @@ fallback) and T-059 (submission package).
 | APICTA-01 | DONE — Parts A–D; gap 26 and T-031 closed; beat 5 live online and offline. CI green at Part C |
 | APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
-| APICTA-02 | IN_PROGRESS — Part A (pool per mandate, `MANDATE_UNKNOWN`, ADR-078) done; B (mandates table, `POST /v1/mandates`, event) and C (console tasks, metrics) left |
+| APICTA-02 | IN_PROGRESS — Part A (pool per mandate, `MANDATE_UNKNOWN`, ADR-078) and Part B (`mandates` table + FK, `POST /v1/mandates`, `mandate:created`, ADR-079; gap 7 closed) done; C (console tasks, metrics) left |
 | APICTA-06 | TODO |
 | APICTA-08 | TODO |
 
@@ -432,7 +432,9 @@ Then STATUS.md §3 row deleted; `MASTER.md` C13, §3.1 diagram, §7.
 - **Status:** IN_PROGRESS. Part A done (ADR-078, spec 04 §4.8): the pipeline spends from the
   token's own mandate's pool, a mandate with no budget is `MANDATE_UNKNOWN`, and a PEP creates a
   pool when a mandate's first token arrives — the `mandate:created` event in Part B only makes
-  it sooner
+  it sooner. Part B done (ADR-079, migration `0010`, gap 7 closed): mandates are rows a budget
+  must reference, issued by an approver through `POST /v1/mandates` and announced to PEPs.
+  Deliberately no `total` column on `mandates` — the budget lives on `budgets` rows only
 - **Maps to:** gap 25, gap 7; STATUS.md §3 "A judge sets a budget ceiling for a new task" row
 - **Money path.** Requires `make test-integration` and `make chaos` green before DONE.
 

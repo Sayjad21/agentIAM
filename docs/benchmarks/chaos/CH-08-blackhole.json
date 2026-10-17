@@ -2,9 +2,9 @@
   "scenario": "CH-08-blackhole",
   "title": "Ollama black-holed (accepts, never answers)",
   "expected": "requests still allowed; each waits at most the assess bound",
-  "run_id": "c0552641-4656-4d08-97e6-0107d6cdf500",
-  "started_at": "2026-10-17T15:54:38.013180+00:00",
-  "duration_s": 0.403,
+  "run_id": "28ecde15-72ae-48c0-aeca-11a2c5664309",
+  "started_at": "2026-10-17T16:20:19.464697+00:00",
+  "duration_s": 0.419,
   "invariant": {
     "interval_s": 0.25,
     "samples": 3,
@@ -20,20 +20,20 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.399,
+      "t_s": 0.417,
       "event": "scenario ended"
     },
     {
-      "t_s": 0.4,
+      "t_s": 0.417,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "embedding_timeout_s": 2.0,
     "assess_timeout_ms": 120.0,
-    "baseline_p99_ms": 7.546,
-    "blackholed_p99_ms": 133.039,
-    "nine_requests_three_at_a_time_wall_s": 0.38,
+    "baseline_p99_ms": 8.355,
+    "blackholed_p99_ms": 135.856,
+    "nine_requests_three_at_a_time_wall_s": 0.4,
     "blackholed_connections": 10,
     "assessments_timed_out": 9,
     "final_sweep_readable": true
@@ -50,10 +50,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 6.227,
-        "p99": 7.546,
-        "max": 7.546,
-        "mean": 5.579
+        "p50": 7.036,
+        "p99": 8.355,
+        "max": 8.355,
+        "mean": 6.544
       }
     },
     {
@@ -67,15 +67,15 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 125.591,
-        "p99": 133.039,
-        "max": 133.039,
-        "mean": 126.459
+        "p50": 127.888,
+        "p99": 135.856,
+        "max": 135.856,
+        "mean": 129.531
       }
     }
   ],
   "notes": [
-    "A black-holed Ollama now costs a request at most the 120 ms assess bound: p99 133.039 ms against a baseline p99 of 7.546 ms, nine requests three at a time in 0.4 s. Before APICTA-07 each uncached request paid the full 2.0 s embedding timeout on the event loop, and three concurrent requests took over 6 s. Outcomes are unchanged \u2014 spec 09 \u00a75 fails drift open."
+    "A black-holed Ollama now costs a request at most the 120 ms assess bound: p99 135.856 ms against a baseline p99 of 8.355 ms, nine requests three at a time in 0.4 s. Before APICTA-07 each uncached request paid the full 2.0 s embedding timeout on the event loop, and three concurrent requests took over 6 s. Outcomes are unchanged \u2014 spec 09 \u00a75 fails drift open."
   ],
   "verdict": "held"
 }

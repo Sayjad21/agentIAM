@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from agentiam_core.models import BudgetDimension
     from agentiam_core.tokens import VerifiedToken
     from agentiam_pep.config import PepSettings
+    from agentiam_pep.mandate_watch import MandateWatch
     from agentiam_pep.pipeline import Pipeline
     from agentiam_pep.policy import AgentPrincipal, CedarEngine
     from agentiam_pep.policy_cache import PolicyCache
@@ -592,6 +593,8 @@ class Service:
     #: was refused with LEASE_UNAVAILABLE while `tests/unit/test_pep_service.py` stayed green,
     #: because the pool was unreachable from here.
     pools: LeasePoolRegistry
+    #: Listens for `mandate:created` and readies the pool (APICTA-02 Part B).
+    mandate_watch: MandateWatch
     #: How a verified token becomes a policy principal. Exposed for the same reason as
     #: `pool`: while this was only a closure nothing outside `build_service` could see it,
     #: and it spent that time returning `agt-depth-{N}` for every agent at a depth — which
@@ -626,6 +629,7 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_pep.drift import DEFAULT_ASSESS_TIMEOUT_S, RuleBasedDriftOracle
     from agentiam_pep.emitter import DecisionEmitter, EmitterSettings
     from agentiam_pep.extractor import RouteTable
+    from agentiam_pep.mandate_watch import MandateWatch
     from agentiam_pep.pipeline import Pipeline, PipelineSettings
     from agentiam_pep.policy import AgentPrincipal
     from agentiam_pep.policy_sync import PolicySync
@@ -666,6 +670,9 @@ def build_service(settings: ServiceSettings) -> Service:
         redis_client=redis_client,
         control_plane_client=control_plane_client,
     )
+    # Readies a mandate's pool when the control plane announces it, so its first request finds
+    # a lease. Latency only: the first token creates the pool anyway (ADR-078).
+    mandate_watch = MandateWatch(registry=pools, redis_client=redis_client)
     policy_sync = PolicySync(
         cache=policy,
         control_plane_client=control_plane_client,
@@ -779,6 +786,7 @@ def build_service(settings: ServiceSettings) -> Service:
         # it aged out. Started before `prime()` so the first lease is under renewal from the
         # moment it exists; the sweep does nothing until there is something to renew.
         await pools.start()
+        await mandate_watch.start()
 
         # Draw the boot mandate's first lease. Without this the pool holds no `_Held` for the
         # dimension, and `LeasePool.covers()` refuses *every* budgeted request with
@@ -840,6 +848,7 @@ def build_service(settings: ServiceSettings) -> Service:
             await policy_sync.aclose()
             await revocation.aclose()
             await settlement.aclose()
+            await mandate_watch.aclose()
             await pools.aclose()
             await emitter.aclose()
             await engine.dispose()
@@ -857,6 +866,7 @@ def build_service(settings: ServiceSettings) -> Service:
         policy_sync=policy_sync,
         drift_oracle=drift_oracle,
         pools=pools,
+        mandate_watch=mandate_watch,
         principal_for=principal_for,
         pipeline=pipeline,
     )

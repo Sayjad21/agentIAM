@@ -25,6 +25,7 @@ from agentiam_controlplane.app import create_app
 from agentiam_controlplane.db.base import make_session_factory
 from agentiam_controlplane.db.budget_dashboard import Dashboard, build_dashboard
 from agentiam_controlplane.db.ledger import acquire, ledger_commit, release
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow
 
 pytestmark = pytest.mark.integration
@@ -39,6 +40,7 @@ async def seed_pool(
     """One pool budget. Returns `(mandate_id, budget_id)`."""
     mandate_id = uuid.uuid4()
     async with make_session_factory(engine)() as s, s.begin():
+        await ensure_row(s, mandate_id, now=datetime.now(UTC))
         row = BudgetRow(mandate_id=mandate_id, dimension="spend_bdt", total=total)
         s.add(row)
         await s.flush()

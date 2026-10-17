@@ -26,6 +26,7 @@ from agentiam_controlplane.db.audit import append
 from agentiam_controlplane.db.base import make_session_factory
 from agentiam_controlplane.db.decision_metrics import count_by_outcome_reason
 from agentiam_controlplane.db.ledger import acquire, ledger_commit
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow
 from agentiam_core.errors import ReasonCode
 from agentiam_core.models import Budget, DecisionRecord, Outcome
@@ -75,6 +76,7 @@ async def seed_pool(
     """One pool budget. Returns `(mandate_id, budget_id)` — same shape as T-047's own."""
     mandate_id = uuid.uuid4()
     async with make_session_factory(engine)() as s, s.begin():
+        await ensure_row(s, mandate_id, now=datetime.now(UTC))
         row = BudgetRow(mandate_id=mandate_id, dimension="spend_bdt", total=total)
         s.add(row)
         await s.flush()

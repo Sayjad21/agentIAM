@@ -48,6 +48,7 @@ from sqlalchemy.pool import NullPool
 
 from agentiam_controlplane.db.base import make_engine, make_session_factory
 from agentiam_controlplane.db.ledger import acquire, ledger_commit, reap, release
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow, LeaseRow
 from agentiam_controlplane.errors import LeaseNotActiveError, LeaseUnavailableError
 
@@ -113,6 +114,7 @@ async def _run_sequence(engine: AsyncEngine, ops: list[_Op]) -> None:
     dimension = "spend_bdt"
 
     async with factory() as s, s.begin():
+        await ensure_row(s, mandate_id, now=datetime.now(UTC))
         budget = BudgetRow(mandate_id=mandate_id, dimension=dimension, total=_TOTAL)
         s.add(budget)
         await s.flush()

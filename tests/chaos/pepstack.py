@@ -37,6 +37,7 @@ from sqlalchemy import select
 from agentiam_controlplane.db.audit_sink import LedgerAuditSink
 from agentiam_controlplane.db.base import make_engine, make_session_factory
 from agentiam_controlplane.db.ledger import acquire, release
+from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow
 from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
 from agentiam_core.hashing import hash_object
@@ -145,6 +146,7 @@ async def make_pool_budget(
     """Create the mandate's spend pool row directly, as `tests/integration` does."""
     factory = make_session_factory(engine)
     async with factory() as session, session.begin():
+        await ensure_row(session, mandate_id, now=datetime.now(UTC))
         row = BudgetRow(
             mandate_id=mandate_id, dimension=BudgetDimension.SPEND_BDT.value, total=total
         )

@@ -38,6 +38,27 @@ from agentiam_core.models import LeaseState
 MONEY = Numeric(20, 4, asdecimal=True)
 
 
+class MandateRow(Base):
+    """An issued mandate — APICTA-02, migration `0010`.
+
+    The mandate itself is the signed root token (`agentiam_core.models.Mandate`); this row is
+    the ledger's record that it was issued, so a budget cannot exist for one that was not
+    (gap 7). Its budget lives on `budgets`, one row per dimension — deliberately not copied
+    here, where a second figure could disagree with the pool it describes.
+
+    `task_id`, `principal_id` and `expires_at` are nullable because rows backfilled from
+    budgets created before `0010` have none of them.
+    """
+
+    __tablename__ = "mandates"
+
+    mandate_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    principal_id: Mapped[str | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class BudgetRow(Base):
     """A budget row — spec 04 §2.1 and §13.
 
@@ -53,9 +74,9 @@ class BudgetRow(Base):
     joins the pool invariant because budget handed to a child is spoken for: without it, a
     parent could allocate its whole pool and then lease the same money out again.
 
-    `mandate_id` carries no foreign key: no `mandates` SQL table exists yet (T-005 built
-    `Mandate` as a pure Pydantic model with no persistence). See ADR-014. `parent_budget_id`
-    does get one — `budgets` is a real table.
+    `mandate_id` references `mandates` since APICTA-02 (migration `0010`, gap 7): a budget
+    can only be created for a mandate that was issued. ADR-014 left it unkeyed because no
+    `mandates` table existed then. `parent_budget_id` is keyed to this table.
     """
 
     __tablename__ = "budgets"
@@ -92,7 +113,9 @@ class BudgetRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    mandate_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    mandate_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("mandates.mandate_id"), nullable=False
+    )
     dimension: Mapped[str] = mapped_column(nullable=False)
     total: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     committed: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal("0"))

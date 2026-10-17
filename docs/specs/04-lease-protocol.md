@@ -291,6 +291,11 @@ CREATE(mandate):
   stream of tokens for an unfunded mandate reaches the ledger and how long a newly funded one
   waits.
 - **Shutdown releases every pool** (§4.5), each draining the shared settlement queue first.
+- **Issuing a mandate** (Part B, ADR-079) writes its `mandates` row and its spend pool in one
+  transaction, then publishes `{"event": "mandate:created", "mandate_id"}` on
+  `agentiam:mandates` — persist, then best-effort publish, as revocation does. Each PEP's
+  `MandateWatch` answers with `CREATE` above. There is no pull loop: the first token is the
+  backstop for a missed event.
 - **Not yet bounded:** how many pools one PEP may hold. Each costs one lease of `lease_size`
   for one TTL; the bound is how many mandates have been minted, which is the control plane's to
   limit.
