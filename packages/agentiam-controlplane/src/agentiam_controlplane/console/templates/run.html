@@ -27,8 +27,10 @@
         <h2>1 · Approve a task</h2>
         <p class="dim" style="margin-top:-0.4rem;">
             The description becomes the token's intent hash, so an agent claiming a different
-            job is refused. The ceiling is enforced by the token itself, before the ledger is
-            consulted.
+            job is refused. The ceiling becomes the task's own budget pool — a mandate of its
+            own — and is enforced twice: by the token itself, and by that pool.
+            Starting a task issues budget, so it needs a signed-in approver, who becomes the
+            task's principal.
         </p>
         <form method="post" action="/run/task">
             <label for="description">What is being approved</label>
@@ -77,7 +79,8 @@
     <header class="task-head">
         <div>
             <strong>{{ task.description }}</strong>
-            <div class="dim mono small">{{ task.task_id }}</div>
+            <div class="dim mono small">task {{ task.task_id }}</div>
+            <div class="dim mono small">mandate {{ task.mandate_id }}</div>
         </div>
         <div class="task-meta">
             <span>ceiling <strong>{{ task.budget | bdt }}</strong></span>

@@ -5,6 +5,7 @@ Provides the Cedar Authoring UI (T-027).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
 import re
@@ -25,6 +26,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from agentiam_controlplane.audit_api import build_router as build_audit_router
 from agentiam_controlplane.auth import build_router as build_auth_router
 from agentiam_controlplane.budgets_api import build_router as build_budgets_router
+from agentiam_controlplane.db import mandates as mandate_store
 from agentiam_controlplane.db import policy_bundles as bundle_store
 from agentiam_controlplane.db.escalations import list_by_state
 from agentiam_controlplane.decisions_api import build_router as build_decisions_router
@@ -35,7 +37,13 @@ from agentiam_controlplane.metrics_api import build_router as build_metrics_rout
 from agentiam_controlplane.nl_compiler.compiler import compile_nl_to_policy, statement_digest
 from agentiam_controlplane.policy_api import build_router as build_policy_router
 from agentiam_controlplane.revocations_api import build_router as build_revocations_router
-from agentiam_controlplane.tasks import GRANTABLE_SCOPES, TaskRegistry, TaskRegistryError
+from agentiam_controlplane.tasks import DEFAULT_TTL as TASK_TTL
+from agentiam_controlplane.tasks import (
+    DEMO_MANDATE_ID,
+    GRANTABLE_SCOPES,
+    TaskRegistry,
+    TaskRegistryError,
+)
 from agentiam_controlplane.tree_api import build_router as build_tree_router
 from agentiam_core.corpus import CORPUS, CORPUS_SOURCE, CORPUS_TOOLS
 from agentiam_core.decision import PolicyVerdict
@@ -398,6 +406,8 @@ def create_app(
         if escalation_settings is not None and escalation_settings.root_public_key is not None
         else None
     )
+    # Exposed so a test can read what a form actually minted; the tokens never reach a page.
+    app.state.task_registry = registry
     pep_url = escalation_settings.pep_url if escalation_settings is not None else ""
 
     @app.get("/healthz")
@@ -1029,18 +1039,64 @@ def create_app(
         scopes: list[str] = Form(default=[]),  # noqa: B008 — FastAPI reads it, never mutates
         principal_id: str = Form(default="kc:11111111-1111-1111-1111-111111111111"),
     ) -> HTMLResponse:
-        """Mint a root token for a new task."""
+        """Issue a mandate for a new task, with its ceiling as the pool, and mint the task under it.
+
+        APICTA-02 Part C. With a database, a task is its own mandate (`db.mandates.create`):
+        its pool is the ceiling typed here, announced so every PEP readies it. That makes this
+        form something that creates budget, so it takes what `POST /v1/mandates` takes — a
+        signed-in approver, who becomes the principal; the form's `principal_id` is ignored.
+        The form is validated *before* anything is issued, so a typo leaves no orphan pool.
+        Without a database nothing can be issued, and the task falls back to the demo mandate.
+        """
         if registry is None:
             return _run_page(request, error="Task creation is not configured on this deployment.")
         try:
-            created = registry.create_task(
-                description=description,
-                budget=Decimal(budget),
-                scopes=frozenset(scopes),
-                principal_id=principal_id,
+            ceiling = Decimal(budget)
+            summary = registry.validate(
+                description=description, budget=ceiling, scopes=frozenset(scopes)
             )
         except (TaskRegistryError, InvalidOperation) as exc:
             return _run_page(request, error=str(exc))
+
+        mandate_id, task_id = DEMO_MANDATE_ID, None
+        if session_factory is not None and escalation_settings is not None:
+            signed_in = request.session.get("principal_id")
+            if not signed_in:
+                return _run_page(
+                    request,
+                    error=(
+                        "Sign in as an approver to start a task: it issues a mandate with "
+                        "its own budget."
+                    ),
+                )
+            if signed_in not in escalation_settings.approvers:
+                return _run_page(
+                    request,
+                    error=(f"{signed_in} is not an approver, and starting a task issues budget."),
+                )
+            principal_id = str(signed_in)
+            instant = now()
+            async with session_factory() as session:
+                issued = await mandate_store.create(
+                    session,
+                    mandate_id=uuid.uuid4(),
+                    task_id=uuid.uuid4(),
+                    principal_id=principal_id,
+                    spend_total=ceiling,
+                    expires_at=instant + TASK_TTL,
+                    now=instant,
+                    publisher=mandate_publisher,
+                )
+            mandate_id, task_id = issued.mandate_id, issued.task_id
+        created = registry.create_task(
+            description=summary,
+            budget=ceiling,
+            scopes=frozenset(scopes),
+            principal_id=principal_id,
+            ttl=TASK_TTL,
+            mandate_id=mandate_id,
+            task_id=task_id,
+        )
         return _run_page(request, active_task=str(created.task_id))
 
     @app.post("/run/agent", response_class=HTMLResponse)
@@ -1104,14 +1160,22 @@ def create_app(
         else:
             return _run_page(request, error=f"unknown action {action!r}", active_task=task_id)
 
+        def reason_of(response: httpx.Response) -> str:
+            try:
+                return str(response.json().get("reason_code", "OK"))
+            except (ValueError, AttributeError):
+                return "OK"
+
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.request(**request_args)
-            try:
-                reason = response.json().get("reason_code", "OK")
-            except ValueError:
-                reason = "OK"
-            outcome = f"{response.status_code} {reason}"
+                # A new task's first request can reach a PEP before its pool exists; the PEP
+                # creates it as it refuses (ADR-078). One retry, so the operator sees the
+                # authorization decision rather than the setup (APICTA-02 Part C).
+                if response.status_code == 429 and reason_of(response) == "LEASE_UNAVAILABLE":
+                    await asyncio.sleep(0.5)
+                    response = await client.request(**request_args)
+            outcome = f"{response.status_code} {reason_of(response)}"
         except httpx.HTTPError as exc:
             # The PEP being unreachable is an operator problem, not an authorization one.
             # Saying which it was keeps the page honest about what it just proved.

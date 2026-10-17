@@ -1097,3 +1097,19 @@ class TestLeasePoolRegistry:
         assert registry.lookup(A) is PoolStatus.EXHAUSTED
         await registry.drain()
         assert ledger.asked == [A]
+
+    async def test_status_reports_each_mandate_s_pool_and_each_refusal(self) -> None:
+        """APICTA-02 Part C: what `/readyz` and the metrics show, per mandate."""
+        ledger = MandateLedger(unknown=frozenset({B}))
+        registry = a_registry(ledger)
+        pool = await registry.ensure(A)
+        assert pool is not None
+        pool.reserve(SPEND, Decimal(30))
+        registry.lookup(B)
+        await registry.drain()
+
+        status = registry.status()
+        assert status["pools"][str(A)]["spend_bdt_remaining"] == "70"
+        assert status["pools"][str(A)]["lease_state"] == "active"
+        assert status["refused"][str(B)] == "unknown"
+        assert str(B) not in status["pools"]

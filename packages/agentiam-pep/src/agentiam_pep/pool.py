@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from agentiam_core.decision import BudgetVerdict
 from agentiam_core.models import BudgetDimension, LeaseState
@@ -639,6 +639,29 @@ class LeasePoolRegistry:
     def get(self, mandate_id: uuid.UUID) -> LeasePool | None:
         """The pool for `mandate_id`, if this PEP holds one. Never creates."""
         return self._pools.get(mandate_id)
+
+    def status(self) -> dict[str, dict[str, Any]]:
+        """Each pool's state and each mandate being refused, for `/readyz` (APICTA-02 Part C).
+
+        A PEP serving many mandates has to be able to say which, and how much each has left
+        on this PEP; otherwise "is mandate X being served here" has no answer short of
+        sending it a request.
+        """
+        pools: dict[str, Any] = {}
+        for mandate_id, pool in self._pools.items():
+            held = pool._held.get(self._dimension)
+            pools[str(mandate_id)] = {
+                f"{self._dimension.value}_remaining": str(pool.remaining(self._dimension)),
+                "lease_state": held.lease.state.value if held is not None else "none",
+                "mandate_exhausted": held.mandate_exhausted if held is not None else False,
+            }
+        now = self._now()
+        refused: dict[str, Any] = {
+            str(mandate_id): status.value
+            for mandate_id, (status, until) in self._refused_until.items()
+            if now < until
+        }
+        return {"pools": pools, "refused": refused}
 
     def lookup(self, mandate_id: uuid.UUID) -> LeasePool | PoolStatus:
         """The pool for `mandate_id`, or why there is none — scheduling one if it may exist.

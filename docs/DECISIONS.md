@@ -4795,3 +4795,46 @@ console task reused the demo mandate (gap 25).
   request for it.
 - A mandate cannot be deleted while a budget references it. Nothing deletes either today.
 - The console still mints every task under the demo mandate until Part C.
+
+---
+
+## ADR-080 — A console task is its own mandate, so starting one takes an approver
+
+**Status:** accepted · **Ticket:** APICTA-02 (Part C) · **Closes:** gap 25 (with ADR-078,
+ADR-079) · **Relates to:** ADR-046, ADR-079
+
+### Context
+
+`/run/task` minted every task under `DEMO_MANDATE_ID`: the ceiling the judge typed bound the
+token, but the money came out of the demo's pool, so beat 4 ("the judge sets the ceiling")
+could not be shown as written. Parts A and B made a pool per mandate possible. The form took no
+sign-in and read the principal from a form field — tolerable while it could only spend from a
+pool that already existed, not once it issues budget.
+
+### Decision
+
+1. **A task started from the console is issued a mandate** (`db.mandates.create`) whose spend
+   pool is the typed ceiling, and the task is minted under it. The ceiling is enforced twice,
+   by the token and by the pool.
+2. **Starting one requires a signed-in approver, who is the principal** — the evidence
+   `POST /v1/mandates` and revocation take; the form's `principal_id` is ignored. On the demo
+   stack this is one click on the passwordless sign-in. A console with no database cannot
+   issue, and keeps the old demo-mandate behaviour.
+3. **The form is validated before anything is issued** (`TaskRegistry.validate`), including two
+   cases that would otherwise reach the pool: a non-finite ceiling (a 500 from the database)
+   and more than four decimal places (rounded off the pool but kept in the token).
+4. **`/run/call` retries once on `LEASE_UNAVAILABLE`**, half a second later — a new task's first
+   request can reach a PEP before its pool exists (ADR-078), and the operator should see the
+   authorization decision rather than the setup.
+5. **Each PEP reports its pools**: `/readyz` lists every pool with its remaining spend and lease
+   state, and every refused mandate; `agentiam_pep_pool_remaining_bdt{mandate}` is a gauge.
+
+### Consequences
+
+- Measured on the demo stack: an anonymous start refused; Tanvir's ৳15,000 task issued its own
+  mandate (principal Tanvir), its `agt-treasury` paid ৳1,000 with `200 OK`, ৳1,000 committed on
+  its own row, its own gauge on `/budgets`, invariants green across all four budgets. Removing
+  the sign-in check, or the retry, fails its test.
+- The live demo now needs a sign-in before beat 4; the persona picker is one click.
+- Every console task now creates a mandate row and a funded pool that nothing deletes — fine
+  for a demo database that `make demo-reset` wipes, a cost to record for anything longer-lived.

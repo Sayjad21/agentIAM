@@ -2,9 +2,9 @@
   "scenario": "CH-10",
   "title": "Rolling restart under load",
   "expected": "zero dropped requests; invariant holds",
-  "run_id": "b13bf716-6a8e-4312-9908-16da42523630",
-  "started_at": "2026-10-17T16:20:28.096084+00:00",
-  "duration_s": 3.579,
+  "run_id": "7f1d2253-cf94-4b08-b720-691f120a584b",
+  "started_at": "2026-10-17T16:52:12.113401+00:00",
+  "duration_s": 3.576,
   "invariant": {
     "interval_s": 0.25,
     "samples": 15,
@@ -20,63 +20,63 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.523,
+      "t_s": 0.508,
       "event": "draining pep-roll-0"
     },
     {
-      "t_s": 0.523,
+      "t_s": 0.519,
       "event": "stopping pep-roll-0 (RELEASE)"
     },
     {
-      "t_s": 1.284,
+      "t_s": 1.3,
       "event": "starting pep-roll-0 (ACQUIRE)"
     },
     {
-      "t_s": 1.337,
+      "t_s": 1.366,
       "event": "pep-roll-0 back in rotation"
     },
     {
-      "t_s": 1.337,
+      "t_s": 1.366,
       "event": "draining pep-roll-1"
     },
     {
-      "t_s": 1.337,
+      "t_s": 1.366,
       "event": "stopping pep-roll-1 (RELEASE)"
     },
     {
-      "t_s": 2.111,
+      "t_s": 2.131,
       "event": "starting pep-roll-1 (ACQUIRE)"
     },
     {
-      "t_s": 2.168,
+      "t_s": 2.194,
       "event": "pep-roll-1 back in rotation"
     },
     {
-      "t_s": 2.168,
+      "t_s": 2.194,
       "event": "draining pep-roll-2"
     },
     {
-      "t_s": 2.168,
+      "t_s": 2.194,
       "event": "stopping pep-roll-2 (RELEASE)"
     },
     {
-      "t_s": 2.948,
+      "t_s": 2.971,
       "event": "starting pep-roll-2 (ACQUIRE)"
     },
     {
-      "t_s": 3.009,
+      "t_s": 3.035,
       "event": "pep-roll-2 back in rotation"
     },
     {
-      "t_s": 3.564,
+      "t_s": 3.567,
       "event": "settlement queues drained"
     },
     {
-      "t_s": 3.577,
+      "t_s": 3.575,
       "event": "scenario ended"
     },
     {
-      "t_s": 3.577,
+      "t_s": 3.575,
       "event": "final sweep"
     }
   ],
@@ -117,10 +117,10 @@
       "by_reason": {},
       "errors": [],
       "latency_ms": {
-        "p50": 5.034,
-        "p99": 11.462,
-        "max": 16.268,
-        "mean": 5.345
+        "p50": 5.15,
+        "p99": 92.405,
+        "max": 95.65,
+        "mean": 6.231
       }
     }
   ],

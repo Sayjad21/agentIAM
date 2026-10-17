@@ -8,6 +8,7 @@ form plumbing that a browser pass checks better than a unit test would.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -57,14 +58,33 @@ class TestCreateTask:
         assert verified.budget.spend_bdt == Decimal("50000")
         assert verified.scopes == {"invoice:read", "payment:initiate"}
 
-    def test_the_mandate_is_the_one_the_pep_is_bound_to(
+    def test_a_task_is_minted_under_the_mandate_it_was_issued(
         self, registry: TaskRegistry, key_set: RootKeySet
     ) -> None:
-        """The task id varies; the mandate does not.
+        """APICTA-02 Part C: the task's own mandate, so its spend comes from its own pool.
 
-        `LeasePool` binds one `mandate_id` at construction (gap 25). A task minted under
-        a fresh mandate would have no pool behind it and every budgeted call would fail.
+        Every task used to be minted under `DEMO_MANDATE_ID`, because a PEP served one pool
+        (gap 25): the ceiling a judge typed bound the token, but the money came from the
+        demo's pool.
         """
+        mandate_id, task_id = uuid.uuid4(), uuid.uuid4()
+        task = registry.create_task(
+            description="anything",
+            budget=Decimal("1000"),
+            scopes=frozenset({"invoice:read"}),
+            principal_id="kc:alice",
+            mandate_id=mandate_id,
+            task_id=task_id,
+        )
+        verified = verify(task.root.token, key_set, now=_NOW)
+        assert verified.mandate_id == mandate_id == task.mandate_id
+        assert verified.task_id == task_id == task.task_id
+        assert task.as_dict()["mandate_id"] == str(mandate_id)
+
+    def test_without_an_issued_mandate_it_falls_back_to_the_demo_mandate(
+        self, registry: TaskRegistry, key_set: RootKeySet
+    ) -> None:
+        """A console with no database cannot issue a mandate; its tasks keep the old shape."""
         task = registry.create_task(
             description="anything",
             budget=Decimal("1000"),
@@ -74,6 +94,32 @@ class TestCreateTask:
         verified = verify(task.root.token, key_set, now=_NOW)
         assert verified.mandate_id == DEMO_MANDATE_ID
         assert verified.task_id == task.task_id
+
+    @pytest.mark.parametrize(
+        ("description", "budget", "scopes"),
+        [
+            ("  ", Decimal(1000), frozenset({"invoice:read"})),
+            ("anything", Decimal(0), frozenset({"invoice:read"})),
+            ("anything", Decimal(1000), frozenset()),
+            ("anything", Decimal(1000), frozenset({"root:everything"})),
+            # Would pass "greater than zero" and then fail in the database as a 500.
+            ("anything", Decimal("Infinity"), frozenset({"invoice:read"})),
+            # The pool is NUMERIC(20,4): a fifth place would be rounded off the pool and kept
+            # in the token, and the two would disagree.
+            ("anything", Decimal("12.34567"), frozenset({"invoice:read"})),
+        ],
+    )
+    def test_validate_refuses_what_create_task_would_refuse(
+        self,
+        registry: TaskRegistry,
+        description: str,
+        budget: Decimal,
+        scopes: frozenset[str],
+    ) -> None:
+        """The console validates before it issues a mandate, so a bad form costs no money."""
+        with pytest.raises(TaskRegistryError):
+            registry.validate(description=description, budget=budget, scopes=scopes)
+        assert registry.list_tasks() == []
 
     def test_two_tasks_get_different_task_ids(self, registry: TaskRegistry) -> None:
         """Otherwise the identity tree would merge them into one graph."""

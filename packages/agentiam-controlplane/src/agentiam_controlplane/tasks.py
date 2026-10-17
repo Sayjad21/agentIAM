@@ -5,20 +5,16 @@ This is the one place a human starts one: name the work, set the ceiling, then h
 progressively narrower authority to sub-agents and watch the enforcement point refuse the
 ones that overreach.
 
-**Why the mandate id is reused rather than minted fresh.** `LeasePool` binds one
-`mandate_id` at construction and the PEP reads it from `AGENTIAM_PEP_MANDATE_ID` at boot
-(`scripts/pep_service` §"The PEP is scoped to one mandate", recorded as gap 25). A task
-minted under a *new* mandate would therefore have no lease pool behind it and every
-budgeted call would fail. So a task varies the `task_id` — which is what the identity
-tree, the custody query and the decision feed group by — and keeps the mandate the
-running PEP already knows.
+**Each task is its own mandate** (APICTA-02 Part C). The console issues a mandate whose spend
+pool *is* the ceiling the operator types (`db.mandates.create`), and mints the task under it;
+every PEP serves a pool per mandate and learns of the new one from its announcement (ADR-078,
+ADR-079). Until then every task reused `DEMO_MANDATE_ID`, because a PEP held one pool (gap
+25): the typed ceiling bound the token, but the money came out of the demo's pool, and spend
+on `/budgets` accumulated across tasks.
 
-The ceiling the operator types is not lost by that choice. It goes into the minted
-token's own `Budget`, where it is enforced by a check inside block 0 before the ledger is
-consulted at all — measured: a task created with a 50,000 ceiling refuses an 80,000
-payment with `BUDGET_EXHAUSTED_MANDATE`, and a sub-agent given 20,000 of it refuses
-30,000 with `BUDGET_EXHAUSTED_CAVEAT`. The pool remains the mandate's, so committed spend
-on `/budgets` accumulates across tasks rather than resetting per task.
+The ceiling is enforced twice now, by different things: inside the token (block 0's budget
+check, before the ledger is consulted) and by the task's own pool. A console with no database
+cannot issue a mandate, and falls back to `DEMO_MANDATE_ID` as before.
 
 **Tokens live in memory, not in the session.** Starlette's `SessionMiddleware` keeps
 session state in the cookie, which browsers cap at about 4 KB; a root token is ~1.6 KB and
@@ -48,8 +44,8 @@ __all__ = [
     "TaskRegistryError",
 ]
 
-#: The mandate every console-created task is minted under. See the module docstring: the
-#: running PEP binds this at boot, so a task that used its own would have no lease behind it.
+#: The mandate a task is minted under when the console cannot issue one (no database). The
+#: demo stack's PEPs boot with it, so such a task still has a pool behind it.
 DEMO_MANDATE_ID = uuid.UUID("d0d0d0d0-0000-4000-8000-000000000001")
 
 #: Scopes the operator may grant. A fixed set, not free text: a typo in a scope string
@@ -100,6 +96,8 @@ class TaskRecord:
     principal_id: str
     created_at: datetime
     expires_at: datetime
+    #: The mandate the task is minted under — its own, or `DEMO_MANDATE_ID` without a database.
+    mandate_id: uuid.UUID = DEMO_MANDATE_ID
     agents: dict[str, AgentRecord] = field(default_factory=dict)
 
     @property
@@ -111,6 +109,7 @@ class TaskRecord:
         """A JSON-safe view. Tokens are deliberately omitted — see the module docstring."""
         return {
             "task_id": str(self.task_id),
+            "mandate_id": str(self.mandate_id),
             "description": self.description,
             "budget": str(self.budget),
             "scopes": sorted(self.scopes),
@@ -182,6 +181,33 @@ class TaskRegistry:
 
     # ---- writes --------------------------------------------------------------
 
+    def validate(self, *, description: str, budget: Decimal, scopes: frozenset[str]) -> str:
+        """Check a task before anything is issued for it; return the description, trimmed.
+
+        Separate from `create_task` so the console can refuse a bad form *before* it issues a
+        mandate — otherwise a typo would leave a funded pool no task can spend.
+
+        Raises:
+            TaskRegistryError: the description is blank, the budget is not a finite positive
+                amount with at most four decimal places, or the scopes are empty or not
+                grantable.
+        """
+        description = description.strip()
+        if not description:
+            raise TaskRegistryError("a task needs a description — it becomes the intent hash")
+        if not budget.is_finite() or budget <= 0:
+            raise TaskRegistryError("the budget must be a number greater than zero")
+        if budget != budget.quantize(Decimal("0.0001")):
+            # The pool is NUMERIC(20,4); a finer ceiling would be rounded off the pool but kept
+            # in the token, and the two would then disagree about the same task.
+            raise TaskRegistryError("the budget can have at most four decimal places")
+        if not scopes:
+            raise TaskRegistryError("grant at least one scope, or the task can do nothing")
+        ungrantable = scopes - set(GRANTABLE_SCOPES)
+        if ungrantable:
+            raise TaskRegistryError(f"not a grantable scope: {', '.join(sorted(ungrantable))}")
+        return description
+
     def create_task(
         self,
         *,
@@ -190,6 +216,8 @@ class TaskRegistry:
         scopes: frozenset[str],
         principal_id: str,
         ttl: timedelta = DEFAULT_TTL,
+        mandate_id: uuid.UUID = DEMO_MANDATE_ID,
+        task_id: uuid.UUID | None = None,
     ) -> TaskRecord:
         """Mint a root token for a new task and remember it.
 
@@ -200,30 +228,22 @@ class TaskRegistry:
             scopes: What the task may ever do. A child can only ever narrow this.
             principal_id: The human this is minted on behalf of.
             ttl: How long the root token lives.
+            mandate_id: The mandate issued for this task; `DEMO_MANDATE_ID` when none was.
+            task_id: The task id the mandate was issued with; a fresh one when omitted.
 
         Raises:
-            TaskRegistryError: the description is blank, the budget is not positive, or
-                the scopes are empty or not grantable.
+            TaskRegistryError: as `validate`.
         """
         from agentiam_core.hashing import intent_hash
         from agentiam_core.models import Budget, Mandate
         from agentiam_core.tokens import mint_root
 
-        description = description.strip()
-        if not description:
-            raise TaskRegistryError("a task needs a description — it becomes the intent hash")
-        if budget <= 0:
-            raise TaskRegistryError("the budget must be greater than zero")
-        if not scopes:
-            raise TaskRegistryError("grant at least one scope, or the task can do nothing")
-        ungrantable = scopes - set(GRANTABLE_SCOPES)
-        if ungrantable:
-            raise TaskRegistryError(f"not a grantable scope: {', '.join(sorted(ungrantable))}")
+        description = self.validate(description=description, budget=budget, scopes=scopes)
 
         now = self._now()
-        task_id = uuid.uuid4()
+        task_id = task_id or uuid.uuid4()
         mandate = Mandate(
-            mandate_id=DEMO_MANDATE_ID,
+            mandate_id=mandate_id,
             task_id=task_id,
             principal_id=principal_id,
             intent_hash=intent_hash(description),
@@ -244,6 +264,7 @@ class TaskRegistry:
             principal_id=principal_id,
             created_at=now,
             expires_at=mandate.expires_at,
+            mandate_id=mandate_id,
         )
         record.agents["root"] = AgentRecord(
             agent_id="root",

@@ -509,9 +509,9 @@ Worth doing once before a real presentation.
 
 Stated so a judge asking finds an answer rather than a gap (`STATUS.md` §3 has the full list):
 
-- **One PEP serves one mandate.** The lease pool binds a `mandate_id` at construction (gap 25).
-- **No issuance service.** Roles are static configuration (gap 28) and `budgets.mandate_id` has
-  no foreign key (gap 7). Policy *is* published and hot-reloaded since APICTA-01 (§5 above).
+- **Roles are static configuration** (gap 28). Mandates *are* issued since APICTA-02 — from
+  `/run` by a signed-in approver, or `POST /v1/mandates` — each with its own pool; policy *is*
+  published and hot-reloaded since APICTA-01 (§5 above).
 - **Drift detection needs Ollama**, and is off unless you enable the profile. `None` is a
   legitimate configuration, not a degraded one (spec 06 §2.1).
 - **OIDC login is not wired; the passwordless demo sign-in stands in for it.** Keycloak runs

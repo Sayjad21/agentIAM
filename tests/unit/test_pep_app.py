@@ -25,6 +25,7 @@ import socket
 import threading
 import time
 from collections.abc import AsyncIterator
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -394,3 +395,35 @@ class TestEnforcementIsOptOut:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://pep") as c:
             assert (await c.get("/readyz")).json()["enforcing"] is True
+
+
+class TestPoolsAreVisiblePerMandate:
+    """APICTA-02 Part C: a PEP serving many mandates says which, and how much each has left."""
+
+    async def _app(self) -> httpx.AsyncClient:
+        from agentiam_pep.app import create_app
+        from agentiam_pep.config import PepSettings
+        from tests.unit.test_pep_pipeline import a_pipeline
+
+        pipeline, _, _ = await a_pipeline(granted=Decimal(1000))
+        app = create_app(
+            settings=PepSettings(upstream_base_url="http://upstream"),
+            upstream_client=httpx.AsyncClient(base_url="http://upstream"),
+            pipeline=pipeline,
+        )
+        return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://pep")
+
+    async def test_readyz_lists_each_pool(self) -> None:
+        from tests.unit.test_pep_pipeline import MANDATE_ID
+
+        async with await self._app() as client:
+            pools = (await client.get("/readyz")).json()["checks"]["pools"]
+        assert pools["pools"][str(MANDATE_ID)]["spend_bdt_remaining"] == "1000"
+        assert pools["refused"] == {}
+
+    async def test_metrics_carry_a_remaining_gauge_per_mandate(self) -> None:
+        from tests.unit.test_pep_pipeline import MANDATE_ID
+
+        async with await self._app() as client:
+            text = (await client.get("/metrics")).text
+        assert f'agentiam_pep_pool_remaining_bdt{{mandate="{MANDATE_ID}"}} 1000.0' in text

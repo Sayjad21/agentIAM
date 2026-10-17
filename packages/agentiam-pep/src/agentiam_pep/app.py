@@ -42,10 +42,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Histogram
 from prometheus_client import generate_latest as render_metrics
-from prometheus_client.core import CounterMetricFamily
+from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.registry import Collector
 
 from agentiam_core.errors import ReasonCode
+from agentiam_core.models import BudgetDimension
 from agentiam_pep.config import PepSettings
 from agentiam_pep.headers import filter_request_headers, filter_response_headers
 from agentiam_pep.pipeline import Authorized, Refused
@@ -109,6 +110,29 @@ class _DriftOutcomes(Collector):
         yield family
 
 
+class _PoolLevels(Collector):
+    """`agentiam_pep_pool_remaining_bdt{mandate}`, read from the pool registry on scrape.
+
+    APICTA-02 Part C: a PEP holds a pool per mandate, so one gauge per mandate — what this
+    PEP can still spend locally for it, before its next top-up. Never authoritative (the
+    ledger is); a falling line that never refills is a mandate running dry on this PEP.
+    """
+
+    def __init__(self, pipeline: Pipeline) -> None:
+        """Read `pipeline.pools` at every scrape."""
+        self._pipeline = pipeline
+
+    def collect(self) -> Iterator[GaugeMetricFamily]:
+        family = GaugeMetricFamily(
+            "agentiam_pep_pool_remaining_bdt",
+            "Spend this PEP holds locally for each mandate it serves.",
+            labels=["mandate"],
+        )
+        for mandate_id, pool in self._pipeline.pools.pools.items():
+            family.add_metric([str(mandate_id)], float(pool.remaining(BudgetDimension.SPEND_BDT)))
+        yield family
+
+
 def create_app(
     *,
     settings: PepSettings,
@@ -145,6 +169,8 @@ def create_app(
     requests_total, upstream_latency = _build_metrics(registry)
     if pipeline is not None:
         registry.register(_DriftOutcomes(pipeline))
+        if hasattr(pipeline, "pools"):
+            registry.register(_PoolLevels(pipeline))
 
     app = FastAPI(
         title="AgentIAM PEP",
@@ -185,6 +211,11 @@ def create_app(
                 "checks": {
                     "upstream_client": client is not None,
                     "upstream_base_url": settings.upstream_base_url,
+                    **(
+                        {"pools": pipeline.pools.status()}
+                        if pipeline is not None and hasattr(pipeline, "pools")
+                        else {}
+                    ),
                     **(dict(readiness()) if readiness is not None else {}),
                 },
             }

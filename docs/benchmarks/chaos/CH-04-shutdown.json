@@ -2,9 +2,9 @@
   "scenario": "CH-04-shutdown",
   "title": "Partition PEP <-> ledger \u2014 graceful shutdown",
   "expected": "a partitioned PEP cannot complete `LeasePool.aclose()`",
-  "run_id": "7c0787bc-7bb4-45e9-b355-c1bb5f25eabe",
-  "started_at": "2026-10-17T16:20:06.163658+00:00",
-  "duration_s": 5.151,
+  "run_id": "ac550262-473f-4242-b943-f70ae40d44e2",
+  "started_at": "2026-10-17T16:51:49.844655+00:00",
+  "duration_s": 5.158,
   "invariant": {
     "interval_s": 0.25,
     "samples": 22,
@@ -20,19 +20,19 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.102,
+      "t_s": 0.107,
       "event": "cutting, then asking the pool to close"
     },
     {
-      "t_s": 5.106,
+      "t_s": 5.111,
       "event": "healing; the pending shutdown should now complete"
     },
     {
-      "t_s": 5.149,
+      "t_s": 5.156,
       "event": "scenario ended"
     },
     {
-      "t_s": 5.149,
+      "t_s": 5.156,
       "event": "final sweep"
     }
   ],

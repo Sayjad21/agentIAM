@@ -58,7 +58,7 @@ fallback) and T-059 (submission package).
 | APICTA-01 | DONE — Parts A–D; gap 26 and T-031 closed; beat 5 live online and offline. CI green at Part C |
 | APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
-| APICTA-02 | IN_PROGRESS — Part A (pool per mandate, `MANDATE_UNKNOWN`, ADR-078) and Part B (`mandates` table + FK, `POST /v1/mandates`, `mandate:created`, ADR-079; gap 7 closed) done; C (console tasks, metrics) left |
+| APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live |
 | APICTA-06 | TODO |
 | APICTA-08 | TODO |
 
@@ -429,7 +429,10 @@ Then STATUS.md §3 row deleted; `MASTER.md` C13, §3.1 diagram, §7.
 
 ## APICTA-02 — One PEP, many mandates; a judge-chosen ceiling with its own pool
 
-- **Status:** IN_PROGRESS. Part A done (ADR-078, spec 04 §4.8): the pipeline spends from the
+- **Status:** DONE (Parts A–C). Part C done (ADR-080): a task started on `/run` is issued its
+  own mandate, its ceiling as the pool, by a signed-in approver; PEPs report each pool on
+  `/readyz` and `agentiam_pep_pool_remaining_bdt{mandate}`. Live: a ৳15,000 task committed
+  ৳1,000 on its own row, invariants green. Part A done (ADR-078, spec 04 §4.8): the pipeline spends from the
   token's own mandate's pool, a mandate with no budget is `MANDATE_UNKNOWN`, and a PEP creates a
   pool when a mandate's first token arrives — the `mandate:created` event in Part B only makes
   it sooner. Part B done (ADR-079, migration `0010`, gap 7 closed): mandates are rows a budget

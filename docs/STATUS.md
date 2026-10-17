@@ -15,11 +15,11 @@ than none.
 |---|---|
 | **Tickets** | **49 of 53 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 8 deferred · 61 defined (`PLAN.md` §9) |
 | **Milestones** | Everything through hardening (T-051…T-056) is complete. Demo and submission (T-057…T-061) is in progress |
-| **Tests** | 3,299 collected. `make check` runs 2,929, all passing; the other 370 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
+| **Tests** | 3,319 collected. `make check` runs 2,941, all passing; the other 378 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 79 (ADR-001…ADR-079) |
+| **ADRs** | 80 (ADR-001…ADR-080) |
 
 ---
 
@@ -53,7 +53,7 @@ this page is updated as each ticket closes a gap.
 
 | Ticket | State |
 |---|---|
-| **T-057** Demo scenario scripting | **Partly done.** `make demo-seed` (paced 138-call scenario over a 14-agent tree, one refusal per enforcement layer), `make demo-conc` (three-PEP sibling race), `make demo-tamper` / `demo-untamper`, `make demo-reset`; `make demo-seed` ends on the escalation the agent completes itself (APICTA-03) and `make demo-agent` runs a live LLM agent into a prompt injection (APICTA-05). Not met: `PLAN.md`'s "all 8 beats scripted, each individually runnable" — beats 1, 4 and 6 cannot be shown as written today (`MASTER.md` §7.8) |
+| **T-057** Demo scenario scripting | **Partly done.** `make demo-seed` (paced 138-call scenario over a 14-agent tree, one refusal per enforcement layer), `make demo-conc` (three-PEP sibling race), `make demo-tamper` / `demo-untamper`, `make demo-reset`; `make demo-seed` ends on the escalation the agent completes itself (APICTA-03) and `make demo-agent` runs a live LLM agent into a prompt injection (APICTA-05). Not met: `PLAN.md`'s "all 8 beats scripted, each individually runnable" — beats 1 and 6 cannot be shown as written today (`MASTER.md` §7.8); beat 4 can since APICTA-02 |
 | **T-058** Failure drills | Not started. `DEMO.md` §2 lists F-1…F-7. F-1/F-2 now have a real recovery: the offline template compiler (T-031) |
 | **T-059** Submission package | Not started. `PLAN.md` §19 |
 | **T-061** OSS release (reduced) | Public repo, README, demo video. Whether the repo goes public is a team decision |
@@ -88,7 +88,6 @@ claim; `MASTER.md` §8 has the talk-track version.
 
 | What the console or docs say | What is actually true | Gap |
 |---|---|---|
-| A judge sets a budget ceiling for a new task | Every task reuses one hard-coded `DEMO_MANDATE_ID`, because a PEP serves exactly one mandate | 25 |
 | "One URL change to install" (MCP gateway) | No MCP code anywhere; T-041/T-042 deferred | — |
 | Drift detection | Rule-based v0, three of six features, opt-in Ollama profile, NFR-9 never measured. Every demo route has drift `off` | — |
 | "mTLS in place; SPIFFE deferred" (`PLAN.md` T-044) | No TLS between any services | — |
@@ -109,7 +108,6 @@ findings in `JOURNAL.md`'s appendix; a number is never reused.
 
 | # | Gap | Impact if left | Where it lands |
 |---|---|---|---|
-| 25 | **The PEP is scoped to exactly one mandate.** `LeasePool` binds a `mandate_id` at construction and `Pipeline.reserve()` reserves without one — measured against the real constructors while building T-056's production composition root, not assumed. Verification, revocation, policy, drift and audit are all mandate-agnostic; only the lease pool is bound | A deployed PEP enforces budget for one task at a time. Fine for the demo (depth 3-4, one mandate per beat); a real multi-tenant deployment needs either one PEP process per mandate or a multi-mandate pool | Changing it touches `LeasePool` and `Pipeline` on the money hot path, and ADR-049's settle-before-release invariant — a ticket of its own, not a T-056 side effect (ADR-056) |
 | 28 | **An agent's Cedar role is static deployment configuration.** ADR-069 gave the PEP a per-agent role source — `AGENTIAM_PEP_ROLE_ASSIGNMENTS_PATH`, a JSON map of delegation path to role — which is what made the shipped bundle's `principal.role != "senior"` forbid able to discriminate at all; before it, one process-wide `default_role` made every role-conditioned policy always-on or always-off. It is organization-asserted (ADR-057 unchanged: never the parent's claim in the token) and keyed on the *path* rather than the `agent_id`, since the id is written by the delegating parent | Roles do not rotate, expire or attest, and an agent the organization has not written down gets `default_role`. Adding or re-roling an agent needs a file edit and a PEP restart. One residual is refused at boot rather than at request time: an ancestor assigned *less* than its own descendant could mint that descendant, so `_refuse_widening_roles` rejects the shape | The issuance service (gap 7, gap 26, ADR-039) is the real answer, and the path-keyed map is what is available without it |
 | 21 | **A partitioned PEP cannot shut down, and a timeout does not bound it.** `LeasePool.aclose()` drains in-flight top-ups and then `RELEASE`s, both of which need the ledger. Worse, `asyncio.wait_for` around it does not help: the cancellation lands inside SQLAlchemy's greenlet bridge while asyncpg is blocked on the dead socket, and the driver's own rollback/close needs that socket — measured stuck for 5 minutes against a 5 s bound | Availability on restart, not correctness: the stranded lease is bounded by TTL + S (CH-3) and the control plane's reaper (every TTL/4 since gap 27 closed) reclaims it. An orchestrator's `SIGTERM` grace period also elapses and the PEP is killed anyway, turning a graceful shutdown into CH-3 | Pinned by CH-4's `test_a_partitioned_pep_cannot_shut_down_gracefully`. A fix needs a release path that can abandon its connection |
 | 1 | **TM-22's PEP-side half is open.** TM-19 and TM-20 closed in T-051, TM-21 in T-014, TM-22's reaper side in T-013. Nothing refuses a lease to a PEP whose clock is skewed beyond `S` (`threat-model.md` §5.6), and spec 04's open question 1 is still open | Overspend within the excess-skew window | CH-7, not yet built; `research/lease-plan.md` GAP-C |

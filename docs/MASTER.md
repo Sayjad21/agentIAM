@@ -68,7 +68,7 @@ today.
 | C1 | Per-agent cryptographic identity | **Built.** A biscuit per agent; the agent's id and role are read back from its own block |
 | C2 | Offline attenuation | **Built.** `attenuate()` in core and the SDK; 10 formal invariants (INV-1…INV-10), property-tested |
 | C3 | Quantitative mandates | **Built** for spend, calls, rows and wall clock. The `RateLimit` caveat was dropped |
-| C4 | Distributed lease-based budgets | **Built and chaos-tested.** One PEP serves one mandate (gap 25) |
+| C4 | Distributed lease-based budgets | **Built and chaos-tested.** A PEP serves a pool per mandate; each console task is issued its own mandate, its ceiling as the pool (APICTA-02) |
 | C5 | Cedar policy in the hot path | **Built.** Signed bundles, published by the control plane and hot-reloaded by every PEP (push + 30 s pull); stale bundles refused. Measured: console click to PEP enforcement 42 ms |
 | C6 | Natural language → Cedar compiler with verification | **Built.** Scores 27/30 on hosted inference. Compiles an *update of the current policy*, which the corpus gate judges; an approver's activation is enforced by the running PEPs. Falls back to an offline template compiler (six demo shapes) when the model is down or slow |
 | C7 | Intent binding and drift detection | **Partial.** Intent binding is enforced. Drift is a rule-based v0 using three of six features, needs the opt-in Ollama profile, and its false-positive rate (NFR-9) has never been measured |
@@ -163,9 +163,9 @@ and model training beyond a small classifier.
 | | |
 |---|---|
 | **Tickets** | 49 of the 53 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 8 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
-| **Tests** | 3,299 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,929 |
+| **Tests** | 3,319 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,941 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 79 in `DECISIONS.md` |
+| **ADRs** | 80 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -218,9 +218,7 @@ Summarised from [`STATUS.md`](STATUS.md) §4, which has the impact and the fix f
 
 | Gap | What |
 |---|---|
-| 25 | One PEP serves exactly one mandate; every task reuses `DEMO_MANDATE_ID` |
 | 28 | Agent roles are a static JSON file read at boot |
-| 7 | `budgets.mandate_id` has no foreign key; there is no `mandates` table |
 | 21 | A partitioned PEP cannot shut down, and a timeout does not bound it |
 | 1 | No PEP-side clock-skew refusal (TM-22's open half) |
 | 8 | `ACQUIRE` does not clamp by `max_fraction` |
@@ -488,7 +486,7 @@ Run `demo-reset` before the real presentation.
 | 1 Human approves a task | Seeded by script. The console can start a task, but every task shares one mandate |
 | 2 Tree grows | **Yes** — the paced `demo-seed` |
 | 3 Least privilege | **Yes** — `SCOPE_ATTENUATED_AWAY`, with the caveat named; `make demo-agent` shows it as a live model's prompt injection. Recorded latency ~1–2 ms, not 0.4 ms (gap 35) |
-| 4 Judge sets the ceiling | **No** — one hard-coded mandate (gap 25). `demo-conc` shows the concurrency half with a fixed pool |
+| 4 Judge sets the ceiling | **Yes** — sign in as an approver, start a task on `/run` with a ceiling: it is issued its own mandate whose pool *is* that ceiling, shown as its own gauge on `/budgets` (measured live: ৳15,000 task, ৳1,000 spent on its own row). The concurrent hard-stop half is `make demo-conc` |
 | 5 Judge writes policy in English | **Yes**, online or offline — measured live: model compile 2.4 s / offline 0.1 s, activate, PEP enforcing ~16 ms later. A rule that would break an approved workflow is refused with the cases it breaks |
 | 6 Goal drift | Needs the Ollama profile; rule-based v0 only |
 | 7 Revocation | **Yes** — sign in as Tanvir, open an agent in `/identity-tree`, revoke; the branch turns red. The toast shows the control plane's save-and-publish time, not PEP propagation |
@@ -502,7 +500,6 @@ From the 2026-10-16 audit ([`STATUS.md`](STATUS.md) §3). Until each one is wire
 
 | Do not say | Because |
 |---|---|
-| "The judge sets the ceiling for a new task" | Every task reuses `DEMO_MANDATE_ID` |
 | "The model was fooled and the PEP stopped it" — unless the transcript says so | The live model has been measured resisting the injection; then the refusal on screen is the labelled forced attempt |
 | "Denied in 0.4 ms" on stage | The PEP records ~1–2 ms on the demo stack (gap 35); 0.43 ms is the in-process decision |
 | "One URL change to install" (MCP) | No MCP code exists |
@@ -526,7 +523,7 @@ for it.
 | What to build | [`PLAN.md`](PLAN.md) (§3 architecture, §6 protocols, §21 deferred) |
 | What is left | [`APICTA_TICKETS.md`](APICTA_TICKETS.md) (the sprint), [`STATUS.md`](STATUS.md) §2 and §5 |
 | Status and gaps | [`STATUS.md`](STATUS.md) |
-| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 79 ADRs |
+| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 80 ADRs |
 | Exact protocol contracts | [`specs/`](specs/) 01–10 |
 | Running the stack by hand | [`RUNNING.md`](RUNNING.md) |
 | The presentation script and judge handling | [`DEMO.md`](DEMO.md) |
