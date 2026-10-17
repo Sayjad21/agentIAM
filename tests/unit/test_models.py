@@ -508,5 +508,6 @@ class TestReasonCodes:
             "TOKEN_TOO_LARGE",
             "UPSTREAM_ERROR",
             "VERIFICATION_LIMIT_EXCEEDED",  # added by T-020; PLAN §6.9 supersession note
+            "MANDATE_UNKNOWN",  # added by APICTA-02; PLAN §6.9 supersession note
         }
         assert {c.name for c in ReasonCode} == expected

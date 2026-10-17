@@ -57,7 +57,7 @@ from agentiam_pep.pipeline import (
     status_for,
 )
 from agentiam_pep.policy import AgentPrincipal, CedarEngine, PolicyBundle, ToolFacts
-from agentiam_pep.pool import LeaseGrant, LeasePool, PoolSettings
+from agentiam_pep.pool import LeaseGrant, LeasePool, LeasePoolRegistry, PoolSettings
 from agentiam_pep.revocation import InMemoryRevocationSet
 
 if TYPE_CHECKING:
@@ -65,8 +65,13 @@ if TYPE_CHECKING:
 
     from agentiam_core.tokens import VerifiedToken
     from agentiam_pep.escalation_sink import EscalationSink
+    from agentiam_pep.settlement import SettlementQueue
 
 NOW = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+#: The mandate `a_pipeline`'s pool serves and `a_mandate` mints under by default. They were two
+#: independent `uuid4()`s, which every test got away with only because the pipeline never
+#: compared a token's mandate with its pool's (APICTA-02).
+MANDATE_ID = uuid.UUID("d0d0d0d0-0000-4000-8000-00000000a002")
 ROOT = generate_keypair()
 KEY_SET = RootKeySet([ROOT.public_key])
 
@@ -184,7 +189,7 @@ class FakeEscalationSink:
 
 def a_mandate(**over: object) -> Mandate:
     base: dict[str, object] = {
-        "mandate_id": uuid.uuid4(),
+        "mandate_id": MANDATE_ID,
         "task_id": uuid.uuid4(),
         "principal_id": "kc:alice",
         "intent_hash": "a" * 64,
@@ -256,12 +261,15 @@ async def a_pipeline(
     features: FeatureExtractor | None = None,
     caveats: tuple[Caveat, ...] = (),
     escalation_sink: EscalationSink | None = None,
+    mandate_id: uuid.UUID = MANDATE_ID,
+    pools: LeasePoolRegistry | None = None,
+    settlement: SettlementQueue | None = None,
 ) -> tuple[Pipeline, CollectingSink, LeasePool]:
     sink = CollectingSink()
     pool = LeasePool(
         FakeLedger(granted),
         PoolSettings(pep_id="pep-1", lease_size=granted),
-        mandate_id=uuid.uuid4(),
+        mandate_id=mandate_id,
         now=lambda: NOW,
     )
     await pool.prime(BudgetDimension.SPEND_BDT)
@@ -272,7 +280,7 @@ async def a_pipeline(
             PolicyBundle(version="bundle-1", cedar_source=policy_source), tools=TOOLS
         ),
         principal_for=principal_for,
-        pool=pool,
+        pool=pools if pools is not None else pool,
         emitter=emitter or DecisionEmitter(sink, EmitterSettings(capacity=64)),
         revocation=InMemoryRevocationSet(revoked or []),
         settings=PipelineSettings(pep_id="pep-1"),
@@ -281,6 +289,7 @@ async def a_pipeline(
         drift_oracle=drift,
         features=features,
         escalation_sink=escalation_sink,
+        settlement=settlement,
     )
     return pipeline, sink, pool
 
@@ -1333,3 +1342,107 @@ class TestThePrincipalIsResolvedOncePerRequest:
             body=b'{"amount": "999999.0000", "recipient": {"account_id": "acct_1"}}',
         )
         assert calls[0] <= 1
+
+
+PAY_250 = b'{"amount": "250.0000", "recipient": {"account_id": "acct_1"}}'
+OTHER_MANDATE = uuid.UUID("0be00000-0000-4000-8000-00000000b002")
+
+
+class TestMandateRouting:
+    """APICTA-02: a request spends from the pool of the mandate its token was minted under.
+
+    Before this the pipeline held one pool and never compared the token's `mandate_id` with
+    it, so a token minted under any mandate spent from whichever pool the PEP was started
+    with — the ceiling a human set on one task enforced against another task's money.
+    """
+
+    async def test_a_token_for_a_mandate_this_pep_does_not_serve_is_refused(self) -> None:
+        pipeline, _, pool = await a_pipeline()
+        before = pool.remaining(BudgetDimension.SPEND_BDT)
+        result = await pipeline.authorize(
+            method="POST",
+            path="/payments",
+            headers=bearer(a_mandate(mandate_id=OTHER_MANDATE)),
+            body=PAY_250,
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.MANDATE_UNKNOWN
+        assert result.status == 403
+        assert str(OTHER_MANDATE) in result.detail
+        assert pool.remaining(BudgetDimension.SPEND_BDT) == before, "the wrong pool was spent"
+
+    async def test_the_refusal_is_recorded_against_the_token(self) -> None:
+        pipeline, sink, _ = await a_pipeline()
+        emitter = pipeline._emitter
+        await emitter.start()
+        result = await pipeline.authorize(
+            method="POST",
+            path="/payments",
+            headers=bearer(a_mandate(mandate_id=OTHER_MANDATE)),
+            body=PAY_250,
+        )
+        await emitter.flush()
+        assert isinstance(result, Refused)
+        assert result.decision_id is not None
+        (record,) = sink.records
+        assert record.reason_code is ReasonCode.MANDATE_UNKNOWN  # type: ignore[attr-defined]
+        assert record.decision_id == result.decision_id  # type: ignore[attr-defined]
+
+    async def test_a_read_is_refused_too_fail_closed(self) -> None:
+        """A mandate with no pool on this PEP is refused whatever the request costs."""
+        pipeline, _, _ = await a_pipeline()
+        result = await pipeline.authorize(
+            method="GET",
+            path="/invoices/inv_001",
+            headers=bearer(a_mandate(mandate_id=OTHER_MANDATE)),
+        )
+        assert isinstance(result, Refused)
+        assert result.reason_code is ReasonCode.MANDATE_UNKNOWN
+
+    async def test_two_mandates_each_spend_from_their_own_pool(self) -> None:
+        ledger = FakeLedger(Decimal(1000))
+        registry = LeasePoolRegistry(
+            ledger, PoolSettings(pep_id="pep-1", lease_size=Decimal(1000)), now=lambda: NOW
+        )
+        pool_a = await registry.ensure(MANDATE_ID)
+        pool_b = await registry.ensure(OTHER_MANDATE)
+        assert pool_a is not None and pool_b is not None
+        pipeline, _, _ = await a_pipeline(pools=registry)
+
+        a = await pipeline.authorize(
+            method="POST", path="/payments", headers=bearer(a_mandate()), body=PAY_250
+        )
+        b = await pipeline.authorize(
+            method="POST",
+            path="/payments",
+            headers=bearer(a_mandate(mandate_id=OTHER_MANDATE)),
+            body=b'{"amount": "40.0000", "recipient": {"account_id": "acct_1"}}',
+        )
+        assert isinstance(a, Authorized) and isinstance(b, Authorized)
+        assert pool_a.remaining(BudgetDimension.SPEND_BDT) == Decimal(750)
+        assert pool_b.remaining(BudgetDimension.SPEND_BDT) == Decimal(960)
+
+        pipeline.settle(b, actual=Decimal(10))
+        assert pool_b.remaining(BudgetDimension.SPEND_BDT) == Decimal(990)
+        assert pool_a.remaining(BudgetDimension.SPEND_BDT) == Decimal(750)
+
+    async def test_a_mandate_not_yet_pooled_is_retryable_then_served(self) -> None:
+        """The pool is created off the request path; the first request is told to retry."""
+        registry = LeasePoolRegistry(
+            FakeLedger(Decimal(1000)),
+            PoolSettings(pep_id="pep-1", lease_size=Decimal(1000)),
+            now=lambda: NOW,
+        )
+        pipeline, _, _ = await a_pipeline(pools=registry)
+        first = await pipeline.authorize(
+            method="POST", path="/payments", headers=bearer(a_mandate()), body=PAY_250
+        )
+        assert isinstance(first, Refused)
+        assert first.reason_code is ReasonCode.LEASE_UNAVAILABLE
+        assert first.status == 429
+
+        await registry.drain()
+        second = await pipeline.authorize(
+            method="POST", path="/payments", headers=bearer(a_mandate()), body=PAY_250
+        )
+        assert isinstance(second, Authorized)

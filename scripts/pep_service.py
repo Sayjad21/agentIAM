@@ -88,7 +88,7 @@ if TYPE_CHECKING:
     from agentiam_pep.policy import AgentPrincipal, CedarEngine
     from agentiam_pep.policy_cache import PolicyCache
     from agentiam_pep.policy_sync import PolicySync
-    from agentiam_pep.pool import LeaseGrant, LeasePool
+    from agentiam_pep.pool import LeaseGrant, LeasePoolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -536,8 +536,11 @@ class SessionLedger:
         now: datetime,
     ) -> LeaseGrant | None:
         """Lease up to `requested`, or `None` if the pool has nothing left to give."""
+        from sqlalchemy.exc import NoResultFound
+
         from agentiam_controlplane.db import ledger as ledger_db
         from agentiam_controlplane.errors import LeaseUnavailableError
+        from agentiam_pep.errors import UnknownMandateError
         from agentiam_pep.pool import LeaseGrant
 
         try:
@@ -553,6 +556,12 @@ class SessionLedger:
                 )
         except LeaseUnavailableError:
             return None
+        except NoResultFound as exc:
+            # No budget row: a mandate nobody funded, which the pool must refuse rather than
+            # retry as if the ledger were down (APICTA-02).
+            raise UnknownMandateError(
+                f"the ledger holds no budget for mandate {mandate_id}"
+            ) from exc
         if lease is None or lease.granted <= 0:
             return None
         return LeaseGrant(id=lease.id, granted=lease.granted, expires_at=lease.expires_at)
@@ -578,11 +587,11 @@ class Service:
     #: (spec 06 §2.1), not a degraded one. Exposed rather than left implicit so a caller
     #: (or a test) does not have to infer it from an absent constructor argument.
     drift_oracle: DriftOracle | None
-    #: The lease pool, exposed so a test can assert the lifespan primes it. It was not,
-    #: and nothing noticed: every budgeted request was refused with LEASE_UNAVAILABLE
-    #: while `tests/unit/test_pep_service.py` stayed green, because the pool was
-    #: unreachable from here.
-    pool: LeasePool
+    #: The lease pools, one per mandate (APICTA-02), exposed so a test can assert the lifespan
+    #: primes the boot mandate's. It once did not, and nothing noticed: every budgeted request
+    #: was refused with LEASE_UNAVAILABLE while `tests/unit/test_pep_service.py` stayed green,
+    #: because the pool was unreachable from here.
+    pools: LeasePoolRegistry
     #: How a verified token becomes a policy principal. Exposed for the same reason as
     #: `pool`: while this was only a closure nothing outside `build_service` could see it,
     #: and it spent that time returning `agt-depth-{N}` for every agent at a depth — which
@@ -620,7 +629,7 @@ def build_service(settings: ServiceSettings) -> Service:
     from agentiam_pep.pipeline import Pipeline, PipelineSettings
     from agentiam_pep.policy import AgentPrincipal
     from agentiam_pep.policy_sync import PolicySync
-    from agentiam_pep.pool import LeasePool, PoolSettings
+    from agentiam_pep.pool import LeasePoolRegistry, PoolSettings
     from agentiam_pep.revocation import RedisRevocationSet
     from agentiam_pep.settlement import SettlementQueue, SettlementSettings
 
@@ -632,7 +641,11 @@ def build_service(settings: ServiceSettings) -> Service:
     settlement = SettlementQueue(
         LedgerSettlementSink(factory), SettlementSettings(), now=lambda: datetime.now(UTC)
     )
-    pool = LeasePool(
+    # One pool per mandate (APICTA-02). The boot mandate's is created and primed in the
+    # lifespan, as the single pool was; any other mandate's is created the first time a token
+    # minted under it arrives, off the request path. Every pool shares the settlement queue,
+    # whose entries carry their own lease id, and drains it before any RELEASE (ADR-049).
+    pools = LeasePoolRegistry(
         SessionLedger(factory),
         PoolSettings(
             pep_id=settings.pep_id,
@@ -640,7 +653,6 @@ def build_service(settings: ServiceSettings) -> Service:
             low_water=settings.low_water,
             ttl=timedelta(seconds=settings.lease_ttl_s),
         ),
-        mandate_id=settings.mandate_id,
         now=lambda: datetime.now(UTC),
         before_release=settlement.drain,
     )
@@ -728,7 +740,7 @@ def build_service(settings: ServiceSettings) -> Service:
         # incomplete list stays safe by construction: the caveat loop only ever adds a
         # denial, and biscuit's own authorizer enforces the chain regardless.
         caveats_for=token_caveats,
-        pool=pool,
+        pool=pools,
         emitter=emitter,
         revocation=revocation,
         settlement=settlement,
@@ -766,10 +778,10 @@ def build_service(settings: ServiceSettings) -> Service:
         # Keeps the held lease fresh on a timer rather than waiting for a request to notice
         # it aged out. Started before `prime()` so the first lease is under renewal from the
         # moment it exists; the sweep does nothing until there is something to renew.
-        await pool.start()
+        await pools.start()
 
-        # Draw the first lease. Without this the pool holds no `_Held` for the dimension,
-        # and `LeasePool.covers()` refuses *every* budgeted request with
+        # Draw the boot mandate's first lease. Without this the pool holds no `_Held` for the
+        # dimension, and `LeasePool.covers()` refuses *every* budgeted request with
         # LEASE_UNAVAILABLE — its own docstring names this case ("a PEP that never primed
         # the dimension, not one that ran dry"), and the refusal path cannot recover from
         # it because top-ups are scheduled only from an existing lease. The e2e slice
@@ -792,7 +804,7 @@ def build_service(settings: ServiceSettings) -> Service:
         # timed out waiting for it. Reproduced against a real Postgres before this line
         # existed.
         try:
-            primed = await pool.prime(BudgetDimension.SPEND_BDT)
+            primed = await pools.ensure(settings.mandate_id) is not None
         except Exception:
             logger.warning(
                 "could not acquire an initial %s lease (the mandate may have no budget row "
@@ -803,9 +815,10 @@ def build_service(settings: ServiceSettings) -> Service:
         else:
             if not primed:
                 logger.warning(
-                    "could not acquire an initial %s lease; budgeted requests will be "
-                    "refused until a top-up succeeds",
+                    "could not acquire an initial %s lease for mandate %s; its requests will "
+                    "be refused until the ledger can lease it one",
                     BudgetDimension.SPEND_BDT.value,
+                    settings.mandate_id,
                 )
         warm_up = None
         if drift_oracle is not None:
@@ -827,7 +840,7 @@ def build_service(settings: ServiceSettings) -> Service:
             await policy_sync.aclose()
             await revocation.aclose()
             await settlement.aclose()
-            await pool.aclose()
+            await pools.aclose()
             await emitter.aclose()
             await engine.dispose()
 
@@ -843,7 +856,7 @@ def build_service(settings: ServiceSettings) -> Service:
         policy=policy,
         policy_sync=policy_sync,
         drift_oracle=drift_oracle,
-        pool=pool,
+        pools=pools,
         principal_for=principal_for,
         pipeline=pipeline,
     )

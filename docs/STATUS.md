@@ -15,11 +15,11 @@ than none.
 |---|---|
 | **Tickets** | **49 of 53 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 8 deferred · 61 defined (`PLAN.md` §9) |
 | **Milestones** | Everything through hardening (T-051…T-056) is complete. Demo and submission (T-057…T-061) is in progress |
-| **Tests** | 3,236 collected. `make check` runs 2,888, all passing; the other 348 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
+| **Tests** | 3,257 collected. `make check` runs 2,906, all passing; the other 351 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 77 (ADR-001…ADR-077) |
+| **ADRs** | 78 (ADR-001…ADR-078) |
 
 ---
 

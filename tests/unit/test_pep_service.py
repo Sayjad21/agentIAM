@@ -520,7 +520,13 @@ class TestLeasePriming:
         async def record_start(_self: object) -> None:
             started.append("pool")
 
+        async def primes(_self: object, _dimension: object) -> bool:
+            return True
+
         monkeypatch.setattr("agentiam_pep.pool.LeasePool.start", record_start)
+        # A primed boot pool, as on a healthy stack: since APICTA-02 a pool exists only once
+        # its first lease does, and an unreachable ledger leaves the next request to retry.
+        monkeypatch.setattr("agentiam_pep.pool.LeasePool.prime", primes)
 
         _base_env(monkeypatch, tmp_path)
         service = pep_service.build_service(pep_service.ServiceSettings.from_env())
@@ -669,11 +675,12 @@ class TestLeasePriming:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """Exposed deliberately — the tests above cannot exist without it."""
-        from agentiam_pep.pool import LeasePool
+        from agentiam_pep.pool import LeasePoolRegistry
 
         _base_env(monkeypatch, tmp_path)
         service = pep_service.build_service(pep_service.ServiceSettings.from_env())
-        assert isinstance(service.pool, LeasePool)
+        assert isinstance(service.pools, LeasePoolRegistry)
+        assert service.pipeline.pools is service.pools
 
 
 class TestLeaseSizing:
@@ -712,7 +719,8 @@ class TestLeaseSizing:
         _base_env(monkeypatch, tmp_path)
         monkeypatch.setenv(f"{pep_service.ENV_PREFIX}LEASE_SIZE", "250000.0000")
         service = pep_service.build_service(pep_service.ServiceSettings.from_env())
-        assert service.pool._settings.lease_size == Decimal("250000.0000")
+        assert service.pools._settings is not None
+        assert service.pools._settings.lease_size == Decimal("250000.0000")
 
     @pytest.mark.parametrize("bad", ["nonsense", "0", "-1"])
     def test_an_unusable_value_refuses_to_start(

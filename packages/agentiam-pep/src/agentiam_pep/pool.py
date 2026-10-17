@@ -31,11 +31,12 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Protocol
 
 from agentiam_core.decision import BudgetVerdict
 from agentiam_core.models import BudgetDimension, LeaseState
-from agentiam_pep.errors import ReservationInsufficientError
+from agentiam_pep.errors import ReservationInsufficientError, UnknownMandateError
 from agentiam_pep.lease import CommitOutcome, LocalLease, Reservation, commit, reserve
 
 if TYPE_CHECKING:
@@ -45,8 +46,10 @@ if TYPE_CHECKING:
 __all__ = [
     "LeaseGrant",
     "LeasePool",
+    "LeasePoolRegistry",
     "LedgerClient",
     "PoolSettings",
+    "PoolStatus",
 ]
 
 logger = logging.getLogger(__name__)
@@ -168,6 +171,13 @@ class LeasePool:
         #: `ACQUIRE`s that could not reach the ledger. Each leaves the mandate's status as it
         #: was: an outage says nothing about whether the budget is spent.
         self.acquire_failures = 0
+        #: The ledger answered that it holds no budget for this mandate (APICTA-02).
+        self.mandate_unknown = False
+
+    @property
+    def mandate_id(self) -> uuid.UUID:
+        """The mandate every lease in this pool is drawn from."""
+        return self._mandate_id
 
     async def _release(self, lease_id: uuid.UUID) -> None:
         """`RELEASE` one lease, after letting anything owed against it settle first.
@@ -228,6 +238,11 @@ class LeasePool:
             )
         except asyncio.CancelledError:
             raise
+        except UnknownMandateError:
+            # Neither empty nor unreachable: there is no pool to lease from. Not counted as an
+            # acquire failure, which would read as an outage and be retried every request.
+            self.mandate_unknown = True
+            return None
         except Exception as exc:
             # Unreachable, not empty: count it and leave `mandate_exhausted` alone, so the
             # request path keeps answering the retryable `LEASE_UNAVAILABLE`. Caught here
@@ -542,3 +557,193 @@ class LeasePool:
             if held.lease.state is LeaseState.ACTIVE:
                 held.lease.state = LeaseState.RELEASED
                 await self._release(held.lease.id)
+
+
+class PoolStatus(Enum):
+    """Why `LeasePoolRegistry.lookup` has no pool to hand back."""
+
+    #: Being created, or the ledger could not be reached to create it. Retryable.
+    PENDING = "pending"
+    #: The ledger holds no budget for this mandate. Not retried until `unknown_ttl` passes.
+    UNKNOWN = "unknown"
+    #: The ledger holds a budget and has nothing left in it. Not retried until `unknown_ttl`.
+    EXHAUSTED = "exhausted"
+
+
+class LeasePoolRegistry:
+    """A `LeasePool` per mandate, created off the request path — APICTA-02, spec 04 §4.8.
+
+    A PEP used to hold exactly one pool, bound to `AGENTIAM_PEP_MANDATE_ID` at boot, and the
+    pipeline never compared a token's mandate with it: a token minted under any mandate spent
+    from that one pool, so the ceiling a human set on one task was enforced against another
+    task's money. The registry gives each mandate its own pool and the pipeline asks it for
+    the token's.
+
+    **The pools are unchanged.** Each is an ordinary `LeasePool` with its own leases, renewal
+    and `before_release` hook (ADR-049's settle-before-release holds per pool). The registry
+    only decides which one a request draws from.
+
+    **`lookup()` is the hot path and never awaits.** A mandate it has not seen is created in a
+    background task and the request is told to retry (`PENDING` → `LEASE_UNAVAILABLE`); the
+    next one finds the pool. That is the same shape as a top-up — a refusal that schedules what
+    would have prevented it — and it means a PEP that missed the control plane's
+    `mandate:created` event (spec 04 §4.8) still converges: the token itself is the signal, and
+    it is signed by the root key, so only a minted mandate can make a PEP ask.
+
+    **What the first `ACQUIRE` said decides what happens next.** A ledger that could not be
+    reached leaves nothing behind, so the next request asks again. A ledger with no budget row
+    (`UnknownMandateError`) or an empty one is remembered for `unknown_ttl`, so a stream of
+    requests for a mandate nobody funded is not a stream of `ACQUIRE`s; after it, the ledger is
+    asked again, because a mandate can be funded or refunded later.
+    """
+
+    def __init__(
+        self,
+        client: LedgerClient | None,
+        settings: PoolSettings | None,
+        *,
+        now: Callable[[], datetime],
+        before_release: Callable[[], Awaitable[None]] | None = None,
+        unknown_ttl: timedelta = timedelta(seconds=30),
+        dimension: BudgetDimension = BudgetDimension.SPEND_BDT,
+    ) -> None:
+        """A registry that creates pools with `client` and `settings`.
+
+        `client=None` makes a fixed registry: it serves the pools added to it and creates
+        none — `fixed()` builds one around a single pool.
+        """
+        self._client = client
+        self._settings = settings
+        self._now = now
+        self._before_release = before_release
+        self._unknown_ttl = unknown_ttl
+        self._dimension = dimension
+        self._pools: dict[uuid.UUID, LeasePool] = {}
+        self._creating: dict[uuid.UUID, asyncio.Task[LeasePool | None]] = {}
+        self._refused_until: dict[uuid.UUID, tuple[PoolStatus, datetime]] = {}
+        self._started = False
+        self._closed = False
+
+    @classmethod
+    def fixed(cls, pool: LeasePool) -> LeasePoolRegistry:
+        """A registry serving exactly `pool` — the pre-APICTA-02 single-mandate PEP."""
+        registry = cls(None, None, now=pool._now)
+        registry._pools[pool.mandate_id] = pool
+        return registry
+
+    @property
+    def pools(self) -> Mapping[uuid.UUID, LeasePool]:
+        """Every pool this PEP holds, by mandate. A copy: callers cannot add to it."""
+        return dict(self._pools)
+
+    def get(self, mandate_id: uuid.UUID) -> LeasePool | None:
+        """The pool for `mandate_id`, if this PEP holds one. Never creates."""
+        return self._pools.get(mandate_id)
+
+    def lookup(self, mandate_id: uuid.UUID) -> LeasePool | PoolStatus:
+        """The pool for `mandate_id`, or why there is none — scheduling one if it may exist.
+
+        Synchronous and network-free (`PLAN.md` §3 design rule 1).
+        """
+        pool = self._pools.get(mandate_id)
+        if pool is not None:
+            return pool
+        if self._client is None or self._closed:
+            return PoolStatus.UNKNOWN
+        refused = self._refused_until.get(mandate_id)
+        if refused is not None and self._now() < refused[1]:
+            return refused[0]
+        self._task_for(mandate_id)
+        return PoolStatus.PENDING
+
+    async def ensure(self, mandate_id: uuid.UUID) -> LeasePool | None:
+        """Create, prime and start the pool for `mandate_id`; `None` if it could not be.
+
+        Single-flight per mandate: concurrent callers share one creation and one `ACQUIRE`.
+        """
+        pool = self._pools.get(mandate_id)
+        if pool is not None or self._client is None or self._closed:
+            return pool
+        task = self._task_for(mandate_id)
+        if task is None:
+            return None
+        return await asyncio.shield(task)
+
+    def _task_for(self, mandate_id: uuid.UUID) -> asyncio.Task[LeasePool | None] | None:
+        task = self._creating.get(mandate_id)
+        if task is not None:
+            return task
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        task = loop.create_task(self._create(mandate_id))
+        self._creating[mandate_id] = task
+        task.add_done_callback(lambda _done: self._creating.pop(mandate_id, None))
+        return task
+
+    async def _create(self, mandate_id: uuid.UUID) -> LeasePool | None:
+        assert self._client is not None and self._settings is not None  # noqa: S101
+        pool = LeasePool(
+            self._client,
+            self._settings,
+            mandate_id=mandate_id,
+            now=self._now,
+            before_release=self._before_release,
+        )
+        failures = pool.acquire_failures
+        try:
+            primed = await pool.prime(self._dimension)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A creation scheduled from `lookup()` has nobody awaiting it, so an exception
+            # here would die unread. Logged with its cause and treated as unreachable: the
+            # next request asks again.
+            logger.warning(
+                "could not create a lease pool for mandate %s", mandate_id, exc_info=True
+            )
+            return None
+        if primed:
+            self._refused_until.pop(mandate_id, None)
+            self._pools[mandate_id] = pool
+            if self._started:
+                await pool.start()
+            logger.info("serving mandate %s", mandate_id)
+            return pool
+        if pool.acquire_failures > failures:
+            # Unreachable: nothing is remembered, and the next request asks again.
+            return None
+        status = PoolStatus.UNKNOWN if pool.mandate_unknown else PoolStatus.EXHAUSTED
+        self._refused_until[mandate_id] = (status, self._now() + self._unknown_ttl)
+        logger.info("mandate %s has no budget to lease: %s", mandate_id, status.value)
+        return None
+
+    async def start(self) -> None:
+        """Start renewal on every pool held now, and on every pool created later."""
+        self._started = True
+        for pool in list(self._pools.values()):
+            await pool.start()
+
+    async def drain(self) -> None:
+        """Await pool creation and every pool's top-ups. For tests and orderly shutdown."""
+        while True:
+            creating = [t for t in self._creating.values() if not t.done()]
+            if creating:
+                await asyncio.gather(*creating, return_exceptions=True)
+                continue
+            for pool in list(self._pools.values()):
+                await pool.drain()
+            if not any(not t.done() for t in self._creating.values()):
+                return
+
+    async def aclose(self) -> None:
+        """Release every pool's leases — spec 04 §4.5, once per mandate.
+
+        Creation still in flight is awaited first, for the reason `LeasePool.aclose` awaits
+        its top-ups: a lease granted after shutdown began would be stranded for its TTL.
+        """
+        await self.drain()
+        self._closed = True
+        for pool in list(self._pools.values()):
+            await pool.aclose()

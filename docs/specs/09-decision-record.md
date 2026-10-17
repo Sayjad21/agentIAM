@@ -48,6 +48,7 @@ Steps 1–7 decide. Steps 8–10 act on the decision and belong to the PEP, not 
 | 4 | Evaluate the token's caveats | `decision.decide` | `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `INTENT_MISMATCH`, `BUDGET_EXHAUSTED_CAVEAT`, `DEPTH_EXCEEDED`, `APPROVAL_REQUIRED` |
 | 5 | Evaluate the policy bundle | `decision.decide` | `POLICY_DENIED`, `POLICY_BUNDLE_STALE` |
 | 6 | Check intent drift | `decision.decide` | `DRIFT_ESCALATION` |
+| 2a | Find the token's mandate's pool | PEP, `LeasePoolRegistry` (APICTA-02) | `MANDATE_UNKNOWN`, `LEASE_UNAVAILABLE` (pool being created), `BUDGET_EXHAUSTED_MANDATE` (pool spent) |
 | 7 | Reserve from the local lease | `decision.decide` | `BUDGET_EXHAUSTED_MANDATE`, `LEASE_UNAVAILABLE` |
 | 8 | Forward upstream | PEP (T-018) | `UPSTREAM_ERROR` — **not a decision**, see §6 |
 | 9 | Commit or refund the actual | PEP (T-021) | — |
@@ -166,6 +167,7 @@ that every code is reachable and every deny in the source cites one.*
 | `BUDGET_EXHAUSTED_MANDATE`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE` | step 7, and the ledger (T-013, T-014). `BUDGET_EXHAUSTED_MANDATE` **also from step 4** — see §7.1 |
 | `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED` | §5 |
 | `VERIFICATION_LIMIT_EXCEEDED` | step 2 — the Datalog engine exhausted its budget reading the token (TM-14 or TM-25). Fails closed; added by T-020 |
+| `MANDATE_UNKNOWN` | step 2a — the ledger holds no budget for the token's mandate, so this PEP has no pool to spend from. Recorded (the token verified). Added by APICTA-02; `BUDGET_EXHAUSTED_MANDATE` would claim a pool existed and was spent |
 | `UPSTREAM_ERROR` | step 8, post-decision (§6) |
 | `RATE_LIMITED` | **unreachable** — `RateLimit` was dropped (`ROADMAP.md` Part 1) |
 
@@ -264,7 +266,7 @@ the rest.
 | `OK` | *the upstream's* | An allow is a proxy hop; the client sees what the tool returned |
 | `MALFORMED_REQUEST`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_EXPIRED`, `TOKEN_NOT_YET_VALID`, `TOKEN_TOO_LARGE` | **401** | *Who are you?* — the credential is absent, unreadable, or out of date. Retrying with a fresh token is the fix |
 | `TOKEN_REVOKED`, `ANCESTOR_REVOKED` | **401** | Also a credential problem, and deliberately indistinguishable from expiry at the status level — §11.1 |
-| `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `INTENT_MISMATCH`, `DEPTH_EXCEEDED`, `POLICY_DENIED` | **403** | *You are who you say, and you may not do this.* A fresh token of the same authority changes nothing |
+| `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `INTENT_MISMATCH`, `DEPTH_EXCEEDED`, `POLICY_DENIED`, `MANDATE_UNKNOWN` | **403** | *You are who you say, and you may not do this.* A fresh token of the same authority changes nothing |
 | `BUDGET_EXHAUSTED_MANDATE`, `BUDGET_EXHAUSTED_CAVEAT`, `LEASE_UNAVAILABLE`, `RATE_LIMITED` | **429** | Exhaustion, not authority. The request may succeed later — after a top-up, a refund, or a new mandate — and 429 is the only standard code that says *not now* without saying *never* |
 | `APPROVAL_REQUIRED`, `DRIFT_ESCALATION` | **403** | Not permitted **yet**. The escalation id travels in the body, because a client that cannot see it cannot follow up |
 | `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `POLICY_BUNDLE_STALE`, `VERIFICATION_LIMIT_EXCEEDED` | **503** | *We could not decide.* Distinct from a denial: the fix is operational, and a client is right to retry |

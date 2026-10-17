@@ -163,9 +163,9 @@ and model training beyond a small classifier.
 | | |
 |---|---|
 | **Tickets** | 49 of the 53 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 8 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
-| **Tests** | 3,236 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,888 |
+| **Tests** | 3,257 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,906 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 77 in `DECISIONS.md` |
+| **ADRs** | 78 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -526,7 +526,7 @@ for it.
 | What to build | [`PLAN.md`](PLAN.md) (§3 architecture, §6 protocols, §21 deferred) |
 | What is left | [`APICTA_TICKETS.md`](APICTA_TICKETS.md) (the sprint), [`STATUS.md`](STATUS.md) §2 and §5 |
 | Status and gaps | [`STATUS.md`](STATUS.md) |
-| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 77 ADRs |
+| Why each decision was made | [`DECISIONS.md`](DECISIONS.md) — 78 ADRs |
 | Exact protocol contracts | [`specs/`](specs/) 01–10 |
 | Running the stack by hand | [`RUNNING.md`](RUNNING.md) |
 | The presentation script and judge handling | [`DEMO.md`](DEMO.md) |

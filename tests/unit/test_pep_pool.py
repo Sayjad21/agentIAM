@@ -21,12 +21,16 @@ import socket
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from agentiam_core.models import BudgetDimension
-from agentiam_pep.errors import ReservationInsufficientError
-from agentiam_pep.pool import LeaseGrant, LeasePool, PoolSettings
+from agentiam_pep.errors import ReservationInsufficientError, UnknownMandateError
+from agentiam_pep.pool import LeaseGrant, LeasePool, LeasePoolRegistry, PoolSettings, PoolStatus
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 NOW = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
 MANDATE = uuid.uuid4()
@@ -910,3 +914,186 @@ class TestARequestLargerThanALease:
         assert ledger.acquired[-1] == Decimal(500)
         assert pool.remaining(SPEND) == Decimal(300)
         assert not pool.check({SPEND: Decimal(500)}).ok
+
+
+class MandateLedger(FakeLedger):
+    """A `FakeLedger` that knows which mandates have a budget, and records who asked."""
+
+    def __init__(self, *, unknown: frozenset[uuid.UUID] = frozenset()) -> None:
+        """Every mandate has a budget except those in `unknown`."""
+        super().__init__()
+        self.unknown = set(unknown)
+        self.asked: list[uuid.UUID] = []
+        self.leases: dict[uuid.UUID, uuid.UUID] = {}
+
+    async def acquire(
+        self,
+        *,
+        mandate_id: uuid.UUID,
+        dimension: BudgetDimension,
+        requested: Decimal,
+        pep_id: str,
+        ttl: timedelta,
+        now: datetime,
+    ) -> LeaseGrant | None:
+        self.asked.append(mandate_id)
+        if mandate_id in self.unknown:
+            raise UnknownMandateError(f"no budget for mandate {mandate_id}")
+        grant = await super().acquire(
+            mandate_id=mandate_id,
+            dimension=dimension,
+            requested=requested,
+            pep_id=pep_id,
+            ttl=ttl,
+            now=now,
+        )
+        if grant is not None:
+            self.leases[grant.id] = mandate_id
+        return grant
+
+
+A = uuid.UUID("aaaaaaaa-0000-4000-8000-000000000001")
+B = uuid.UUID("bbbbbbbb-0000-4000-8000-000000000002")
+
+
+def a_registry(
+    ledger: FakeLedger,
+    *,
+    clock: Callable[[], datetime] | None = None,
+    **over: Any,
+) -> LeasePoolRegistry:
+    return LeasePoolRegistry(
+        ledger,
+        PoolSettings(pep_id="pep-1", lease_size=Decimal(100)),
+        now=clock or (lambda: NOW),
+        **over,
+    )
+
+
+class TestLeasePoolRegistry:
+    """APICTA-02: one PEP, a pool per mandate, each pool its own `LeasePool`.
+
+    The pool code is unchanged; the registry decides which pool a request draws from, and
+    creates one — off the request path — for a mandate it has not seen.
+    """
+
+    async def test_ensure_creates_and_primes_a_pool_for_the_mandate(self) -> None:
+        ledger = MandateLedger()
+        registry = a_registry(ledger)
+        pool = await registry.ensure(A)
+        assert pool is not None
+        assert pool.mandate_id == A
+        assert pool.remaining(SPEND) == Decimal(100)
+        assert ledger.asked == [A]
+
+    async def test_ensure_is_single_flight_per_mandate(self) -> None:
+        ledger = MandateLedger()
+        ledger.gate = asyncio.Event()
+        registry = a_registry(ledger)
+        first = asyncio.create_task(registry.ensure(A))
+        second = asyncio.create_task(registry.ensure(A))
+        await asyncio.sleep(0)
+        ledger.gate.set()
+        assert await first is await second
+        assert ledger.asked == [A]
+
+    async def test_an_unseen_mandate_is_pending_then_served(self) -> None:
+        ledger = MandateLedger()
+        registry = a_registry(ledger)
+        assert registry.lookup(A) is PoolStatus.PENDING
+        await registry.drain()
+        found = registry.lookup(A)
+        assert isinstance(found, LeasePool)
+        assert found.mandate_id == A
+
+    async def test_a_mandate_the_ledger_has_no_budget_for_is_unknown(self) -> None:
+        ledger = MandateLedger(unknown=frozenset({A}))
+        registry = a_registry(ledger)
+        registry.lookup(A)
+        await registry.drain()
+        assert registry.lookup(A) is PoolStatus.UNKNOWN
+        assert registry.get(A) is None
+
+    async def test_an_unknown_mandate_is_not_asked_about_again_until_its_ttl(self) -> None:
+        """Otherwise a stream of tokens for a mandate nobody funded is a stream of ACQUIREs."""
+        clock = {"t": NOW}
+        ledger = MandateLedger(unknown=frozenset({A}))
+        registry = a_registry(ledger, clock=lambda: clock["t"], unknown_ttl=timedelta(seconds=30))
+        registry.lookup(A)
+        await registry.drain()
+        for _ in range(5):
+            registry.lookup(A)
+        await registry.drain()
+        assert ledger.asked == [A]
+
+        clock["t"] = NOW + timedelta(seconds=31)
+        ledger.unknown.clear()  # the mandate has been funded since
+        assert registry.lookup(A) is PoolStatus.PENDING
+        await registry.drain()
+        assert isinstance(registry.lookup(A), LeasePool)
+
+    async def test_an_unreachable_ledger_leaves_the_mandate_pending_not_unknown(self) -> None:
+        """An outage says nothing about whether the mandate exists (the `None`-vs-raise rule)."""
+        ledger = MandateLedger()
+        ledger.unreachable = True
+        registry = a_registry(ledger)
+        registry.lookup(A)
+        await registry.drain()
+        assert registry.lookup(A) is PoolStatus.PENDING
+        await registry.drain()
+        assert ledger.asked.count(A) == 2, "the next request must try again"
+
+    async def test_a_top_up_for_one_mandate_never_releases_the_other_s_lease(self) -> None:
+        ledger = MandateLedger()
+        registry = a_registry(ledger)
+        pool_a = await registry.ensure(A)
+        await registry.ensure(B)
+        assert pool_a is not None
+
+        pool_a.reserve(SPEND, Decimal(90))  # past A's low-water mark: A tops up
+        await registry.drain()
+
+        released = {ledger.leases[lease_id] for lease_id in ledger.released}
+        assert released == {A}
+
+    async def test_aclose_releases_every_pool_s_lease(self) -> None:
+        ledger = MandateLedger()
+        registry = a_registry(ledger)
+        await registry.ensure(A)
+        await registry.ensure(B)
+        await registry.aclose()
+        assert {ledger.leases[lease_id] for lease_id in ledger.released} == {A, B}
+
+    async def test_every_pool_gets_the_before_release_hook(self) -> None:
+        """ADR-049's settle-before-release, per pool, not only for the boot mandate."""
+        calls: list[str] = []
+
+        async def settle() -> None:
+            calls.append("settle")
+
+        registry = a_registry(MandateLedger(), before_release=settle)
+        await registry.ensure(A)
+        await registry.ensure(B)
+        await registry.aclose()
+        assert calls == ["settle", "settle"]
+
+    async def test_a_fixed_registry_serves_its_pool_and_nothing_else(self) -> None:
+        ledger = MandateLedger()
+        pool = LeasePool(ledger, PoolSettings(pep_id="pep-1"), mandate_id=A, now=lambda: NOW)
+        await pool.prime(SPEND)
+        registry = LeasePoolRegistry.fixed(pool)
+        assert registry.lookup(A) is pool
+        assert registry.lookup(B) is PoolStatus.UNKNOWN
+        await registry.drain()
+        assert ledger.asked == [A], "a fixed registry must never create a pool"
+
+    async def test_a_spent_mandate_is_exhausted_not_pending(self) -> None:
+        """A pool the ledger has emptied must not sit unprimed answering `LEASE_UNAVAILABLE`."""
+        ledger = MandateLedger()
+        ledger.available = Decimal(0)
+        registry = a_registry(ledger)
+        registry.lookup(A)
+        await registry.drain()
+        assert registry.lookup(A) is PoolStatus.EXHAUSTED
+        await registry.drain()
+        assert ledger.asked == [A]

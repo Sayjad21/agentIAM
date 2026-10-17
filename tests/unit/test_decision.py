@@ -600,6 +600,9 @@ class TestReasonCodeCoverage:
             # T-020, step 2: the Datalog engine ran out of budget reading the token.
             # `tokens.verify` raises it; TM-25's residual, closed there rather than here.
             ReasonCode.VERIFICATION_LIMIT_EXCEEDED,
+            # APICTA-02: the PEP's pool registry, before `decide()` — a token whose mandate
+            # has no pool never reaches the budget step.
+            ReasonCode.MANDATE_UNKNOWN,
         }
         unreachable = {ReasonCode.RATE_LIMITED}
 

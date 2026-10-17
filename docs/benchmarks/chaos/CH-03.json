@@ -2,9 +2,9 @@
   "scenario": "CH-03",
   "title": "SIGKILL one PEP of three",
   "expected": "its lease strands <= TTL then reclaims; others unaffected",
-  "run_id": "819dd791-80a9-4851-acd5-6edeb0b5a5c1",
-  "started_at": "2026-10-17T14:21:56.171983+00:00",
-  "duration_s": 1.738,
+  "run_id": "78ba5fc3-cb0e-44c4-ae97-266b0a1189e0",
+  "started_at": "2026-10-17T15:54:14.552591+00:00",
+  "duration_s": 1.694,
   "invariant": {
     "interval_s": 0.25,
     "samples": 9,
@@ -20,31 +20,31 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.5,
+      "t_s": 0.422,
       "event": "three leases held"
     },
     {
-      "t_s": 0.505,
+      "t_s": 0.429,
       "event": "killing pep-doomed"
     },
     {
-      "t_s": 0.509,
+      "t_s": 0.432,
       "event": "pep-doomed exited -9"
     },
     {
-      "t_s": 1.251,
+      "t_s": 1.205,
       "event": "reaped one second inside the skew margin"
     },
     {
-      "t_s": 1.295,
+      "t_s": 1.23,
       "event": "reaped past the skew margin"
     },
     {
-      "t_s": 1.736,
+      "t_s": 1.69,
       "event": "scenario ended"
     },
     {
-      "t_s": 1.736,
+      "t_s": 1.69,
       "event": "final sweep"
     }
   ],

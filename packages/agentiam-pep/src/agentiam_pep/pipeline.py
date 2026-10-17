@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final, Protocol
@@ -42,6 +42,7 @@ from agentiam_pep.drift import AssessingDriftOracle, ScoreNotReady
 from agentiam_pep.emitter import AuditBufferFullError, current_trace_id
 from agentiam_pep.errors import ReservationInsufficientError
 from agentiam_pep.extractor import ExtractionError, extract
+from agentiam_pep.pool import LeasePool, LeasePoolRegistry, PoolStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -59,7 +60,6 @@ if TYPE_CHECKING:
     from agentiam_pep.extractor import Extraction, RouteTable
     from agentiam_pep.lease import Reservation
     from agentiam_pep.policy import AgentPrincipal, BoundCedarEngine
-    from agentiam_pep.pool import LeasePool
     from agentiam_pep.settlement import SettlementQueue
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,9 @@ _STATUS: Final[dict[ReasonCode, int]] = {
     ReasonCode.APPROVAL_REQUIRED: 403,
     ReasonCode.DRIFT_ESCALATION: 403,
     ReasonCode.BUDGET_EXHAUSTED_MANDATE: 429,
+    # 403, not 429: no pool means nothing will refill one. A mandate funded later is served
+    # once the registry re-asks the ledger (`LeasePoolRegistry.unknown_ttl`).
+    ReasonCode.MANDATE_UNKNOWN: 403,
     ReasonCode.BUDGET_EXHAUSTED_CAVEAT: 429,
     ReasonCode.LEASE_UNAVAILABLE: 429,
     ReasonCode.RATE_LIMITED: 429,
@@ -216,6 +219,26 @@ class Authorized:
     reservation: Reservation | None
     decision_id: uuid.UUID
     trace_id: str
+    #: The pool `reservation` was drawn from — the token's mandate's (APICTA-02). Carried so
+    #: settlement goes back to the pool the money came from without a second lookup.
+    pool: LeasePool | None = field(default=None, repr=False, compare=False)
+
+
+#: What the registry's answer means to the agent, when it has no pool to hand back.
+_NO_POOL: Final[dict[PoolStatus, tuple[ReasonCode, str]]] = {
+    PoolStatus.UNKNOWN: (
+        ReasonCode.MANDATE_UNKNOWN,
+        "no budget pool exists for mandate {mandate_id}",
+    ),
+    PoolStatus.PENDING: (
+        ReasonCode.LEASE_UNAVAILABLE,
+        "this PEP is acquiring its first lease for mandate {mandate_id}; retry",
+    ),
+    PoolStatus.EXHAUSTED: (
+        ReasonCode.BUDGET_EXHAUSTED_MANDATE,
+        "the budget for mandate {mandate_id} is spent",
+    ),
+}
 
 
 class Pipeline:
@@ -228,7 +251,7 @@ class Pipeline:
         key_set: RootKeySet,
         policy: PolicySource,
         principal_for: Callable[[VerifiedToken], AgentPrincipal],
-        pool: LeasePool,
+        pool: LeasePool | LeasePoolRegistry,
         emitter: DecisionEmitter,
         revocation: object,
         settings: PipelineSettings,
@@ -239,12 +262,16 @@ class Pipeline:
         escalation_sink: EscalationSink | None = None,
         settlement: SettlementQueue | None = None,
     ) -> None:
-        """Assemble the five oracles and the two adapters the steps need."""
+        """Assemble the five oracles and the two adapters the steps need.
+
+        `pool` is a `LeasePoolRegistry`, or a single `LeasePool` served as a fixed registry —
+        the single-mandate PEP every caller before APICTA-02 built.
+        """
         self._routes = routes
         self._key_set = key_set
         self._policy = policy
         self._principal_for = principal_for
-        self._pool = pool
+        self._pools = pool if isinstance(pool, LeasePoolRegistry) else LeasePoolRegistry.fixed(pool)
         self._emitter = emitter
         self._revocation = revocation
         self._settings = settings
@@ -254,6 +281,11 @@ class Pipeline:
         self._features = features
         self._escalation_sink = escalation_sink
         self._settlement = settlement
+
+    @property
+    def pools(self) -> LeasePoolRegistry:
+        """The pools this PEP spends from, one per mandate."""
+        return self._pools
 
     def policy_status(self) -> dict[str, object] | None:
         """The policy cache's state for `/readyz`, when the policy is a cache."""
@@ -350,6 +382,24 @@ class Pipeline:
 
         # --- steps 3-7: decide -----------------------------------------------------
         context = self._context_for(extraction, token, header_map)
+        # Which pool this request spends from: its own mandate's (APICTA-02). Before this the
+        # pipeline held one pool and never compared it with the token, so a token minted under
+        # any mandate spent the boot mandate's money. Refused whatever the request costs —
+        # fail closed — and recorded, because the token verified.
+        found = self._pools.lookup(token.mandate_id)
+        if not isinstance(found, LeasePool):
+            reason, detail = _NO_POOL[found]
+            return self._record_and_refuse(
+                reason,
+                detail.format(mandate_id=token.mandate_id),
+                decision_id,
+                trace_id,
+                extraction=extraction,
+                token=token,
+                context=context,
+                started=started,
+            )
+        pool = found
         # Resolved once and carried, not called per use. Both hooks read the token's block
         # source in a deployed PEP (`datalog`, ADR-057), which costs ~150-230 µs on a depth-3
         # chain — cheap once, and three times what it should be when the same answer is
@@ -376,7 +426,7 @@ class Pipeline:
             caveats=caveats,
             revocation=self._revocation,  # type: ignore[arg-type]
             policy=policy,
-            budget=self._pool,
+            budget=pool,
             drift=recorder,
         )
         if (
@@ -398,7 +448,7 @@ class Pipeline:
                 caveats=caveats,
                 revocation=self._revocation,  # type: ignore[arg-type]
                 policy=policy,
-                budget=self._pool,
+                budget=pool,
                 drift=self._drift_oracle,
             )
 
@@ -446,7 +496,7 @@ class Pipeline:
             requested = context.requested[BudgetDimension.SPEND_BDT]
             if requested > 0:
                 try:
-                    reservation = self._pool.reserve(BudgetDimension.SPEND_BDT, requested)
+                    reservation = pool.reserve(BudgetDimension.SPEND_BDT, requested)
                 except ReservationInsufficientError as exc:
                     return self._record_and_refuse(
                         ReasonCode.LEASE_UNAVAILABLE,
@@ -457,6 +507,7 @@ class Pipeline:
                         token=token,
                         context=context,
                         started=started,
+                        pool=pool,
                     )
 
         record = self._record(
@@ -465,6 +516,7 @@ class Pipeline:
             extraction=extraction,
             token=token,
             context=context,
+            pool=pool,
             reason=decision.reason_code,
             outcome=decision.outcome,
             detail=decision.reason_detail,
@@ -485,7 +537,7 @@ class Pipeline:
             # ADR-026: a system that cannot record what it authorized must not authorize.
             # This is why emit precedes the forward — denying afterwards would be theatre.
             if reservation is not None:
-                self._pool.commit(BudgetDimension.SPEND_BDT, reservation, Decimal(0))
+                pool.commit(BudgetDimension.SPEND_BDT, reservation, Decimal(0))
             return self._refuse(
                 ReasonCode.CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED, str(exc), decision_id, trace_id
             )
@@ -506,6 +558,7 @@ class Pipeline:
             reservation=reservation,
             decision_id=decision_id,
             trace_id=trace_id,
+            pool=pool,
         )
 
     def settle(self, authorized: Authorized, *, actual: Decimal | None = None) -> None:
@@ -528,7 +581,13 @@ class Pipeline:
         """
         if authorized.reservation is None:
             return
-        outcome = self._pool.commit(
+        pool = authorized.pool or self._pools.get(authorized.token.mandate_id)
+        if pool is None:
+            raise RuntimeError(
+                f"no pool for mandate {authorized.token.mandate_id} to settle "
+                f"{authorized.reservation.id} against; a reservation implies one"
+            )
+        outcome = pool.commit(
             BudgetDimension.SPEND_BDT,
             authorized.reservation,
             authorized.reservation.amount if actual is None else actual,
@@ -612,6 +671,7 @@ class Pipeline:
         token: VerifiedToken,
         context: RequestContext,
         started: float,
+        pool: LeasePool | None = None,
     ) -> Refused:
         record = self._record(
             decision_id=decision_id,
@@ -619,6 +679,7 @@ class Pipeline:
             extraction=extraction,
             token=token,
             context=context,
+            pool=pool,
             reason=reason,
             outcome=Outcome.DENY,
             detail=detail,
@@ -628,8 +689,19 @@ class Pipeline:
         try:
             self._emitter.emit(record)
         except AuditBufferFullError:
-            pass  # already refusing; the buffer's own denial cannot make this worse
-        return self._refuse(reason, detail, decision_id, trace_id)
+            # Already refusing; the buffer's own denial cannot make this worse. Nothing was
+            # recorded, so the client gets no id to look up (spec 09 §11.3).
+            return self._refuse(reason, detail, decision_id, trace_id)
+        # Recorded, so the id goes to the client. This returned through `_refuse` and dropped
+        # it, so every recorded refusal on this path — a failed escalation sink, a lease short
+        # at reserve — named a record the client could not find (found in APICTA-02).
+        return Refused(
+            status=status_for(reason),
+            reason_code=reason,
+            detail=detail,
+            decision_id=decision_id,
+            trace_id=trace_id,
+        )
 
     def _record(
         self,
@@ -639,6 +711,7 @@ class Pipeline:
         extraction: Extraction,
         token: VerifiedToken,
         context: RequestContext,
+        pool: LeasePool | None,
         reason: ReasonCode,
         outcome: Outcome,
         detail: str,
@@ -653,7 +726,9 @@ class Pipeline:
     ) -> DecisionRecord:
         from agentiam_core.models import Budget, DecisionRecord
 
-        before = self._pool.remaining(BudgetDimension.SPEND_BDT)
+        # A refusal for want of a pool has no budget to report; zero, as for a dimension the
+        # pool never primed.
+        before = pool.remaining(BudgetDimension.SPEND_BDT) if pool is not None else Decimal(0)
         spent = reservation.amount if reservation is not None else Decimal(0)
         features = self._feature_vector(context_for_features)
         # Resolved by the caller wherever one exists, because reading it costs a block-source

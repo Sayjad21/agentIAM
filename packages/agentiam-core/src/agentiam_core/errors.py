@@ -49,6 +49,9 @@ class ReasonCode(StrEnum):
     LEASE_UNAVAILABLE = "LEASE_UNAVAILABLE"
     LEASE_NOT_ACTIVE = "LEASE_NOT_ACTIVE"
     RATE_LIMITED = "RATE_LIMITED"
+    #: The token's mandate has no budget pool — not exhausted, absent (APICTA-02). Distinct from
+    #: `BUDGET_EXHAUSTED_MANDATE`, which says a pool existed and was spent.
+    MANDATE_UNKNOWN = "MANDATE_UNKNOWN"
 
     # policy and drift
     POLICY_DENIED = "POLICY_DENIED"

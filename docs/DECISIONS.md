@@ -4700,3 +4700,54 @@ the PEP stopped a fooled model when it stopped nothing of the kind. The ticket a
   agent prints the caveat kind and no block number.
 - The terminal transcript shows the invoice's description, because the audience must see the
   injection; logs carry only a digest and the length, pinned by a canary test.
+
+---
+
+## ADR-078 — A pool per mandate, created when its first token arrives
+
+**Status:** accepted · **Ticket:** APICTA-02 (Part A) · **Specified in:** spec 04 §4.8, spec 09
+§2/§7 · **Closes the correctness half of:** gap 25
+
+### Context
+
+`LeasePool` bound one mandate at construction and `Pipeline` held one pool. The pipeline never
+compared a token's `mandate_id` with it, so a token minted under any mandate spent the boot
+mandate's budget — the ceiling a human approved for one task enforced against another task's
+money. Every pipeline unit test had been building its pool and its tokens under two unrelated
+`uuid4()` mandates without anything noticing.
+
+### Decision
+
+1. **The pipeline asks a `LeasePoolRegistry` for the token's mandate's pool** (step 2a, before
+   `decide()`), and reserves, records and settles against that pool. A single `LeasePool` passed
+   to `Pipeline` is served as a fixed registry, so every pre-existing caller keeps its meaning.
+2. **No pool, no request — of any cost.** A mandate the PEP cannot serve is refused even for a
+   read: fail closed, and simpler to state than a rule that depends on what the request costs.
+3. **`MANDATE_UNKNOWN` (403), a new reason code.** `BUDGET_EXHAUSTED_MANDATE` would say a pool
+   existed and was spent; a spent pool still gets that code, from the registry, so an emptied
+   mandate is not misreported as `LEASE_UNAVAILABLE` forever. `PLAN.md` §6.9 has a supersession
+   note, as it did for T-020.
+4. **The first token for a mandate creates its pool, in the background.** This goes beyond the
+   ticket, which had PEPs learn of new mandates only from a `mandate:created` event. Event-only
+   left a PEP that missed the event — down, restarting, partitioned from Redis — refusing that
+   task until it was restarted. The token is root-signed, so only a minted mandate can make a
+   PEP ask the ledger; the event (Part B) still arrives, and only makes the pool ready sooner.
+5. **The ledger client distinguishes "no budget row" from "unreachable"** (`UnknownMandateError`
+   for `NoResultFound`). Both used to land in `acquire_failures`; treated alike, one is retried
+   forever or the other refused while the database is down. An unknown or spent mandate is not
+   asked about again for 30 s.
+
+### Consequences
+
+- Measured against Postgres: two mandates spent through one PEP, each `committed` on its own
+  row, `leased` back to zero on shutdown, invariant holding; a token for mandate B through a PEP
+  bound to A refused with A's row untouched — and that test fails with the old one-pool lookup
+  restored (as do three of the five unit routing tests).
+- Found while testing it: `_record_and_refuse` wrote a decision record and then returned the
+  refusal through `_refuse`, which drops the decision id. Every recorded refusal on that path —
+  a failed escalation sink, a lease short at reserve, now a missing pool — handed the client an
+  id-less refusal for a record that existed. It now returns the id whenever the record was
+  written, and none when the audit buffer refused it (spec 09 §11.3).
+- A PEP that cannot reach the ledger at boot no longer holds an unprimed pool that could never
+  recover; it holds none, and the next request schedules the creation again.
+- The number of pools a PEP holds is bounded only by the number of minted mandates.

@@ -250,6 +250,51 @@ PUBLISH revocation to the Redis channel     -- PEPs drop their leases on receipt
 
 Revocation of *authority* is `07-revocation.md`. This operation only returns the budget.
 
+### 4.8 One PEP, many mandates (APICTA-02, ADR-078)
+
+Everything above is per `(mandate_id, dimension)`. A PEP held one pool, bound to one mandate at
+boot, and the pipeline **never compared a token's `mandate_id` with it**: a token minted under
+any mandate spent the boot mandate's budget. Measured by test against a real ledger before the
+fix — and the single-pool fixtures of every pipeline test had been pairing two unrelated random
+mandates all along without noticing.
+
+A PEP now holds a `LeasePoolRegistry`: an ordinary pool (§2.3, §4.1–4.5, §4.1a) per mandate. The
+pools are unchanged; the registry only chooses one.
+
+```
+LOOKUP(token):                       -- step 2a, synchronous, no I/O
+  pool := pools[token.mandate_id]
+  IF pool: RETURN pool
+  IF refused[mandate] and now < its expiry: RETURN refused[mandate]      -- UNKNOWN | EXHAUSTED
+  schedule CREATE(mandate) in the background (single-flight)
+  RETURN PENDING                      -- the request gets LEASE_UNAVAILABLE and retries
+
+CREATE(mandate):
+  pool := new pool(mandate, before_release = settlement.drain)          -- §11, ADR-049
+  ACQUIRE(lease_size) for the pool
+    granted           -> pools[mandate] := pool; start its renewal
+    no budget row     -> refused[mandate] := (UNKNOWN,   now + unknown_ttl)
+    pool spent        -> refused[mandate] := (EXHAUSTED, now + unknown_ttl)
+    ledger unreachable-> remember nothing; the next request schedules CREATE again
+```
+
+- **The token is the signal.** A pool is created the first time a verified token for its
+  mandate arrives; the token is signed by the root key, so only a minted mandate can make a PEP
+  ask the ledger. The control plane's `mandate:created` event (APICTA-02 Part B) only does this
+  sooner — a PEP that missed it, being down or partitioned, still converges.
+- **Never on the hot path.** `LOOKUP` does no I/O (`PLAN.md` §3 design rule 1); creation is a
+  background task, as a top-up is.
+- **The three outcomes of the first `ACQUIRE` are kept apart.** The ledger client raises
+  `UnknownMandateError` for a missing budget row so the pool does not count it as an outage;
+  conflating the two would have retried an unfunded mandate on every request, or refused a
+  funded one for as long as the database was down. `unknown_ttl` (30 s) bounds both how often a
+  stream of tokens for an unfunded mandate reaches the ledger and how long a newly funded one
+  waits.
+- **Shutdown releases every pool** (§4.5), each draining the shared settlement queue first.
+- **Not yet bounded:** how many pools one PEP may hold. Each costs one lease of `lease_size`
+  for one TTL; the bound is how many mandates have been minted, which is the control plane's to
+  limit.
+
 ---
 
 ## 5. Guards

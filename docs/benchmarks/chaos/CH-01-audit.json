@@ -2,19 +2,19 @@
   "scenario": "CH-01-audit",
   "title": "Kill Postgres for 30 s \u2014 the audit path",
   "expected": "every record buffered during the outage reaches the chain afterwards",
-  "run_id": "7205dae4-a5d5-482a-ba20-71e909b7650d",
-  "started_at": "2026-10-17T14:21:17.333667+00:00",
-  "duration_s": 31.303,
+  "run_id": "57350467-e24f-44d7-8f49-f37f0c6fba03",
+  "started_at": "2026-10-17T15:53:40.449578+00:00",
+  "duration_s": 31.022,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 125,
+    "samples": 124,
     "held": 4,
     "violated": 0,
-    "unavailable": 121,
+    "unavailable": 120,
     "violations": [],
     "unavailable_reasons": [
       "InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: connection is closed\n[SQL: \n    SELECT\n        b.id  ",
-      "OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 44841, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 44841)"
+      "OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 52497, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 52497)"
     ]
   },
   "timeline": [
@@ -23,26 +23,26 @@
       "event": "scenario started"
     },
     {
-      "t_s": 0.048,
+      "t_s": 0.039,
       "event": "stopping postgres"
     },
     {
-      "t_s": 30.659,
+      "t_s": 30.492,
       "event": "starting postgres"
     },
     {
-      "t_s": 31.301,
+      "t_s": 31.02,
       "event": "scenario ended"
     },
     {
-      "t_s": 31.301,
+      "t_s": 31.02,
       "event": "final sweep"
     }
   ],
   "measurements": {
     "records_before_outage": 1,
-    "allowed_while_unrecordable": 146,
-    "records_landed": 146,
+    "allowed_while_unrecordable": 147,
+    "records_landed": 147,
     "emitter_failed_batches": 60,
     "emitter_lost_records": 0,
     "emitter_dropped": 0,
@@ -50,7 +50,7 @@
   },
   "loads": [],
   "notes": [
-    "Every one of the 146 records written while Postgres was stopped reached the chain after it came back (146 landed, 0 lost, 60 failed write attempts along the way). Before the fix this scenario measured the opposite: the emitter bounded every failure by max_retries and discarded the batch, so an outage was indistinguishable from a poison batch and the PEP kept authorizing requests it could no longer record. STATUS.md gap 20, now closed."
+    "Every one of the 147 records written while Postgres was stopped reached the chain after it came back (147 landed, 0 lost, 60 failed write attempts along the way). Before the fix this scenario measured the opposite: the emitter bounded every failure by max_retries and discarded the batch, so an outage was indistinguishable from a poison batch and the PEP kept authorizing requests it could no longer record. STATUS.md gap 20, now closed."
   ],
   "verdict": "held"
 }

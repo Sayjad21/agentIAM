@@ -789,7 +789,8 @@ class DecisionRecord(BaseModel):
 ```
 
 **Reason codes** — closed enum, fixed early, never freeform strings:
-`OK`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_EXPIRED`, `TOKEN_NOT_YET_VALID`, `TOKEN_REVOKED`, `ANCESTOR_REVOKED`, `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `DEPTH_EXCEEDED`, `BUDGET_EXHAUSTED_MANDATE`, `BUDGET_EXHAUSTED_CAVEAT`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE`, `RATE_LIMITED`, `POLICY_DENIED`, `POLICY_BUNDLE_STALE`, `DRIFT_ESCALATION`, `APPROVAL_REQUIRED`, `INTENT_MISMATCH`, `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `MALFORMED_REQUEST`, `TOKEN_TOO_LARGE`, `UPSTREAM_ERROR`, `VERIFICATION_LIMIT_EXCEEDED`.
+`OK`, `TOKEN_INVALID_SIGNATURE`, `TOKEN_EXPIRED`, `TOKEN_NOT_YET_VALID`, `TOKEN_REVOKED`, `ANCESTOR_REVOKED`, `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `DEPTH_EXCEEDED`, `BUDGET_EXHAUSTED_MANDATE`, `BUDGET_EXHAUSTED_CAVEAT`, `LEASE_UNAVAILABLE`, `LEASE_NOT_ACTIVE`, `RATE_LIMITED`, `POLICY_DENIED`, `POLICY_BUNDLE_STALE`, `DRIFT_ESCALATION`, `APPROVAL_REQUIRED`, `INTENT_MISMATCH`, `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `MALFORMED_REQUEST`, `TOKEN_TOO_LARGE`, `UPSTREAM_ERROR`, `VERIFICATION_LIMIT_EXCEEDED`,
+`MANDATE_UNKNOWN`.
 
 > **Superseded on one point by T-020.** `VERIFICATION_LIMIT_EXCEEDED` was added to the list
 > above; the enum was otherwise unchanged. `biscuit-python`'s Datalog engine can exhaust its
@@ -798,6 +799,11 @@ class DecisionRecord(BaseModel):
 > failure escaped as a raw library exception carrying no code, which breaks the rule stated in
 > the next paragraph. See ADR-021 and [`specs/09-decision-record.md`](specs/09-decision-record.md)
 > §2 and §7, which now govern.
+
+> **Superseded on one more point by APICTA-02.** `MANDATE_UNKNOWN` (403) was added: a PEP
+> now serves a pool per mandate, and a token whose mandate has no budget anywhere must be
+> refused with a code that says so. `BUDGET_EXHAUSTED_MANDATE` would claim a pool existed and
+> was spent. See ADR-078 and [`specs/09-decision-record.md`](specs/09-decision-record.md) §7.
 
 Every deny path in the codebase maps to exactly one code. A CI test asserts that every code is reachable and every deny in the source cites one.
 

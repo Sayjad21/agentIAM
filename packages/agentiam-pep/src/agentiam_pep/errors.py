@@ -26,4 +26,17 @@ class ReservationInsufficientError(PepError):
     reason_code = ReasonCode.LEASE_UNAVAILABLE
 
 
-__all__ = ["PepError", "ReservationInsufficientError"]
+class UnknownMandateError(PepError):
+    """The ledger holds no budget for this mandate — APICTA-02.
+
+    Raised by a `LedgerClient` whose `ACQUIRE` found no budget row, so the pool can tell a
+    mandate nobody funded from a ledger it could not reach. The two were one exception
+    (`NoResultFound` and a dead socket both landed in `acquire_failures`), and the pool must
+    treat them oppositely: an outage is retried on the next request, an unknown mandate is
+    refused.
+    """
+
+    reason_code = ReasonCode.MANDATE_UNKNOWN
+
+
+__all__ = ["PepError", "ReservationInsufficientError", "UnknownMandateError"]

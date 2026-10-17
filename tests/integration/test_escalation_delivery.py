@@ -86,9 +86,11 @@ async def _refused_payment(engine: AsyncEngine) -> tuple[uuid.UUID, str, uuid.UU
     """Drive a real PEP refusal; return the escalation id, the agent's token, mandate, task."""
     mandate_id, task_id = uuid.uuid4(), uuid.uuid4()
     token = _chain(mandate_id, task_id, leaf="agt-bulk-buyer")
+    # The PEP serves the task's own mandate, as a deployed one does since APICTA-02.
     pipeline, _, _ = await a_pipeline(
         caveats=(RequiresApproval(scopes=frozenset({"payment:initiate"})),),
         escalation_sink=LedgerEscalationSink(make_session_factory(engine)),
+        mandate_id=mandate_id,
     )
     result = await pipeline.authorize(
         method="POST",
@@ -142,14 +144,16 @@ async def test_the_pep_accepts_the_elevated_token_up_to_the_grant(
     migrated_engine: AsyncEngine,
 ) -> None:
     """The token is not only verifiable: a PEP with no approval caveat lets it pay."""
-    escalation_id, _, _, _ = await _refused_payment(migrated_engine)
+    escalation_id, _, mandate_id, _ = await _refused_payment(migrated_engine)
     async with await _client(migrated_engine, signed_in_as="kc:tanvir") as tanvir:
         approved = await tanvir.post(
             f"/v1/escalations/{escalation_id}/approve", json={"max_amount": "50000"}
         )
     elevated = approved.json()["elevated_token"]
 
-    pipeline, _, _ = await a_pipeline(granted=Decimal(100000))
+    # The PEP serving the task's mandate: the elevated token spends from that pool and no
+    # other (ADR-075), which since APICTA-02 is checked rather than assumed.
+    pipeline, _, _ = await a_pipeline(granted=Decimal(100000), mandate_id=mandate_id)
     result = await pipeline.authorize(
         method="POST",
         path="/payments",
