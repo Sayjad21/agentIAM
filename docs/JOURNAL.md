@@ -3823,6 +3823,32 @@ again; the agent printed the payment id. Found in passing: Ryuk, testcontainers'
 reach the Docker socket under SELinux on this host; `TESTCONTAINERS_RYUK_PRIVILEGED=true` fixes it
 without disabling the reaper.
 
+### APICTA-05 · A live agent, a model that would not be fooled, and two numbers on screen
+
+The agent itself was small: `AgentIAM.call` from APICTA-03 for every action, the policy
+compiler's LLM client for the model, one JSON action per turn, running as the doc reader. The
+work was in keeping the transcript honest, and the running system supplied the reasons.
+
+The ticket expected to print "the 0.43 ms-class number" from the decision record. Probing first:
+the deployed PEP records 0.8–2.0 ms for that refusal when warm and 11.7 ms on the first request
+after idle — `latency_us` spans all of `authorize()` in a container, not the in-process
+`decide()` the 0.43 ms describes. `DEMO.md` beat 3 had promised *"Denied in 0.4 ms"* beside a
+latency panel that shows the recorded figure. The agent prints the record's number; beat 3 says
+~1–2 ms; gap 35 asks where the millisecond goes.
+
+The same probe read the refusal's explanation: *"block 0's scope_subset caveat refused it"*.
+Block 0 is the authority block; the doc reader's narrowing is in block 1. A depth-2 agent's
+ceiling read *"block 3"* on a chain with three blocks. `block_index` is the caveat's position in
+a flattened list, printed as a block — gap 36, filed, and the agent prints the caveat kind only.
+
+Then the model. Shown the poisoned invoice, `gemini-3.5-flash-lite` summarized it and paid
+nothing, twice. Had the transcript said "the PEP refused the injected payment", it would have
+claimed a test that never ran. It says *"the model resisted the injection"*, and the forced
+attempt that follows is labelled as the script's. The scripted model — offline, and the fallback
+measured with a deliberately invalid key — obeys the injection, and every step it chooses reads
+*scripted model*: a first version printed "model →" for scripted steps, which a reader would
+take for the live model's choice.
+
 ### CI's first run in days, and one `None` that meant two things
 
 The first CI run after the billing block lifted passed eight of nine jobs and failed CH-01:

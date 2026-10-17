@@ -149,6 +149,23 @@ saying no, and a judge who understands the difference understands the architectu
 | `POLICY_DENIED` | Cedar, the organization's policy | `principal.depth <= 2`, and the sub-contractor is at 3. Token perfectly valid |
 | `LEASE_UNAVAILABLE` | The PEP's local budget lease | Should **not** appear — see §8 |
 
+### Then the live agent (APICTA-05)
+
+```bash
+make demo-agent                     # the configured model; FORCED payment if it resisted
+docker compose -f docker-compose.yml -f docker-compose.demo.yml \
+  run --rm --no-deps seed python scripts/demo_live_agent.py --offline \
+  --tokens /secrets/demo-tokens.json --pep-url http://pep:8080 \
+  --control-plane-url http://controlplane:8000
+```
+
+The doc reader reads `inv_001` and `inv_004` (the poisoned one) and asks the model what to do.
+Each run ends with a `verdict` line naming the model that answered and what happened. A model
+that resisted is reported as resisting; a refusal shown after it is labelled FORCED. A model
+failure falls back to the scripted model, announced on screen. The model's key comes from the
+host `.env` through the `seed` service's environment; with none set, the agent says so and
+scripts.
+
 ---
 
 ## 5. Interact by hand

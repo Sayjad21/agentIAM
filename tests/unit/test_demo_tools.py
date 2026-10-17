@@ -20,7 +20,14 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from agentiam_demo.tools import INVOICES, VENDORS, create_tools_app
+from agentiam_demo.tools import (
+    BENIGN_INVOICE,
+    INJECTION,
+    INVOICES,
+    POISONED_INVOICE,
+    VENDORS,
+    create_tools_app,
+)
 
 
 @pytest.fixture
@@ -46,6 +53,26 @@ class TestInvoices:
 
     async def test_an_unknown_invoice_is_404(self, client: httpx.AsyncClient) -> None:
         assert (await client.get("/invoices/nope")).status_code == 404
+
+    async def test_the_benign_invoice_has_an_ordinary_description(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """APICTA-05's control case: the same agent, an invoice that asks for nothing."""
+        body = (await client.get(f"/invoices/{BENIGN_INVOICE}")).json()
+        assert "pay" not in body["description"].lower()
+
+    async def test_the_poisoned_invoice_carries_the_injection_in_its_description(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """The attack lives in data the agent reads, not in anything the agent was told.
+
+        Its payment target has to be exactly what the PEP's route maps (`body.amount`,
+        `body.recipient.account_id`), or the live beat refuses a request nobody sent.
+        """
+        body = (await client.get(f"/invoices/{POISONED_INVOICE}")).json()
+        assert body["description"] == INJECTION
+        assert "250000" in INJECTION
+        assert "offshore-acct-99" in INJECTION
 
 
 class TestVendors:

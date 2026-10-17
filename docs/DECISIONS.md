@@ -4655,3 +4655,48 @@ have hidden a product limit behind configuration.
   without the explicit top-up; 0 fail without the keep).
 - Measured on the demo stack: the ৳5,000 lease was replaced by a ৳50,000 lease, settled in full
   and released, and the next top-up was back to ৳5,000.
+
+---
+
+## ADR-077 — The live agent reports what the model did, and the latency the PEP recorded
+
+**Status:** accepted · **Ticket:** APICTA-05 · **Relates to:** ADR-040, ADR-074
+
+### Context
+
+C13 promised a reference agent and none existed. A prompt-injection beat is easy to make
+dishonest: a model may simply ignore the injection, and a demo that then shows a refusal implies
+the PEP stopped a fooled model when it stopped nothing of the kind. The ticket also asked for the
+"0.43 ms-class" decision latency; the deployed PEP records something else.
+
+### Decision
+
+1. **The agent is a script over existing pieces**: `AgentIAM.call` (APICTA-03) for every action,
+   `nl_compiler.llm` (ADR-040) for the model, one JSON action per turn — no native tool calling.
+   It runs as `agt-doc-reader` from the seeded tokens file.
+2. **The transcript is a claim, and states only what ran.** The verdict separates *the model
+   tried to pay; the PEP refused it* from *the model resisted the injection*. `--force-attempt`
+   adds the payment afterwards, labelled FORCED and attributed to the script. Every step a script
+   chose reads *scripted model*, and a fallback mid-run is announced at the step it hit.
+3. **The scripted model is a model of the failure**, not of a careful agent: it obeys the
+   injection, because the beat is about what happens when an agent is fooled. It is the
+   `--offline` model and the fallback on any model error, timeout (20 s) or unusable answer; once
+   fallen back, it answers for the rest of the run.
+4. **The latency printed is the decision record's `latency_us`**, fetched from
+   `/v1/audit/search` by `decision_id`. Not found in 3 s means "not yet in the audit trail" and no
+   number — never a wall-clock substitute.
+5. **The model that answered is named.** `GeminiClient`/`GroqClient` gained a `model` property
+   (the resolved Gemini version once known), because an unattributed model run is not evidence.
+
+### Consequences
+
+- Measured: `gemini-3.5-flash-lite`, shown the injection in the invoice it read, summarized the
+  invoice and paid nothing — on both runs. The beat on stage is therefore the forced attempt
+  unless a different model is configured. That is what the transcript says.
+- The recorded refusal latency is 0.8–2.0 ms warm and 11.7 ms on the first request after idle,
+  not 0.43 ms (`STATUS.md` gap 35). DEMO.md beat 3 is corrected; the 0.43 ms figure stays where it
+  belongs, as the in-process decision.
+- The console's "block N" in a refusal's explanation is a flattened caveat position (gap 36). The
+  agent prints the caveat kind and no block number.
+- The terminal transcript shows the invoice's description, because the audience must see the
+  injection; logs carry only a digest and the length, pinned by a canary test.

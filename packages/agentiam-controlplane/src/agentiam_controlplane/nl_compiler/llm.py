@@ -217,6 +217,11 @@ class GroqClient:
         self._max_retries = max_retries
         self._sleep = sleep or asyncio.sleep
 
+    @property
+    def model(self) -> str:
+        """The model this client asks for, for attributing what it produced."""
+        return self._model
+
     async def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
         """Generate JSON for `prompt`, constrained to `schema`.
 
@@ -385,6 +390,11 @@ class GeminiClient:
         self._sleep = sleep or asyncio.sleep
         #: What the alias resolved to on the last successful call, for attribution.
         self._resolved_model: str | None = None
+
+    @property
+    def model(self) -> str:
+        """What the alias resolved to on the last successful call, or the alias before one."""
+        return self._resolved_model or self._model
 
     async def generate_structured(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
         """Generate JSON for `prompt`.

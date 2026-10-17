@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down demo-up demo-seed demo-conc demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
+.PHONY: help install up down demo-up demo-seed demo-agent demo-conc demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
         test-integration \
         test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
         benchmarks evidence
@@ -53,6 +53,12 @@ demo-tamper: ## Edit one audit record so Verify chain turns red (demo only; undo
 
 demo-untamper: ## Restore the record demo-tamper edited, so Verify chain is green again
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/demo_tamper.py --undo
+
+# APICTA-05. The live LLM agent reads a benign invoice and a poisoned one through the PEP as
+# agt-doc-reader. `--force-attempt` sends the poisoned payment itself if the model resisted,
+# labelled FORCED on screen, so the refusal is shown either way. Run after demo-seed.
+demo-agent: ## A live LLM agent meets a prompt injection; the PEP refuses what its token never held
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/demo_live_agent.py --tokens /secrets/demo-tokens.json --pep-url http://pep:8080 --control-plane-url http://controlplane:8000 --force-attempt
 
 demo-down: ## Stop the demo stack, keeping volumes
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml down

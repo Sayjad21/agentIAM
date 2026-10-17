@@ -15,11 +15,11 @@ than none.
 |---|---|
 | **Tickets** | **49 of 53 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 8 deferred · 61 defined (`PLAN.md` §9) |
 | **Milestones** | Everything through hardening (T-051…T-056) is complete. Demo and submission (T-057…T-061) is in progress |
-| **Tests** | 3,208 collected. `make check` runs 2,860, all passing; the other 348 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
+| **Tests** | 3,236 collected. `make check` runs 2,888, all passing; the other 348 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 76 (ADR-001…ADR-076) |
+| **ADRs** | 77 (ADR-001…ADR-077) |
 
 ---
 
@@ -53,7 +53,7 @@ this page is updated as each ticket closes a gap.
 
 | Ticket | State |
 |---|---|
-| **T-057** Demo scenario scripting | **Partly done.** `make demo-seed` (paced 138-call scenario over a 14-agent tree, one refusal per enforcement layer), `make demo-conc` (three-PEP sibling race), `make demo-tamper` / `demo-untamper`, `make demo-reset`. Not met: `PLAN.md`'s "all 8 beats scripted, each individually runnable" — beats 1, 4, 5, 6 and 7 cannot be shown as written today (`MASTER.md` §7.8) |
+| **T-057** Demo scenario scripting | **Partly done.** `make demo-seed` (paced 138-call scenario over a 14-agent tree, one refusal per enforcement layer), `make demo-conc` (three-PEP sibling race), `make demo-tamper` / `demo-untamper`, `make demo-reset`; `make demo-seed` ends on the escalation the agent completes itself (APICTA-03) and `make demo-agent` runs a live LLM agent into a prompt injection (APICTA-05). Not met: `PLAN.md`'s "all 8 beats scripted, each individually runnable" — beats 1, 4 and 6 cannot be shown as written today (`MASTER.md` §7.8) |
 | **T-058** Failure drills | Not started. `DEMO.md` §2 lists F-1…F-7. F-1/F-2 now have a real recovery: the offline template compiler (T-031) |
 | **T-059** Submission package | Not started. `PLAN.md` §19 |
 | **T-061** OSS release (reduced) | Public repo, README, demo video. Whether the repo goes public is a team decision |
@@ -89,7 +89,6 @@ claim; `MASTER.md` §8 has the talk-track version.
 | What the console or docs say | What is actually true | Gap |
 |---|---|---|
 | A judge sets a budget ceiling for a new task | Every task reuses one hard-coded `DEMO_MANDATE_ID`, because a PEP serves exactly one mandate | 25 |
-| Agents act; the console watches | No AI agent exists. All traffic comes from `scripts/seed_demo.py` and `scripts/demo_concurrency.py` | — |
 | "One URL change to install" (MCP gateway) | No MCP code anywhere; T-041/T-042 deferred | — |
 | Drift detection | Rule-based v0, three of six features, opt-in Ollama profile, NFR-9 never measured. Every demo route has drift `off` | — |
 | "mTLS in place; SPIFFE deferred" (`PLAN.md` T-044) | No TLS between any services | — |
@@ -132,6 +131,8 @@ The full entries are in `JOURNAL.md` under "the fix queue", with their original 
 |---|---|---|
 | 21 | **Re-measure NFR-2.** The harness now matches the deployed PEP (ADR-062), but the committed figures predate that and understate a depth-3 request by ~0.45 ms. A 5 s smoke run at 100 RPS gave enforcement p99 6.8 ms — one run, not evidence | `pb2-breakdown.json` and `nfr2-load.json` re-measured together in one sitting on one host, and `performance.md`'s "predate a change" notes come out |
 | 23 | **One unexplained integration-job failure** at `ec616d1`, not reproduced in four local runs. `pytest-randomly` is not installed, so `-p no:randomly` does nothing | If it recurs, read the failing test's name from the Actions log first |
+| 35 | **The deployed PEP's recorded decision latency is ~1–2 ms, not the 0.43 ms in-process figure.** `latency_us` spans `authorize()` steps 1–7. Measured on the demo stack (APICTA-05): warm, a scope refusal records 0.8–2.0 ms and an allowed read 1.1–2.6 ms; the first request after idle, 11.7 ms. T-053's 145 µs `decide()` + 209 µs `verify()` is the in-process benchmark and does not include extraction, chain-identity parsing, principal resolution or a containerized host. `DEMO.md` beat 3 said *"Denied in 0.4 ms"* with the latency panel visible, which shows the recorded number | A presenter quoting 0.4 ms beside a panel reading 1.7 ms | Profile where the deployed millisecond goes — APICTA-08, which re-measures the hot path anyway |
+| 36 | **The console names the wrong block for a failing caveat.** `CaveatRef.block_index` is the caveat's position in the flattened list `token_caveats()` returns, and `explain()` prints it as *"block N"*. Measured live: the doc reader's scope refusal reads *"block 0's scope_subset caveat"* — block 0 is the authority block, and the caveat sits in block 1 — and a depth-2 settlement agent's ceiling reads *"block 3"* on a chain with blocks 0–2 | The drawer points an operator at the wrong delegation step. The reason code and caveat kind are right | Carry the block index through `token_caveats()` (one block per caveat group), or print the caveat kind without a block number |
 | 30 | **No demo beat shows role discrimination.** Both role-conditioned forbids are enforced, but every agent that can reach `payment_api` holds a senior role | A seeded agent with `payment:initiate` and no senior role is refused with `POLICY_DENIED`, and `DEMO.md` points at it |
 | 33, 34 | Operational, no fix intended: demo tokens expire 8 h after seeding; re-seeding a used volume leaves older generations in the identity tree | Documented in `RUNNING.md` |
 

@@ -35,7 +35,7 @@ AgentIAM addresses three things nobody currently enforces correctly:
 **The core is built; the demo and submission are in progress.** Tokens, attenuation, the
 lease ledger, Cedar policy, the PEP, revocation, escalation, the audit chain, the console,
 observability, and the red-team, chaos, load and security suites are done — 49 of 53 in-scope
-tickets, ten specs, 76 ADRs, ~3,200 tests. What is left, and what is presented as working but
+tickets, ten specs, 77 ADRs, ~3,200 tests. What is left, and what is presented as working but
 is not yet wired, is in [`docs/STATUS.md`](docs/STATUS.md). The one-page overview is
 [`docs/MASTER.md`](docs/MASTER.md).
 

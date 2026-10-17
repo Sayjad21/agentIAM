@@ -57,7 +57,7 @@ fallback) and T-059 (submission package).
 | APICTA-04 | DONE — verified locally and live on the demo stack; CI pending |
 | APICTA-01 | DONE — Parts A–D; gap 26 and T-031 closed; beat 5 live online and offline. CI green at Part C |
 | APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
-| APICTA-05 | TODO |
+| APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
 | APICTA-02 | TODO |
 | APICTA-06 | TODO |
 | APICTA-08 | TODO |
@@ -364,7 +364,11 @@ Then STATUS.md §3 row deleted; `MASTER.md` C8 and §7.4.
 
 ## APICTA-05 — A real LLM agent, and a prompt injection it cannot act on
 
-- **Status:** TODO
+- **Status:** DONE (ADR-077). Local: `make check`; live on the demo stack with
+  `gemini-3.5-flash-lite` (it resisted the injection; the forced attempt was refused), with
+  `--offline`, and with a broken key (automatic fallback, labelled). Two findings filed rather
+  than fixed: the recorded latency is ~1–2 ms, not the "0.43 ms-class" number this ticket
+  expected (gap 35), and the console's "block N" is a caveat position (gap 36)
 - **Maps to:** C13; STATUS.md §3 "Agents act; the console watches" row
 - **Depends on:** APICTA-03 (`AgentIAM.call`)
 

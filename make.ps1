@@ -16,7 +16,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-conc', 'demo-down', 'demo-reset',
+    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-agent', 'demo-conc', 'demo-down', 'demo-reset',
                  'demo-tamper', 'demo-untamper',
                  'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
@@ -66,6 +66,7 @@ switch ($Target) {
             'security'         = 'Run bandit, pip-audit, the SBOM check, and the secret-scan test'
             'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
             'demo-seed'        = 'Drive the demo scenario through a running stack (T-057)'
+            'demo-agent'       = 'A live LLM agent meets a prompt injection (APICTA-05)'
             'demo-conc'        = 'Three siblings, three PEPs, one pool, all at once'
             'demo-reset'       = 'Wipe all demo data and bring the stack back up empty'
             'demo-tamper'      = 'Edit one audit record so Verify chain turns red (demo only)'
@@ -182,6 +183,17 @@ switch ($Target) {
                       '--pep-url', 'http://pep:8080',
                       '--control-plane-api-url', 'http://controlplane:8000',
                       '--await-approval', '600')
+    }
+    'demo-agent' {
+        # The live LLM agent and the poisoned invoice. --force-attempt sends the payment itself,
+        # labelled FORCED, if the model resisted the injection.
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
+                      'python', 'scripts/demo_live_agent.py',
+                      '--tokens', '/secrets/demo-tokens.json',
+                      '--pep-url', 'http://pep:8080',
+                      '--control-plane-url', 'http://controlplane:8000',
+                      '--force-attempt')
     }
     'demo-conc' {
         # The sibling race, live. Every run is a fresh mandate - one run spends the pool -

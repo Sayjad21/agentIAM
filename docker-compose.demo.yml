@@ -72,6 +72,13 @@ services:
       - demo-secrets:/secrets
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agentiam}:${POSTGRES_PASSWORD:-agentiam}@postgres:5432/${POSTGRES_DB:-agentiam}
+      # `make demo-agent` (APICTA-05) runs the live LLM agent in this container, so it needs the
+      # same model selection the control plane gets, for the same reason: `.env` is on the host
+      # and `llm.py`'s `load_dotenv()` cannot see it from in here. Empty means the agent says
+      # so and uses its scripted model.
+      AGENTIAM_LLM_BACKEND: ${AGENTIAM_LLM_BACKEND:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
     command: ["python", "scripts/seed_demo.py", "--out", "/secrets"]
     depends_on:
       bootstrap:

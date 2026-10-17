@@ -13,7 +13,7 @@ Every beat is scripted, deterministic, and individually runnable. `make demo-res
 | 0 | Setup | 0:00–0:30 | Console open, identity tree empty, Grafana on a second screen |
 | 1 | Human approves a task | 0:30–1:30 | "Procure 500 units, budget ৳500,000." Root token minted. Intent hash shown. |
 | 2 | Delegation tree grows | 1:30–2:30 | Root spawns 3 sub-agents, animated. Each node's scopes visibly smaller. Biscuit block ids shown. |
-| 3 | Least privilege enforced | 2:30–3:30 | The doc-reader attempts a payment. **Denied in 0.4 ms**, naming the exact caveat. Latency panel visible. |
+| 3 | Least privilege enforced | 2:30–3:30 | `make demo-agent`: a live model reads an invoice carrying a prompt injection and the doc-reader's payment is refused (`SCOPE_ATTENUATED_AWAY`), naming the caveat — whether the model was fooled or the script forced the attempt, the transcript says which. Latency panel visible: **~1–2 ms as the PEP records it** (the 0.43 ms figure is the in-process decision, not this number — `STATUS.md` gap 35). |
 | 4 | **Judge sets the ceiling** | 3:30–5:00 | Hand over the keyboard. They set ৳50,000. Agent spends up to the line across 3 concurrent sub-agents and hard-stops. **Invariant checker green throughout.** |
 | 5 | **Judge writes a policy in English** | 5:00–6:30 | Their sentence → Cedar → generated tests → pass/fail table → decision diff → activate → enforced on the next call. |
 | 6 | Goal drift | 6:30–7:30 | Inject an instruction redirecting the agent. Drift score crosses the band. **Escalation raised to a human, not a silent block.** |
