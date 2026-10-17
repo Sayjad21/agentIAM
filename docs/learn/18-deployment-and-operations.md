@@ -166,11 +166,10 @@ python scripts/run_invariant_checker.py --once # OK  1 budgets, all invariants h
 
 Stated plainly, because a reviewer will ask:
 
-- **One PEP serves one mandate.** The lease pool binds a mandate at construction. Fine for a
-  demo; a real multi-tenant deployment needs one process per mandate or a multi-mandate pool.
-- **No bundle publisher.** The policy bundle is signed at bootstrap and loaded once at boot, so
-  hot reload and the staleness guard are unreachable in the deployment. A bundle changes only by
-  restarting.
+- **A PEP serves a pool per mandate** (APICTA-02). Mandates are issued by an approver and
+  announced; a PEP also creates a pool the first time a mandate's token arrives.
+- **Policy is published, not just loaded.** The control plane signs and publishes bundles; every
+  PEP hot-reloads them (Redis push plus a 30 s pull) and refuses a stale one (APICTA-01).
 - **A partitioned PEP cannot shut down gracefully**, and a timeout does not bound it — the
   cancellation lands inside the database driver's greenlet bridge while the socket is dead.
   Measured stuck for five minutes against a five-second bound. Availability, not correctness.

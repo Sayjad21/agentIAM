@@ -262,4 +262,4 @@ repudiation; TM-28 is disclosure and elevation), so the rows below overlap rathe
 
 The three accepted risks — bearer replay (TM-01), slow-drift evasion (TM-11), and
 agent-reported amounts (TM-23) — are the ones to raise voluntarily in the pitch. Each is real,
-each has a bound, and stating them is what makes the other twenty-four believable.
+each has a bound, and stating them is what makes the other twenty-five believable.

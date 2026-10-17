@@ -172,7 +172,8 @@ Three threat-model entries cite scenarios in this list as coverage.
 
 ### GAP-G / GAP-H — state as limitations, do not fix for the paper
 
-- **GAP-G** (STATUS gap 25): a deployed PEP serves exactly one mandate — `LeasePool` binds
+- **GAP-G** (STATUS gap 25, *closed by APICTA-02 on 2026-10-17 — a PEP now serves a pool per
+  mandate; kept below as written*): a deployed PEP serves exactly one mandate — `LeasePool` binds
   `mandate_id` at construction. A deployment limitation, not a claim-breaker: the contribution
   is *several PEPs sharing one mandate's pool*, which is exactly what is supported. **State it.**
 - **GAP-H** (STATUS gap 21): a partitioned PEP cannot shut down and no timeout bounds it —

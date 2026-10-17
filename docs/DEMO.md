@@ -6,7 +6,7 @@
 
 ## 1. Demo Runbook — 8 Beats in 10 Minutes
 
-Every beat is scripted, deterministic, and individually runnable. `make demo-reset` returns to a known state in under 10 seconds.
+Every beat has a scripted path; `MASTER.md` §7.8 says which can be shown as written today (beat 6 cannot, beat 1 only partly). `make demo-reset` returns to a known state in under 10 seconds.
 
 | # | Beat | Time | What the judge sees |
 |---|---|---|---|

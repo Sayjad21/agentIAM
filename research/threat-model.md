@@ -365,8 +365,8 @@ Stated separately so they cannot be read as guarantees.
 | **N4** | The agent's reported spend is trustworthy | **No.** Over-reporting is clamped by G2; under-reporting where the PEP cannot cross-check is flagged, not prevented | TM-23, accepted risk |
 | **N5** | A confused deputy is prevented | **Partially.** A higher-privileged agent induced to act is bounded by *its own* authority, which may exceed what the requester should reach | TM-05, partial |
 | **N6** | Clock skew is handled | **Partially.** Safety depends on actual skew staying within the configured margin `S`, with `ttl > 2S`. Outside `S`, budget can be re-issued while still held | TM-22, partial |
-| **N7** | Policy bundle staleness is enforced in production | **No** — unreachable on the deployed path (P9 residual above) | `docs/STATUS.md` gap 26 |
-| **N8** | A deployed PEP enforces budget for concurrent mandates | **No.** `LeasePool` binds one `mandate_id` at construction; a deployed PEP serves exactly one mandate at a time | `docs/STATUS.md` gap 25 |
+| **N7** | Policy bundle staleness is enforced in production | **No** — unreachable on the deployed path (P9 residual above). *Updated 2026-10-17: **yes** since APICTA-01 — bundles are published, hot-reloaded and refused when stale* | `docs/STATUS.md` gap 26 (closed) |
+| **N8** | A deployed PEP enforces budget for concurrent mandates | **No.** `LeasePool` binds one `mandate_id` at construction; a deployed PEP serves exactly one mandate at a time. *Updated 2026-10-17: **yes** since APICTA-02 — a pool per mandate (spec 04 §4.8)* | `docs/STATUS.md` gap 25 (closed) |
 | **N9** | Agent roles are attested | **No.** Roles come from a static JSON map of delegation path → role, read at boot. They do not rotate, expire, or attest; adding an agent needs a file edit and a restart | `docs/STATUS.md` gap 28, ADR-069 |
 | **N10** | Timing side channels on deny reasons are closed | **Partially.** Response shape is uniform; a measured timing difference between deny paths is reported rather than claimed absent | TM-16 |
 

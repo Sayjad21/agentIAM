@@ -94,10 +94,12 @@ neither an AgentIAM defect, worked around with
   does not require; add it if a cluster deployment needs human OIDC login.
 - **Ollama.** Same reasoning as `docker-compose.demo.yml`'s opt-in profile: the LLM
   backend defaults to hosted inference (ADR-040), and a model pull is several GB.
-- **A bundle-publishing service.** Same limitation as everywhere else in this project
-  (ADR-039): the PEP loads its policy bundle once at boot. Updating it means restarting
-  the `pep` Deployment with a new Secret, not a live push.
+- **Live redeploy since APICTA-01/02.** The manifests now wire what policy publication and
+  mandate announcements need (the bundle-signing key, Redis and the control-plane URL on the
+  PEP), but have not been redeployed to a `kind` cluster since those tickets — verified on the
+  compose demo stack only.
 - **TLS / Ingress.** Out of scope for a demo cluster; `kubectl port-forward` or a
   cluster-specific `Ingress`/`Service type: LoadBalancer` is left to the deployer.
-- **Multi-mandate PEP.** Unchanged from Parts 1–2 (gap 25): one `pep` Deployment
-  enforces budget for exactly one mandate.
+- **Multi-mandate PEP** is no longer a limitation (gap 25, closed by APICTA-02): one `pep`
+  Deployment serves a pool per mandate; `AGENTIAM_PEP_MANDATE_ID` names only the one it primes
+  at boot.

@@ -53,8 +53,8 @@ fallback) and T-059 (submission package).
 
 | Ticket | Status |
 |---|---|
-| APICTA-07 | DONE — verified locally; CI pending (Actions billing block) |
-| APICTA-04 | DONE — verified locally and live on the demo stack; CI pending |
+| APICTA-07 | DONE — verified locally; CI green on `apicta-sprint` (every later run contains it, latest 39051901080) |
+| APICTA-04 | DONE — verified locally and live on the demo stack; CI green on `apicta-sprint` (every later run contains it, latest 39051901080) |
 | APICTA-01 | DONE — Parts A–D; gap 26 and T-031 closed; beat 5 live online and offline. CI green at Part C |
 | APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
@@ -71,7 +71,7 @@ commit.
 ## APICTA-07 — Drift scoring off the event loop, with a bounded timeout
 
 - **Status:** DONE (ADR-071). Local: `make check`, `make test-integration`, e2e and `make chaos`
-  green. CI not yet run
+  green. CI green on `apicta-sprint` (every later run contains it, latest 39051901080)
 - **Maps to:** gap 22; STATUS.md §3 "Drift detection" row (partly)
 
 **Problem statement.**
@@ -139,7 +139,7 @@ Then STATUS.md: close gap 22 (move its row to JOURNAL's appendix).
 ## APICTA-04 — Console kill-switch and BDT/USD display
 
 - **Status:** DONE (ADR-072). Local: `make check`, `make test-integration`; live on
-  `make demo-up`. CI not yet run
+  `make demo-up`. CI green on `apicta-sprint` (every later run contains it, latest 39051901080)
 - **Maps to:** C9 (`MASTER.md` §2); STATUS.md §3 "Revoking an agent from the console" row
 
 **Problem statement.**

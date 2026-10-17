@@ -3943,7 +3943,7 @@ The second snapshot, also left as written. Current figures are in `STATUS.md` §
 
 ---
 
-## Appendix — closed gaps, as `STATUS.md` §3 recorded them
+## Appendix — closed gaps, as `STATUS.md` recorded them (§4 since the 2026-10-16 consolidation)
 
 Gap numbers are cited throughout the specs, ADRs and commit messages, so the closed ones
 are kept here with their original findings. Open gaps stay in `STATUS.md` §4.

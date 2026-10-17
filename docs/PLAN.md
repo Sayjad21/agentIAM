@@ -1610,6 +1610,8 @@ Write four, one per judge archetype:
 | 8 | Chain of custody | 8:15–9:30 | "Who authorized this payment?" → full chain to the human and the permitting caveat. Verify the audit chain live. Then tamper with a record and watch verification catch it. |
 | 9 | Close | 9:30–10:00 | Three numbers, the OSS repo, the APICTA export story. |
 
+> **Superseded on one point by APICTA-05.** Beat 3's "0.4 ms" is the in-process decision; the deployed PEP records ~1–2 ms for the same refusal, which is the number the latency panel shows (`STATUS.md` gap 35). [`DEMO.md`](DEMO.md) beat 3 now says so.
+
 **Beats 4, 5, and 8 are the ones they will remember.** Beat 4 in particular: a judge setting a limit with their own hands and watching a system refuse to exceed it is a fundamentally different experience from watching a slide about it.
 
 ### Failure drills (rehearse all of them)

@@ -269,7 +269,7 @@ the rest.
 | `SCOPE_NOT_GRANTED`, `SCOPE_ATTENUATED_AWAY`, `TOOL_DENIED`, `ARG_PREDICATE_FAILED`, `INTENT_MISMATCH`, `DEPTH_EXCEEDED`, `POLICY_DENIED`, `MANDATE_UNKNOWN` | **403** | *You are who you say, and you may not do this.* A fresh token of the same authority changes nothing |
 | `BUDGET_EXHAUSTED_MANDATE`, `BUDGET_EXHAUSTED_CAVEAT`, `LEASE_UNAVAILABLE`, `RATE_LIMITED` | **429** | Exhaustion, not authority. The request may succeed later — after a top-up, a refund, or a new mandate — and 429 is the only standard code that says *not now* without saying *never* |
 | `APPROVAL_REQUIRED`, `DRIFT_ESCALATION` | **403** | Not permitted **yet**. The escalation id travels in the body, because a client that cannot see it cannot follow up |
-| `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `POLICY_BUNDLE_STALE`, `VERIFICATION_LIMIT_EXCEEDED` | **503** | *We could not decide.* Distinct from a denial: the fix is operational, and a client is right to retry |
+| `CONTROL_PLANE_UNAVAILABLE_FAIL_CLOSED`, `POLICY_BUNDLE_STALE`, `VERIFICATION_LIMIT_EXCEEDED`, `LEASE_NOT_ACTIVE` | **503** | *We could not decide.* Distinct from a denial: the fix is operational, and a client is right to retry |
 | `UPSTREAM_ERROR` | **502 / 504** | Not a decision at all — §6 |
 
 ### 11.1 Why revocation is not its own status

@@ -225,6 +225,10 @@ Summarised from [`STATUS.md`](STATUS.md) §4, which has the impact and the fix f
 | 6 | Assumption A1 (biscuit scopes block facts) is only partly pinned by a test |
 | 14 | Coverage is reported but not gated |
 | 12 | No HTTP trailer support in any layer (httpx, Starlette, uvicorn) |
+| 4 | `mutmut` has never been run against the attenuation and caveat modules |
+| 10 | `test_budget_schema.py` duplicates the shared integration fixtures |
+| 35 | The deployed PEP records ~1–2 ms per decision, not the 0.43 ms in-process figure |
+| 36 | The console's "block N" in a refusal is a caveat's position, not its block |
 | — | Bearer replay (TM-01) — an accepted risk |
 
 Closed recently, and worth knowing about: **gap 27** (nothing ran `reap()` — the control
@@ -483,7 +487,7 @@ Run `demo-reset` before the real presentation.
 
 | Beat | Today |
 |---|---|
-| 1 Human approves a task | Seeded by script. The console can start a task, but every task shares one mandate |
+| 1 Human approves a task | **Partly** — a signed-in approver starts a task on `/run`, issued its own mandate; the intent hash is not displayed. `demo-seed` seeds the scripted one |
 | 2 Tree grows | **Yes** — the paced `demo-seed` |
 | 3 Least privilege | **Yes** — `SCOPE_ATTENUATED_AWAY`, with the caveat named; `make demo-agent` shows it as a live model's prompt injection. Recorded latency ~1–2 ms, not 0.4 ms (gap 35) |
 | 4 Judge sets the ceiling | **Yes** — sign in as an approver, start a task on `/run` with a ceiling: it is issued its own mandate whose pool *is* that ceiling, shown as its own gauge on `/budgets` (measured live: ৳15,000 task, ৳1,000 spent on its own row). The concurrent hard-stop half is `make demo-conc` |

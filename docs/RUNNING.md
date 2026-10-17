@@ -55,8 +55,8 @@ Where things listen on the host:
 | Postgres | localhost:5433 | `agentiam` / `agentiam` |
 | Redis | localhost:6379 | Revocation push channel |
 
-The order in the compose file is not cosmetic: the PEP binds one mandate at boot and primes
-its lease pool there, so `seed` has to have run first or every budgeted request is refused
+The order in the compose file is not cosmetic: the PEP primes its boot mandate's lease pool at
+startup (other mandates' pools are created on first use or announcement, APICTA-02), so `seed` has to have run first or every budgeted request is refused
 until a top-up. `tests/unit/test_demo_compose.py` pins that ordering.
 
 ### Confirm it is really enforcing

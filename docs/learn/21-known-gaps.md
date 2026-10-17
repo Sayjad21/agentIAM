@@ -13,29 +13,28 @@ This is the plain-language version.
 
 ## 1. The one architectural hole that matters
 
-**There is no issuance service.**
+**Roles are the one thing nobody issues.**
 
-Nothing in the repository publishes mandates or policy bundles at runtime. The bundle is signed
-once at bootstrap and loaded once at boot. That single absence shows up as four separate
-symptoms, and it is worth seeing them as one thing:
+This section used to read "there is no issuance service", and that absence showed up as four
+gaps. Three are closed: the control plane publishes signed policy bundles that every PEP
+hot-reloads and refuses when stale (APICTA-01), and it issues mandates — rows a budget must
+reference, announced to every PEP (APICTA-02). What remains:
 
 | Symptom | Consequence |
 |---|---|
-| Policy staleness and hot reload are unreachable | A bundle changes only by restarting the PEP |
-| Agent roles are static configuration | Adding or re-roling an agent needs a file edit and a restart |
-| `budgets.mandate_id` has no foreign key | A budget row can reference a mandate that was never issued |
-| Rollback protection is real but never exercised | The serial check works; nothing publishes a second bundle to test it against |
+| Agent roles are static configuration | Adding or re-roling an agent needs a file edit and a restart (gap 28) |
 
-If you were to build one more thing, build this. It closes four gaps at once.
+If you were to build one more thing, build attested roles.
 
 ---
 
 ## 2. Deployment shape
 
-**One PEP serves exactly one mandate.** The lease pool binds a mandate at construction. Fine for
-a demo, where one task runs at a time. A real multi-tenant deployment needs either one process
-per mandate or a multi-mandate pool — and changing it touches the money hot path and the
-settle-before-release ordering, so it is a ticket of its own rather than a tweak.
+**A PEP serves a pool per mandate** (APICTA-02, spec 04 §4.8). This used to read "one PEP serves
+exactly one mandate": the lease pool bound a mandate at construction, and the pipeline never
+compared a token's mandate with it. Changing it touched the money hot path and the
+settle-before-release ordering, so it was done as a ticket of its own, in three parts, with a
+full integration and chaos run.
 
 **A partitioned PEP cannot shut down gracefully.** Releasing a lease needs the ledger, and a
 timeout does not help: the cancellation lands inside the database driver's greenlet bridge while

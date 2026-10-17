@@ -195,12 +195,10 @@ class ServiceSettings:
     #: optimisation — "a deployment could delete the Redis channel entirely and still be
     #: correct, only slower. The reverse is not true."
     control_plane_url: str
-    #: **The PEP is scoped to one mandate.** `LeasePool` binds a `mandate_id` at
-    #: construction and `Pipeline` reserves without one, so a single process enforces
-    #: budget for exactly one mandate. Measured against the constructors, not assumed.
-    #: Everything else the PEP does — verification, revocation, policy, drift, audit — is
-    #: mandate-agnostic; only the lease pool is bound. Stated as a known limitation in
-    #: ADR-056 and `STATUS.md` rather than hidden behind a plausible default.
+    #: **The boot mandate**, whose pool is primed in the lifespan. Since APICTA-02 a PEP serves a
+    #: pool per mandate (`LeasePoolRegistry`): any other mandate's pool is created when the
+    #: control plane announces it or when its first token arrives (ADR-078). Until then this
+    #: was the *only* mandate a process could enforce budget for (gap 25, ADR-056).
     mandate_id: uuid.UUID
     root_public_keys_hex: tuple[str, ...]
     policy_bundle_path: Path

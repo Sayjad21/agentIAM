@@ -81,7 +81,7 @@ packages/
   agentiam-sdk/           what agent developers import
   agentiam-pep/           the enforcement point (hot path)
   agentiam-controlplane/  issuance, ledger, policy, revocation, audit, console
-  agentiam-demo/          stub upstream tools for the demo (no AI agent yet)
+  agentiam-demo/          stub upstream tools for the demo (the live LLM agent is scripts/demo_live_agent.py)
 tests/                    unit · property · integration · e2e · security · chaos · perf
 docs/                     plan, specs, status, ADRs, journal, runbooks
 research/                 related work, gap analysis, the lease research plan
