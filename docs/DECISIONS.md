@@ -4844,7 +4844,9 @@ pool that already existed, not once it issues budget.
 ## ADR-081 — Hearing that a mandate exists is not a reason to lease from it
 
 **Status:** accepted · **Ticket:** APICTA-02 (follow-up) · **Supersedes:** spec 04 §4.8's
-"Each PEP's `MandateWatch` answers with `CREATE`" · **Relates to:** ADR-078, ADR-079
+"Each PEP's `MandateWatch` answers with `CREATE`", and with it ADR-079's consequence that "an
+announced mandate is pooled by a PEP before any request for it" — true as measured, and the
+defect · **Relates to:** ADR-078, ADR-079
 
 ### Context
 

@@ -278,10 +278,10 @@ CREATE(mandate):
     ledger unreachable-> remember nothing; the next request schedules CREATE again
 ```
 
-- **The token is the signal.** A pool is created the first time a verified token for its
-  mandate arrives; the token is signed by the root key, so only a minted mandate can make a PEP
-  ask the ledger. The control plane's `mandate:created` event (APICTA-02 Part B) only does this
-  sooner — a PEP that missed it, being down or partitioned, still converges.
+- **The token is the signal, and the only one.** A pool is created the first time a verified
+  token for its mandate arrives; the token is signed by the root key, so only a minted mandate
+  can make a PEP ask the ledger, and it reaches exactly the PEP that will spend from it. The
+  control plane's `mandate:created` event does not create a pool (ADR-081) — see below.
 - **Never on the hot path.** `LOOKUP` does no I/O (`PLAN.md` §3 design rule 1); creation is a
   background task, as a top-up is.
 - **The three outcomes of the first `ACQUIRE` are kept apart.** The ledger client raises

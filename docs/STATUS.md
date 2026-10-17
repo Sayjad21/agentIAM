@@ -4,7 +4,7 @@ What is built, what is left, and what is known to be wrong — current state onl
 lives in [`JOURNAL.md`](JOURNAL.md): every ticket's narrative, the fix queue from the manual
 passes (former `TODO.md`, items 1–34), and every closed gap with its original finding.
 
-**Last updated:** 2026-10-17. Keep this current at every ticket — a stale status page is worse
+**Last updated:** 2026-10-18. Keep this current at every ticket — a stale status page is worse
 than none.
 
 ---
@@ -15,11 +15,11 @@ than none.
 |---|---|
 | **Tickets** | **49 of 53 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 8 deferred · 61 defined (`PLAN.md` §9) |
 | **Milestones** | Everything through hardening (T-051…T-056) is complete. Demo and submission (T-057…T-061) is in progress |
-| **Tests** | 3,319 collected. `make check` runs 2,941, all passing; the other 378 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
+| **Tests** | 3,321 collected. `make check` runs 2,943, all passing; the other 378 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 80 (ADR-001…ADR-080) |
+| **ADRs** | 81 (ADR-001…ADR-081) |
 
 ---
 

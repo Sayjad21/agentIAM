@@ -53,12 +53,12 @@ fallback) and T-059 (submission package).
 
 | Ticket | Status |
 |---|---|
-| APICTA-07 | DONE — verified locally; CI green on `apicta-sprint` (every later run contains it, latest 39051901080) |
-| APICTA-04 | DONE — verified locally and live on the demo stack; CI green on `apicta-sprint` (every later run contains it, latest 39051901080) |
+| APICTA-07 | DONE — verified locally; CI green on `apicta-sprint` (every later run contains it, latest 39059003803) |
+| APICTA-04 | DONE — verified locally and live on the demo stack; CI green on `apicta-sprint` (every later run contains it, latest 39059003803) |
 | APICTA-01 | DONE — Parts A–D; gap 26 and T-031 closed; beat 5 live online and offline. CI green at Part C |
 | APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
-| APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live. CI green on `apicta-sprint` (run 39056894243), after two CH-04 harness fixes its own settlement drain exposed |
+| APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live. Two follow-ups after the parts: two CH-04 harness fixes its own settlement drain exposed, and **ADR-081** — the Part B announcement had every PEP lease from every mandate, starving the one that served it. CI green on `apicta-sprint` (run 39059003803) |
 | APICTA-06 | TODO |
 | APICTA-08 | TODO |
 
@@ -71,7 +71,7 @@ commit.
 ## APICTA-07 — Drift scoring off the event loop, with a bounded timeout
 
 - **Status:** DONE (ADR-071). Local: `make check`, `make test-integration`, e2e and `make chaos`
-  green. CI green on `apicta-sprint` (every later run contains it, latest 39051901080)
+  green. CI green on `apicta-sprint` (every later run contains it, latest 39059003803)
 - **Maps to:** gap 22; STATUS.md §3 "Drift detection" row (partly)
 
 **Problem statement.**
@@ -434,8 +434,8 @@ Then STATUS.md §3 row deleted; `MASTER.md` C13, §3.1 diagram, §7.
   `/readyz` and `agentiam_pep_pool_remaining_bdt{mandate}`. Live: a ৳15,000 task committed
   ৳1,000 on its own row, invariants green. Part A done (ADR-078, spec 04 §4.8): the pipeline spends from the
   token's own mandate's pool, a mandate with no budget is `MANDATE_UNKNOWN`, and a PEP creates a
-  pool when a mandate's first token arrives — the `mandate:created` event in Part B only makes
-  it sooner. Part B done (ADR-079, migration `0010`, gap 7 closed): mandates are rows a budget
+  pool when a mandate's first token arrives, which since ADR-081 is the only thing that creates
+  one. Part B done (ADR-079, migration `0010`, gap 7 closed): mandates are rows a budget
   must reference, issued by an approver through `POST /v1/mandates` and announced to PEPs.
   Deliberately no `total` column on `mandates` — the budget lives on `budgets` rows only
 - **Maps to:** gap 25, gap 7; STATUS.md §3 "A judge sets a budget ceiling for a new task" row
