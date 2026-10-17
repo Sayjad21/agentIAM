@@ -4635,7 +4635,8 @@
     },
     {
       "dependsOn": [
-        "agentiam-core==0.1.0"
+        "agentiam-core==0.1.0",
+        "httpx==0.28.1"
       ],
       "ref": "agentiam-sdk==0.1.0"
     },
