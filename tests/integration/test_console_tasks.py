@@ -93,6 +93,8 @@ async def test_an_approver_s_task_gets_its_own_mandate_and_pool(
     verified = verify(task.root.token, RootKeySet([_KEYS.public_key]), now=NOW)
     assert verified.mandate_id == issued.mandate_id
     assert verified.budget.spend_bdt == Decimal("15000")
+    # Beat 1: the page shows the intent hash the root token binds.
+    assert verified.intent_hash in page.text
 
 
 async def test_a_task_is_not_started_without_a_signed_in_approver(

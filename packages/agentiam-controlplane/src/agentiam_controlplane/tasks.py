@@ -105,12 +105,24 @@ class TaskRecord:
         """The task's own root agent."""
         return self.agents["root"]
 
+    @property
+    def intent_hash(self) -> str:
+        """The intent the root token binds — `create_task` mints with this same function.
+
+        Shown on `/run` because `DEMO.md` beat 1 promises it, and an agent that claims a
+        different job is refused on exactly this value (spec 01 §7).
+        """
+        from agentiam_core.hashing import intent_hash
+
+        return intent_hash(self.description)
+
     def as_dict(self) -> dict[str, object]:
         """A JSON-safe view. Tokens are deliberately omitted — see the module docstring."""
         return {
             "task_id": str(self.task_id),
             "mandate_id": str(self.mandate_id),
             "description": self.description,
+            "intent_hash": self.intent_hash,
             "budget": str(self.budget),
             "scopes": sorted(self.scopes),
             "principal_id": self.principal_id,

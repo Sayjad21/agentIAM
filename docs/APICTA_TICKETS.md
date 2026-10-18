@@ -1,6 +1,6 @@
 # APICTA 2026 Sprint — Tickets
 
-Eight tickets that turn the rows of [`STATUS.md`](STATUS.md) §3 ("presented as working, but not
+Eight tickets — and a ninth, APICTA-09, added when two of them found money-path defects — that turn the rows of [`STATUS.md`](STATUS.md) §3 ("presented as working, but not
 wired") into working features before APICTA (Jakarta, 7–11 December 2026). Every path, line
 number and signature below was read from the code at `96963e2`; re-check a line number before
 editing, since earlier tickets move them.
@@ -62,7 +62,7 @@ fallback) and T-059 (submission package).
 | APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live. Two follow-ups after the parts: two CH-04 harness fixes its own settlement drain exposed, and **ADR-081** — the Part B announcement had every PEP lease from every mandate, starving the one that served it. CI green on `apicta-sprint` (run 39059003803) |
 | APICTA-06 | DONE — `tools/call` through the same pipeline (ADR-082); `make demo-mcp` 9/9 against REST live, and in the `demo-stack` CI job. Not a gateway: `initialize`/`tools/list` unmapped. Gap 37 filed. CI green on `apicta-sprint` (run 39115596127) |
 | APICTA-08 | DONE — tooling, single-host re-measure, comparisons (ADR-083); two-machine split checked across a network boundary. Found gap 38. The two-machine run itself is the human step. CI green on `apicta-sprint` (run 39122293974, #176) |
-| APICTA-09 | DONE — gaps 37 and 38 closed (ADR-084): B3 records ৳9,000 of ৳9,000, the in-flight probe ৳190 of ৳190; unpriced payments refused over REST and MCP |
+| APICTA-09 | DONE — gaps 37 and 38 closed (ADR-084): B3 records ৳9,000 of ৳9,000, the in-flight probe ৳190 of ৳190; unpriced payments refused over REST and MCP. CI green on `apicta-sprint` (run 39124442699, #177) |
 
 Mark `IN_PROGRESS` when starting and `DONE` only after `make check`, the ticket's own
 verification commands and (once CI runs again) a green CI run. Update `STATUS.md` in the same
@@ -607,7 +607,8 @@ Then STATUS.md §5 item 21 and §7 R-2 with whatever the run shows; `MASTER.md` 
   `make chaos` 10/10; `make bench-compare` B3 ৳9,000 of ৳9,000; demo stack `demo-seed` and
   `demo-mcp` 9/9. Step 2's probe found the in-flight path real (৳50 lost of ৳190), so `pool.py`
   changed too. Gap 37 was closed by *reading* a body-mapped route whatever its label rather
-  than refusing non-JSON labels, which would have denied spec 10 §6's form uploads
+  than refusing non-JSON labels, which would have denied spec 10 §6's form uploads. CI green on
+  `apicta-sprint` at `a123237`, all nine jobs (run 39124442699, #177)
 - **Maps to:** STATUS.md gaps 37 and 38; ADR-049; spec 02 §3.2, spec 04 §4.4 and §11, spec 10 §6
 
 **Problem statement.**

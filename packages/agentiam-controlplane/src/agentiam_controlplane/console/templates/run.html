@@ -81,6 +81,7 @@
             <strong>{{ task.description }}</strong>
             <div class="dim mono small">task {{ task.task_id }}</div>
             <div class="dim mono small">mandate {{ task.mandate_id }}</div>
+            <div class="dim mono small" title="The token is bound to this; an agent claiming another job is refused">intent {{ task.intent_hash }}</div>
         </div>
         <div class="task-meta">
             <span>ceiling <strong>{{ task.budget | bdt }}</strong></span>

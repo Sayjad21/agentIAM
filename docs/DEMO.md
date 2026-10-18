@@ -6,7 +6,7 @@
 
 ## 1. Demo Runbook — 8 Beats in 10 Minutes
 
-Every beat has a scripted path; `MASTER.md` §7.8 says which can be shown as written today (beat 6 cannot, beat 1 only partly). `make demo-reset` returns to a known state in under 10 seconds.
+Every beat has a scripted path; `MASTER.md` §7.8 says which can be shown as written today (beat 6 cannot). `make demo-reset` returns to a known state in under 10 seconds.
 
 | # | Beat | Time | What the judge sees |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Rehearse **every single one** of these before the presentation. Each must have a
 
 | # | Failure | What happens | Recovery |
 |---|---|---|---|
-| F-1 | No internet | **Beat 5 only.** Since ADR-040 the NL→Cedar compiler calls hosted inference; everything else — tokens, decisions, budgets, ledger, audit chain, Postgres, Redis — is local and unaffected. | Tick **offline** beside *Compile & test* (or start the console with `AGENTIAM_CONTROLPLANE_COMPILER_OFFLINE=1`): the offline template compiler handles the demo's six policy shapes in ~0.1 s, the page labels it, and activation reaches the PEP as usual. Use a rehearsed sentence — *"Quarantine agent agt-payer"*, *"Payments over 40000 need approval"*. Narrate: "enforcement never left this machine; only the English-to-policy step is hosted, and it has an offline path." |
+| F-1 | No internet | **Beat 5 only.** Since ADR-040 the NL→Cedar compiler calls hosted inference; everything else — tokens, decisions, budgets, ledger, audit chain, Postgres, Redis — is local and unaffected. | Tick **offline** beside *Compile & test* (or start the console with `AGENTIAM_CONTROLPLANE_COMPILER_OFFLINE=1`): the offline template compiler handles the demo's six policy shapes in ~0.1 s, the page labels it, and activation reaches the PEP as usual. Use the rehearsed sentence *"Quarantine agent agt-payer"* — measured 2026-10-18: compiles offline in ~1.5 s, passes 51/51 corpus cases, activates, and the PEP refuses that agent ~30 ms later. **Do not rehearse an approval sentence** ("Payments over N need approval"): it compiles but fails 5 corpus cases and activation is refused (`STATUS.md` gap 44). Narrate: "enforcement never left this machine; only the English-to-policy step is hosted, and it has an offline path." |
 | F-2 | Model slow or down | Beat 5 only. | Automatic: the console waits at most 20 s (`AGENTIAM_CONTROLPLANE_COMPILE_TIMEOUT_S`) for the model, then the offline template compiler answers and the page says why. A sentence outside its six shapes gets the list of shapes instead of a guess — rephrase into one, or tick **offline** and use a rehearsed sentence. Measured: CH-8 compiles a quarantine sentence by template with Ollama unreachable. |
 | F-3 | Postgres restarts mid-demo | PEPs fail closed. No spend goes through. | Narrate: "Fail-closed is the correct behaviour for a financial system. Watch the PEPs resume when the DB comes back." Then wait 10 seconds. |
 | F-4 | Judge input breaks the parser | Beat 5: judge types something the compiler can't parse. | Clarifying-question path engages. Also narrate as a feature: "rather than guessing, the system asks for clarification." |

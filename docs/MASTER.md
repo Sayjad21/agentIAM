@@ -163,12 +163,12 @@ and model training beyond a small classifier.
 | | |
 |---|---|
 | **Tickets** | 49 of the 53 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 8 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
-| **Tests** | 3,321 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,943 |
+| **Tests** | 3,567 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 3,178 |
 | **Specs** | 10, all written before their code |
 | **ADRs** | 84 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
-The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
+The sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): nine tickets, all done as of 2026-10-18, that wired up
 what the audit below found — policy publication, multi-mandate leases, escalation delivery, a
 real LLM agent, console revocation, MCP, drift off the event loop, and a two-machine load test.
 
@@ -508,7 +508,7 @@ Run `demo-reset` before the real presentation.
 
 | Beat | Today |
 |---|---|
-| 1 Human approves a task | **Partly** — a signed-in approver starts a task on `/run`, issued its own mandate; the intent hash is not displayed. `demo-seed` seeds the scripted one |
+| 1 Human approves a task | **Yes** — a signed-in approver starts a task on `/run`, issued its own mandate, and the task card shows the intent hash its root token binds. `demo-seed` seeds the scripted one |
 | 2 Tree grows | **Yes** — the paced `demo-seed` |
 | 3 Least privilege | **Yes** — `SCOPE_ATTENUATED_AWAY`, with the caveat named; `make demo-agent` shows it as a live model's prompt injection. Recorded latency ~1–2 ms, not 0.4 ms (gap 35) |
 | 4 Judge sets the ceiling | **Yes** — sign in as an approver, start a task on `/run` with a ceiling: it is issued its own mandate whose pool *is* that ceiling, shown as its own gauge on `/budgets` (measured live: ৳15,000 task, ৳1,000 spent on its own row). The concurrent hard-stop half is `make demo-conc` |
@@ -527,6 +527,7 @@ From the 2026-10-16 audit ([`STATUS.md`](STATUS.md) §3). Until each one is wire
 |---|---|
 | "The model was fooled and the PEP stopped it" — unless the transcript says so | The live model has been measured resisting the injection; then the refusal on screen is the labelled forced attempt |
 | "Denied in 0.4 ms" on stage | The PEP records ~1–2 ms on the demo stack (gap 35); 0.43 ms is the in-process decision |
+| The overview's "Real-Time Enforcement Radar" or its ✓ guarantees | Placeholder data and static ticks (gaps 39, 40); show `/decisions` and `/audit`'s *Verify chain* instead |
 | "One URL change to install" (MCP) | Only `tools/call` is mapped. A stock MCP client sends `initialize` first and the PEP refuses it as unmapped |
 | "mTLS in place" | No TLS between any services |
 | "Signed audit checkpoints" | No checkpoints or signatures exist yet |

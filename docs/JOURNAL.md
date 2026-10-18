@@ -4055,6 +4055,24 @@ payment must also carry its amount now, and a route must declare that amount num
 
 Seven guards, seven red tests on removal. B3 records ৳9,000 of ৳9,000.
 
+### A browser pass over the whole console, and what the first page was saying
+
+At the end of 2026-10-18 the demo stack was driven through Chromium as a user would: sign in as
+each persona, start a task on `/run`, spawn agents and spend through them, revoke a subtree,
+approve and refuse escalations, filter decisions, search and verify the audit chain, compile
+English policy offline, and every page at 1024×768. No page threw, and no request failed with a
+5xx. Enforcement was right at every layer it was asked about, including a policy activated
+mid-run and enforced 30 ms later with no PEP restart.
+
+What was wrong was what pages *said*. The overview's "real-time" radar showed the three oldest
+decisions, labelled with fields the API does not send and a latency that is a string literal
+(gap 39). Its ✓ beside the hash-chained audit is static, and was ticked while *Verify chain*
+reported the chain broken — the break itself was a `make demo-tamper` nobody had undone (gap
+40). `/run` listed a child's widened ceiling that the token never honoured (gap 42). And
+`DEMO.md`'s no-internet drill rehearsed an English sentence the corpus gate refuses (gap 44,
+corrected). The same lesson as `STATUS.md` §3, one page further in: a console that renders
+correctly is not yet a console that tells the truth.
+
 ---
 
 ## What the numbers looked like at T-033

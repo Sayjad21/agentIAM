@@ -58,6 +58,24 @@ class TestCreateTask:
         assert verified.budget.spend_bdt == Decimal("50000")
         assert verified.scopes == {"invoice:read", "payment:initiate"}
 
+    def test_the_intent_hash_shown_is_the_one_the_token_binds(
+        self, registry: TaskRegistry, key_set: RootKeySet
+    ) -> None:
+        """`DEMO.md` beat 1: "Intent hash shown" — and it must be the token's own.
+
+        Not a recomputation that could disagree with it: an agent claiming a different job is
+        refused on exactly this value.
+        """
+        task = registry.create_task(
+            description="Procure 500 units of packaging stock.",
+            budget=Decimal("50000"),
+            scopes=frozenset({"invoice:read"}),
+            principal_id="kc:alice",
+        )
+        verified = verify(task.root.token, key_set, now=_NOW)
+        assert task.intent_hash == verified.intent_hash
+        assert task.as_dict()["intent_hash"] == verified.intent_hash
+
     def test_a_task_is_minted_under_the_mandate_it_was_issued(
         self, registry: TaskRegistry, key_set: RootKeySet
     ) -> None:
