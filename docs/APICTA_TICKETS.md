@@ -59,7 +59,7 @@ fallback) and T-059 (submission package).
 | APICTA-03 | DONE — delivery, SDK wait, demand-sized lease (ADR-075, ADR-076); beat live on the demo stack |
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
 | APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live. Two follow-ups after the parts: two CH-04 harness fixes its own settlement drain exposed, and **ADR-081** — the Part B announcement had every PEP lease from every mandate, starving the one that served it. CI green on `apicta-sprint` (run 39059003803) |
-| APICTA-06 | DONE — `tools/call` through the same pipeline (ADR-082); `make demo-mcp` 9/9 against REST live, and in the `demo-stack` CI job. Not a gateway: `initialize`/`tools/list` unmapped. Gap 37 filed |
+| APICTA-06 | DONE — `tools/call` through the same pipeline (ADR-082); `make demo-mcp` 9/9 against REST live, and in the `demo-stack` CI job. Not a gateway: `initialize`/`tools/list` unmapped. Gap 37 filed. CI green on `apicta-sprint` (run 39115596127) |
 | APICTA-08 | TODO |
 
 Mark `IN_PROGRESS` when starting and `DONE` only after `make check`, the ticket's own
@@ -504,7 +504,8 @@ Then STATUS.md: close gaps 25 and 7, delete the §3 row; `MASTER.md` C4, §7.8 b
 ## APICTA-06 — MCP `tools/call` through the same pipeline
 
 - **Status:** DONE (ADR-082). Local: `make check` (3,066), `make test-integration` (343), e2e (13);
-  live on the demo stack, `make demo-mcp` 9/9 rungs match REST before and after `demo-seed`
+  live on the demo stack, `make demo-mcp` 9/9 rungs match REST before and after `demo-seed`.
+  CI green on `apicta-sprint` at `dc6f10a`, all nine jobs (run 39115596127, #175)
 - **Maps to:** C11, T-041 (deferred, reopened in reduced form); STATUS.md §3 MCP row
 
 **Problem statement.**
