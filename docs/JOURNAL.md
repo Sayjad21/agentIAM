@@ -3993,6 +3993,44 @@ lenient upstream it is an unbudgeted payment. Gap 37, its own ticket.
 What it is not: a gateway. A stock MCP client sends `initialize` first and the PEP refuses it as
 unmapped. The MASTER row says so.
 
+### APICTA-08 · Benchmarks that compose what ships, and the money they found missing
+
+The ticket asked for a two-machine load test, a re-measurement and the project's first
+comparisons. Most of the work turned out to be making each benchmark measure the thing it
+claimed to.
+
+The stub was never the 500 RPS bottleneck here: one worker served 490 RPS. At a 1,000 target
+one worker and four both stalled, with the *generator's* lag at seconds, so the ceiling was the
+generator. `--workers` was built anyway, and the ADR says it does not help.
+
+The first B3, AgentIAM's leases, called `reserve()` and nothing else, and overspent a ৳300 pool
+by ৳300: a top-up released the old lease and the ledger took back reserved money nobody had
+committed. That is ADR-049's double spend, so B3 was recomposed as deployed — commit, settlement
+queue, drain before release. The next run then waited out every refused call for 5 s and made
+43,085 ledger round trips. The chaos harness's ledger client re-raised the ledger's "pool is
+empty" error, which the pool reads as an outage, and `serve_pep.py` had its own copy with the
+same flaw. The deployed `SessionLedger` translates it. Both copies were fixed and a behavioural
+test pins the harness's answer.
+
+Composed correctly, B3 still lost money: ৳4,920 recorded of ৳9,000 spent, twice in a row, with
+"settlement rejected: lease no longer active" in the log. `drain()` judges progress by queue
+length, and a PEP enqueuing during a flush makes it give up with the old lease's settlements
+still queued. That is gap 38. The overspend check could not see it, because the books stay
+inside the pool when money goes missing, so `comparative.md` now reports spent against
+committed. The fix is APICTA-09, with gap 37.
+
+The load test needed two corrections of its own. py-spy, attached during a counted run, gave
+that run a 14.2 ms p99 against 7.0 and 7.7 ms without it, so the flame graph now gets a pass of
+its own. And `performance.md`'s paragraphs, written for August's numbers, said the stub had
+fallen short and the harness had stalled — neither true of October's data — and called a
+7.995 ms run "comfortably" inside 8 ms. They are computed now. Re-measured: 100 RPS enforcement
+p99 7.995–9.364 ms with the generator on schedule; at 500 RPS one PEP process tops out at
+331–342 RPS on its bare proxy hop.
+
+The two-machine split was checked with the client in a container dialling the host's LAN
+address: 450 of 450 requests answered, and SIGTERM tore everything down. Found doing it: a
+redirected server printed nothing for five minutes, because stdout was block-buffered.
+
 ---
 
 ## What the numbers looked like at T-033

@@ -237,6 +237,11 @@ jobs:
       - name: Chaos results table up to date
         run: uv run python scripts/generate_chaos_results.py --check
 
+      # APICTA-08. Same rule: `make bench-compare` measures and rewrites the JSON, which CI
+      # never runs; this only re-renders the committed JSON and compares.
+      - name: Comparative benchmarks table up to date
+        run: uv run python scripts/generate_comparative_results.py --check
+
       - name: Evidence pack up to date
         run: uv run python scripts/generate_evidence_pack.py --check
 

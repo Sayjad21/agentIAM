@@ -165,7 +165,7 @@ and model training beyond a small classifier.
 | **Tickets** | 49 of the 53 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 8 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
 | **Tests** | 3,321 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,943 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 82 in `DECISIONS.md` |
+| **ADRs** | 83 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -249,30 +249,47 @@ Budget p99 < 1 ms. Real biscuit chain, real Cedar, real Datalog. Source:
 
 | Step | median µs | p99 µs |
 |---|---|---|
-| 1 extract | 19.5 | 30.3 |
-| 2 verify (signature) — *outside* `decide()` | 216.2 | 408.3 |
-| 4 caveats (Datalog) | 3.6 | 5.8 |
-| 4b token authority (biscuit authorizer) | 111.3 | 228.8 |
-| 5 policy (Cedar) | 132.4 | 238.6 |
-| 10 audit record hash | 15.9 | 26.0 |
-| **`decide()` total** | **277.2** | **430.4** |
+| 1 extract | 17.6 | 21.3 |
+| 2 verify (signature) — *outside* `decide()` | 158.4 | 175.1 |
+| 4 caveats (Datalog) | 4.1 | 4.5 |
+| 4b token authority (biscuit authorizer) | 73.7 | 81.6 |
+| 5 policy (Cedar) | 87.7 | 97.9 |
+| 10 audit record hash | 15.3 | 19.0 |
+| **`decide()` total** | **229.1** | **260.7** |
 
-Per-request in-process cost is about **0.5 ms** (verify + decide + extract). Cedar and the
+Re-measured 2026-10-18 on the Fedora host (Python 3.12.15, 16 CPUs). Per-request in-process
+cost is about **0.4 ms** (verify + decide + extract). Cedar and the
 token's Datalog make up almost all of the decision. An earlier "~5 µs" figure was measured
 against a stub policy and is withdrawn.
 
 ### 6.2 NFR-2 — proxy overhead under load — **not demonstrated**
 
-Budget p99 < 8 ms at 500 RPS. Three tiers isolate enforcement from the proxy hop.
+Budget p99 < 8 ms at 500 RPS. Three tiers isolate enforcement from the proxy hop. Re-measured
+2026-10-18 with the harness composed as the deployment is (ADR-062, ADR-083).
 
 | Rate | Enforcement p50 (median of 3 runs) | Enforcement p99 range across runs |
 |---|---|---|
-| 100 RPS | 2.19 ms | **1.75 – 74.7 ms** (spans the 8 ms budget) |
-| 500 RPS | — | Could not be offered: the stub upstream alone reached only 138 RPS |
+| 100 RPS | 1.18 ms | **7.995 – 9.364 ms** (straddles the 8 ms budget) |
+| 500 RPS | — | Could not be offered: the stub alone reached 497.5 RPS, but **the PEP's bare proxy hop peaked at 331–342 RPS** |
 
-The load generator, three uvicorn processes and Postgres all share one laptop. Establishing
-NFR-2 needs the generator on a second machine. These figures also predate a harness
-change (ADR-062) that adds roughly 0.45 ms at depth 3, so a re-run is owed.
+At 100 RPS the generator kept its schedule (lag p99 ≤ 1.25 ms), so the spread is on the
+server's side. At 500 RPS one PEP process cannot carry its own proxy hop on this host.
+`make benchmarks` renders a two-machine section once someone runs
+`run_load_test.py --role server` on one machine and `--role client` on another; the tooling
+was checked across a network boundary, not yet on two machines.
+
+### 6.2a Against the designs AgentIAM replaces
+
+From [`benchmarks/comparative.md`](benchmarks/comparative.md) (`make bench-compare`):
+
+| Comparison | AgentIAM | Alternative |
+|---|---|---|
+| Delegating a narrower credential | `attenuate()` in process, **0.089 ms** median | Simulated OAuth2 token exchange (loopback, keep-alive, one indexed lookup, no TLS), **2.424 ms** |
+| A shared budget, 3 PEPs × 300 calls | Leases (B3), **0.007 ms** per call, 36 ledger round trips | `FOR UPDATE` per call (B1), **17.1 ms**, 900 round trips |
+| The PEP beside the model call it guards | **0.405 ms** in process | A measured median Gemini call (`gemini-3.5-flash-lite`), **1,252 ms** — the PEP is 0.03% |
+
+The B3 run also found gap 38: under sustained load the ledger recorded ৳4,920 of ৳9,000
+spent. The latency comparison stands; the accounting does not until APICTA-09.
 
 ### 6.3 Other measurements
 
@@ -295,7 +312,7 @@ gitleaks all clean, with waivers documented in
 self-contained HTML file, [`evidence/evidence-pack.html`](evidence/evidence-pack.html).
 
 **Reproduce:** `make bench` (NFR-1), `uv run python scripts/run_load_test.py` (NFR-2),
-`make chaos`, `make security`, `make benchmarks`, `make evidence`.
+`make bench-compare`, `make chaos`, `make security`, `make benchmarks`, `make evidence`.
 
 ---
 
@@ -508,6 +525,7 @@ From the 2026-10-16 audit ([`STATUS.md`](STATUS.md) §3). Until each one is wire
 |---|---|
 | "The model was fooled and the PEP stopped it" — unless the transcript says so | The live model has been measured resisting the injection; then the refusal on screen is the labelled forced attempt |
 | "Denied in 0.4 ms" on stage | The PEP records ~1–2 ms on the demo stack (gap 35); 0.43 ms is the in-process decision |
+| "The ledger records every taka spent" | Under sustained load a top-up can release a lease with settlements still queued: measured ৳4,920 recorded of ৳9,000 (gap 38, APICTA-09) |
 | "One URL change to install" (MCP) | Only `tools/call` is mapped. A stock MCP client sends `initialize` first and the PEP refuses it as unmapped |
 | "mTLS in place" | No TLS between any services |
 | "Signed audit checkpoints" | No checkpoints or signatures exist yet |

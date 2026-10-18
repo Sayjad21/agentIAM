@@ -40,6 +40,7 @@ from agentiam_controlplane.db.ledger import acquire, release
 from agentiam_controlplane.db.mandates import ensure_row
 from agentiam_controlplane.db.models import BudgetRow
 from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
+from agentiam_controlplane.errors import LeaseUnavailableError
 from agentiam_core.hashing import hash_object
 from agentiam_core.models import Budget, BudgetDimension, Mandate
 from agentiam_core.tokens import RootKeySet, generate_keypair, mint_root
@@ -214,6 +215,11 @@ class PoolLedgerClient:
                     ttl=ttl,
                     now=now,
                 )
+        except LeaseUnavailableError:
+            # An empty pool, which the ledger reports by raising. `None` is what marks the
+            # mandate spent; re-raising read as an outage and stormed the ledger with top-ups
+            # (APICTA-08 measured 43,085 round trips where `SessionLedger` makes 24).
+            return None
         except Exception:
             self.acquire_failures += 1
             raise

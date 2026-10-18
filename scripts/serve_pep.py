@@ -52,6 +52,10 @@ if TYPE_CHECKING:
     from agentiam_core.tokens import RootKeySet, VerifiedToken
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[1]
+# Run as `python scripts/serve_pep.py`, which puts `scripts/` rather than the repo root on the
+# path; `build_app` imports the deployed ledger client from `scripts.pep_service`.
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 #: Matches `docker-compose.yml`, so `make up` then this script just works.
 DEFAULT_DATABASE_URL: Final = "postgresql+asyncpg://agentiam:agentiam@localhost:5432/agentiam"
@@ -268,7 +272,6 @@ def build_app(
 
     from agentiam_controlplane.db.audit_sink import LedgerAuditSink
     from agentiam_controlplane.db.base import make_engine, make_session_factory
-    from agentiam_controlplane.db.ledger import acquire, release
     from agentiam_controlplane.db.settlement_sink import LedgerSettlementSink
     from agentiam_core.datalog import token_caveats, token_identity
     from agentiam_core.hashing import hash_object
@@ -281,9 +284,10 @@ def build_app(
     from agentiam_pep.extractor import RouteTable
     from agentiam_pep.pipeline import Pipeline, PipelineSettings
     from agentiam_pep.policy import AgentPrincipal, CedarEngine, PolicyBundle, ToolFacts
-    from agentiam_pep.pool import LeaseGrant, LeasePool, PoolSettings
+    from agentiam_pep.pool import LeasePool, PoolSettings
     from agentiam_pep.revocation import InMemoryRevocationSet
     from agentiam_pep.settlement import SettlementQueue, SettlementSettings
+    from scripts.pep_service import SessionLedger
 
     now = datetime.now(UTC)
     mandate = Mandate(
@@ -303,37 +307,6 @@ def build_app(
     engine = make_engine(database_url)
     factory = make_session_factory(engine)
 
-    class Ledger:
-        """The real `ACQUIRE`/`RELEASE`, over the configured DSN."""
-
-        async def acquire(
-            self,
-            *,
-            mandate_id: uuid.UUID,
-            dimension: BudgetDimension,
-            requested: Decimal,
-            pep_id: str,
-            ttl: timedelta,
-            now: datetime,
-        ) -> LeaseGrant | None:
-            async with factory() as session:
-                lease = await acquire(
-                    session,
-                    mandate_id=mandate_id,
-                    dimension=dimension.value,
-                    requested=requested,
-                    pep_id=pep_id,
-                    ttl=ttl,
-                    now=now,
-                )
-            if lease is None or lease.granted <= 0:
-                return None
-            return LeaseGrant(id=lease.id, granted=lease.granted, expires_at=lease.expires_at)
-
-        async def release(self, *, lease_id: uuid.UUID) -> None:
-            async with factory() as session:
-                await release(session, lease_id=lease_id)
-
     class DroppingSink:
         """Counts records and writes nothing — `--no-audit`."""
 
@@ -347,7 +320,11 @@ def build_app(
         LedgerSettlementSink(factory), SettlementSettings(), now=lambda: datetime.now(UTC)
     )
     pool = LeasePool(
-        Ledger(),
+        # The deployed client, not a copy of it. The copy that stood here re-raised the
+        # ledger's `LeaseUnavailableError`, which the pool reads as an outage, so a spent pool
+        # answered LEASE_UNAVAILABLE and stormed the ledger with top-ups — invisible here only
+        # because this harness's pool is never spent. Found by APICTA-08.
+        SessionLedger(factory),
         PoolSettings(pep_id="pep-perf", lease_size=LEASE_SIZE),
         mandate_id=mandate_id,
         now=lambda: datetime.now(UTC),

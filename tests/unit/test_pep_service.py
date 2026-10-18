@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, ClassVar
 import pytest
 
 from agentiam_core.attenuation import attenuate
-from agentiam_core.models import Budget, Mandate, ScopeSubset
+from agentiam_core.models import Budget, BudgetDimension, Mandate, ScopeSubset
 from agentiam_core.tokens import (
     RootKeySet,
     VerifiedToken,
@@ -1258,6 +1258,36 @@ class TestTheHarnessMatchesTheDeployedComposition:
         pipeline: Pipeline | None = app.state.pipeline
         assert pipeline is not None, "the harness must build an enforcing PEP"
         return pipeline
+
+    async def test_both_report_an_empty_pool_as_spent_not_as_an_outage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty pool is spent, not unreachable, in the harness as in the deployment.
+
+        APICTA-08 found the harness's own ledger copy re-raising the ledger's
+        `LeaseUnavailableError`, which the pool counts as *unreachable*: a spent mandate then
+        reads `LEASE_UNAVAILABLE` and every refused request schedules another top-up. The
+        deployed `SessionLedger` translates it to the `None` that marks the mandate spent.
+        """
+        from agentiam_controlplane.db import ledger as ledger_db
+        from agentiam_controlplane.errors import LeaseUnavailableError
+
+        async def empty(*_args: object, **_kwargs: object) -> None:
+            raise LeaseUnavailableError("no budget available in the pool")
+
+        monkeypatch.setattr(ledger_db, "acquire", empty)
+        pipeline = self._harness_pipeline()
+        (pool,) = pipeline.pools.pools.values()
+        grant = await pool._client.acquire(
+            mandate_id=uuid.uuid4(),
+            dimension=BudgetDimension.SPEND_BDT,
+            requested=Decimal(1),
+            pep_id="pep-perf",
+            ttl=timedelta(seconds=30),
+            now=datetime.now(UTC),
+        )
+        assert grant is None
+        assert isinstance(pool._client, pep_service.SessionLedger)
 
     def test_both_read_the_agent_identity_off_the_token(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

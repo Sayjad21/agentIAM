@@ -23,6 +23,7 @@ the sprint. [`ENGINEERING-RULES.md`](ENGINEERING-RULES.md) governs how each tick
 | 6 | **APICTA-02** Multi-mandate lease pool | L | The only ticket on the money path, so it goes after the demo beats are solid and gets a full integration + chaos run. The demo already has a fallback for the ceiling beat (`/run`'s per-task ceiling, `make demo-conc`). Migration `0010` |
 | 7 | **APICTA-06** MCP extractor | M | Independent of the others; written after APICTA-02 so MCP calls are routed by mandate from the start |
 | 8 | **APICTA-08** Benchmarks + two-machine load test | M | Last, because APICTA-07 and APICTA-02 change the hot path and the published numbers must describe the code that ships. The two-laptop run happens after it |
+| 9 | **APICTA-09** Money-path correctness: gaps 37 and 38 | M | Added after the sprint's eight. APICTA-06 found gap 37 and APICTA-08's comparison found gap 38; both let spend escape the ledger, so they go before T-058/T-059. Then `make bench-compare` again, so `comparative.md` describes fixed code |
 
 After the sprint: T-058 (failure drills, now scriptable because APICTA-01 adds the F-2
 fallback) and T-059 (submission package).
@@ -60,7 +61,8 @@ fallback) and T-059 (submission package).
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
 | APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live. Two follow-ups after the parts: two CH-04 harness fixes its own settlement drain exposed, and **ADR-081** — the Part B announcement had every PEP lease from every mandate, starving the one that served it. CI green on `apicta-sprint` (run 39059003803) |
 | APICTA-06 | DONE — `tools/call` through the same pipeline (ADR-082); `make demo-mcp` 9/9 against REST live, and in the `demo-stack` CI job. Not a gateway: `initialize`/`tools/list` unmapped. Gap 37 filed. CI green on `apicta-sprint` (run 39115596127) |
-| APICTA-08 | TODO |
+| APICTA-08 | DONE — tooling, single-host re-measure, comparisons (ADR-083); two-machine split checked across a network boundary. Found gap 38. The two-machine run itself is the human step |
+| APICTA-09 | TODO |
 
 Mark `IN_PROGRESS` when starting and `DONE` only after `make check`, the ticket's own
 verification commands and (once CI runs again) a green CI run. Update `STATUS.md` in the same
@@ -545,7 +547,11 @@ Then STATUS.md §3 MCP row reworded to what holds (tools/call over HTTP; no SSE 
 
 ## APICTA-08 — Comparative benchmarks and a two-machine NFR-2 run
 
-- **Status:** TODO
+- **Status:** DONE (ADR-083). `make check`, `make test-integration`, `make chaos` green;
+  `run_load_test.py --seconds 5 --repeat 1`, `make bench-compare`, `make benchmarks`,
+  `make evidence` run. Two-host tooling checked with the client in a container dialling the
+  LAN address. Found **gap 38** (→ APICTA-09) and two harness ledger copies that read an empty
+  pool as an outage (fixed here)
 - **Maps to:** NFR-2; fix-queue item 21; `research/lease-plan.md` baselines B0–B3
 
 **Problem statement.**
@@ -591,3 +597,60 @@ make bench-compare
 make benchmarks && make evidence
 ```
 Then STATUS.md §5 item 21 and §7 R-2 with whatever the run shows; `MASTER.md` §6.2.
+
+---
+
+## APICTA-09 — Money-path correctness: an unextracted amount, and settlements that lose the race
+
+- **Status:** TODO
+- **Maps to:** STATUS.md gaps 37 and 38; ADR-049; spec 02 §3.2, spec 04 §4.4 and §11, spec 10 §6
+
+**Problem statement.**
+Two defects let spend escape the ledger, both found by measurement rather than review.
+
+- **Gap 37** (APICTA-06). A payment whose amount is not extracted is `Authorized` with nothing
+  reserved: `authorize(POST /payments, body=None)` — what the gateway passes for a body
+  labelled `text/plain` — returns `Authorized` and the pool does not move. Spec 02 §3.2 makes
+  an absent argument vacuous, and spec 10 §6 does not read a non-JSON body. The demo's tools
+  refuse both shapes; a lenient upstream would execute an unbudgeted payment.
+- **Gap 38** (APICTA-08). `SettlementQueue.drain()` (`agentiam_pep/settlement.py`) stops when a
+  flush does not shorten the queue, so a PEP enqueuing during a flush makes it stop with
+  settlements still queued for the lease `LeasePool._acquire` is about to release.
+  `make bench-compare`'s B3 recorded ৳4,920 of ৳9,000. Related and unmeasured:
+  `LeasePool.commit()` settles against the lease held *now*, so a request in flight across a
+  top-up is charged to the new lease.
+
+**Exact file modifications.**
+- `agentiam_pep/settlement.py`: `drain()` flushes until everything enqueued before it was
+  called has been popped, judging progress by items popped rather than queue length; still
+  stops on a flush that pops nothing (an unreachable ledger must not spin a shutdown).
+- `agentiam_pep/pool.py`: decided by the probe in step 2 — whether `commit()` must settle
+  against the reservation's own lease, and whether a top-up's release must wait for
+  reservations still outstanding on the old lease.
+- `agentiam_pep/extractor.py` / `agentiam_pep/pipeline.py`: a route whose spend argument is
+  mapped refuses a request in which that argument is absent (`MALFORMED_REQUEST`), and a route
+  mapping any `body.` source refuses a non-JSON content type. `docs/specs/10-scope-extraction.md`
+  §6 and §9 row 6 change with it; spec 02 §3.2 gains the exception for the spend argument.
+- `tests/integration/test_comparative_benchmarks.py`: B3 records every taka it allows
+  (`committed == spent`) — the assertion that fails today.
+
+**Step-by-step plan.**
+1. Tests first: the integration assertion above, a unit test of `drain()` with enqueues
+   interleaved into a slow sink, and the gap 37 refusals over REST and MCP. Watch them fail.
+2. Probe the in-flight path against a real ledger: reserve on lease A, force a top-up to B,
+   then commit — record which lease is charged and whether the ledger's clamp loses money.
+3. Fix `drain()`; fix the in-flight path as the probe dictates.
+4. Fix gap 37 at extraction.
+5. `make chaos` (money path), then `make bench-compare` and `make evidence`, so
+   `comparative.md` reports B3 against fixed code.
+
+**Verification.**
+```bash
+make check
+make test-integration
+make chaos
+make bench-compare && make evidence
+make demo-up && make demo-seed && make demo-mcp
+```
+Then STATUS.md gaps 37 and 38 closed (JOURNAL appendix), MASTER.md §6.2a's gap-38 sentence and
+the §8 row removed.

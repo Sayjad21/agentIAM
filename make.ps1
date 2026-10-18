@@ -20,7 +20,7 @@ param(
                  'demo-tamper', 'demo-untamper',
                  'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
-                 'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'benchmarks', 'evidence',
+                 'typecheck', 'check', 'bench', 'cov', 'security', 'sbom', 'benchmarks', 'bench-compare', 'evidence',
                  'clean', 'nuke')]
     [string]$Target = 'help'
 )
@@ -73,6 +73,7 @@ switch ($Target) {
             'demo-tamper'      = 'Edit one audit record so Verify chain turns red (demo only)'
             'demo-untamper'    = 'Restore the record demo-tamper edited'
             'benchmarks'       = 'Regenerate docs/benchmarks/performance.md from committed JSON'
+            'bench-compare'    = 'AgentIAM vs token exchange and a per-call ledger check (APICTA-08)'
             'evidence'         = 'Regenerate docs/evidence/evidence-pack.html (T-055)'
             'clean'            = 'Remove caches and build artifacts'
             'nuke'             = 'Stop infrastructure and delete its volumes (destroys local data)'
@@ -219,6 +220,11 @@ switch ($Target) {
                                   'python', 'scripts/demo_concurrency.py', '--drive'))
     }
     'benchmarks' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_benchmark_results.py') }
+    'bench-compare' {
+        # Measures: needs Docker, and an LLM backend for the third comparison.
+        if (-not $env:TESTCONTAINERS_RYUK_DISABLED) { $env:TESTCONTAINERS_RYUK_DISABLED = 'true' }
+        Invoke-Step @('uv', 'run', 'python', 'scripts/run_comparative_benchmarks.py')
+    }
     'evidence' { Invoke-Step @('uv', 'run', 'python', 'scripts/generate_evidence_pack.py') }
     'clean' {
         @('.pytest_cache', '.mypy_cache', '.ruff_cache', '.hypothesis',

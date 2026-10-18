@@ -25,10 +25,25 @@ _REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 _BENCH: Final = _REPO_ROOT / "docs" / "benchmarks"
 _PB2: Final = _BENCH / "pb2-breakdown.json"
 _NFR2: Final = _BENCH / "nfr2-load.json"
+_NFR2_TWO_HOST: Final = _BENCH / "nfr2-two-host.json"
 _OUTPUT: Final = _BENCH / "performance.md"
 
 #: NFR-2's bar, mirrored from scripts/run_load_test.py.
 OVERHEAD_BUDGET: Final = 8.0
+
+#: Mirrored from `scripts/run_load_test.HARNESS`. Data carrying it was measured with the
+#: harness composed as the deployment is (ADR-062); data without it predates that.
+HARNESS: Final = "ADR-062"
+
+#: Generator lag p99 above which the harness, not the server, is the likelier cause of a tail.
+#: October's on-schedule runs measured ~1.2-3.2 ms; a stalled generator measures seconds.
+LAG_TOLERANCE_MS: Final = 5.0
+
+_TIERS: Final = (
+    ("upstream_only", "① upstream alone"),
+    ("proxy_no_enforcement", "② PEP, no pipeline"),
+    ("enforcing_pep", "③ enforcing PEP"),
+)
 
 _HEADER: Final = """<!--
   GENERATED FILE — do not edit.
@@ -139,6 +154,84 @@ def _render_pb2(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+#: Rendered only for data measured before ADR-062's harness change.
+_PREDATES_NOTE: Final[list[str]] = [
+    "> **These figures predate a change to the harness, and understate it slightly.** "
+    "NFR-2 is a claim about the *deployed* PEP's overhead, measured through "
+    "`scripts/serve_pep.py`. The harness used to hardcode its policy principal and "
+    "supply no caveat reader, while the deployed PEP read both out of the token's "
+    "own block source (ADR-057) — so it was measuring less work than production "
+    "does. The two compositions match as of ADR-062, and a unit test now compares them "
+    "by behaviour so they cannot drift apart again. **The numbers below were taken "
+    "before that**, and a re-measurement is owed.",
+    "",
+    "> **By how much, measured** (CPython 3.12, `agentiam_core.datalog`): one "
+    "`token_identity()` or `token_caveats()` costs ~125 µs at chain depth 0, "
+    "~160 µs at depth 1, ~195 µs at depth 2 and ~227 µs at depth 3. The "
+    "pipeline resolves the principal once per request and reads the caveats once, so a "
+    "depth-3 request pays roughly **0.45 ms** beyond what tier 3 reports — against "
+    "an 8 ms budget, and well inside the run-to-run spread the table already shows. "
+    "**NFR-1 is unaffected**: the parse happens in the pipeline, not inside `decide()`, "
+    "which is why the PB-2 breakdown above carries no such note.",
+    "",
+    "> The re-run is deliberately not folded into another ticket. It rewrites "
+    "`pb2-breakdown.json` and `nfr2-load.json` together and has to happen on one host "
+    "in one sitting, or the before/after comparison measures the hardware rather than "
+    "the change.",
+    "",
+]
+
+
+def _verdict(profile: dict[str, Any]) -> str:
+    """PASS only for a load the host offered, with every run's enforcement p99 inside 8 ms."""
+    if profile["saturated"]:
+        return "not offered — the host could not generate this rate"
+    worst = profile.get("spread_ms", {}).get("enforcement_overhead_ms", {}).get("max")
+    if worst is None:
+        worst = profile["enforcement_overhead_ms"]["p99"]
+    outcome = "PASS" if worst < OVERHEAD_BUDGET else "FAIL"
+    return f"**{outcome}** — worst run's enforcement p99 {worst} ms vs {OVERHEAD_BUDGET} ms"
+
+
+def nfr2_table(data: dict[str, Any]) -> list[str]:
+    """Every tier of every profile — offered, achieved, p50/p95/p99 — then a verdict per rate.
+
+    Shared with `run_load_test.py`, which prints it at the end of a run. The tier rows are the
+    last run's; the verdict reads every run, because a p99 that passes only on a good run is
+    not established.
+    """
+    rows: list[list[str]] = []
+    for profile in data["profiles"]:
+        for key, label in _TIERS:
+            tier = profile["tiers"][key]
+            service = tier["service_ms"]
+            rows.append(
+                [
+                    str(profile["target_rps"]),
+                    label,
+                    str(tier["achieved_rps"]),
+                    str(service["p50"]),
+                    str(service["p95"]),
+                    str(service["p99"]),
+                ]
+            )
+    lines = _table(rows, ["Target RPS", "Tier", "Achieved RPS", "p50 ms", "p95 ms", "p99 ms"])
+    lines += [f"- **{p['target_rps']} RPS**: {_verdict(p)}" for p in data["profiles"]]
+    lines.append("")
+    return lines
+
+
+def _host_line(data: dict[str, Any]) -> list[str]:
+    host = data.get("host")
+    if not host:
+        return ["Host: not recorded (this run predates `run_load_test.py` recording one).", ""]
+    return [
+        f"Host: `{host['platform']}`, Python {host['python']}, {host['cpus']} CPUs. "
+        f"Topology: {data.get('topology', 'single-host')}.",
+        "",
+    ]
+
+
 def _render_nfr2(data: dict[str, Any]) -> list[str]:
     lines = [
         "",
@@ -146,6 +239,7 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         "",
         f"Budget: **p99 < 8 ms at 500 RPS, single instance**. Measured {data['measured_at']}.",
         "",
+        *_host_line(data),
         "Three tiers at every rate, so each subtraction compares like with like:",
         "",
         "1. the stub upstream alone, no PEP in the path;",
@@ -155,30 +249,9 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         "",
         "**(3) - (2) is what authorization costs.** (2) - (1) is TCP and Python's HTTP stack.",
         "",
-        "> **These figures predate a change to the harness, and understate it slightly.** "
-        "NFR-2 is a claim about the *deployed* PEP's overhead, measured through "
-        "`scripts/serve_pep.py`. The harness used to hardcode its policy principal and "
-        "supply no caveat reader, while the deployed PEP read both out of the token's "
-        "own block source (ADR-057) — so it was measuring less work than production "
-        "does. The two compositions match as of ADR-062, and a unit test now compares them "
-        "by behaviour so they cannot drift apart again. **The numbers below were taken "
-        "before that**, and a re-measurement is owed.",
-        "",
-        "> **By how much, measured** (CPython 3.12, `agentiam_core.datalog`): one "
-        "`token_identity()` or `token_caveats()` costs ~125 µs at chain depth 0, "
-        "~160 µs at depth 1, ~195 µs at depth 2 and ~227 µs at depth 3. The "
-        "pipeline resolves the principal once per request and reads the caveats once, so a "
-        "depth-3 request pays roughly **0.45 ms** beyond what tier 3 reports — against "
-        "an 8 ms budget, and well inside the run-to-run spread the table already shows. "
-        "**NFR-1 is unaffected**: the parse happens in the pipeline, not inside `decide()`, "
-        "which is why the PB-2 breakdown above carries no such note.",
-        "",
-        "> The re-run is deliberately not folded into another ticket. It rewrites "
-        "`pb2-breakdown.json` and `nfr2-load.json` together and has to happen on one host "
-        "in one sitting, or the before/after comparison measures the hardware rather than "
-        "the change.",
-        "",
     ]
+    if data.get("harness") != HARNESS:
+        lines += _PREDATES_NOTE
 
     rows = []
     for profile in data["profiles"]:
@@ -221,6 +294,9 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         "three runs with the variance reported; that requirement is the reason this is "
         "visible rather than a matter of which run got written down.",
         "",
+        "Each tier of the last run, with the verdict over every run:",
+        "",
+        *nfr2_table(data),
     ]
 
     unstable = [
@@ -238,17 +314,17 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
         # next one — a generated document must not carry a ratio the data does not support.
         over = enforce["max"] / OVERHEAD_BUDGET
         how_far = f"{over:.1f}\u00d7 it" if over >= 1.5 else "past it"
+        # Same rule for the other end: 7.995 ms is inside an 8 ms budget, not comfortably.
+        how_close = (
+            "comfortably inside it" if enforce["min"] < OVERHEAD_BUDGET * 0.75 else "just inside it"
+        )
         lines += [
             f"At **{profile['target_rps']} RPS the enforcement p99 ranged "
             f"{enforce['min']}-{enforce['max']} ms across {profile['runs']} runs**, which "
-            f"straddles NFR-2's {OVERHEAD_BUDGET} ms budget. The best run is comfortably "
-            f"inside it and the worst is {how_far}, so **the honest statement is "
+            f"straddles NFR-2's {OVERHEAD_BUDGET} ms budget. The best run is {how_close} "
+            f"and the worst is {how_far}, so **the honest statement is "
             f"that this host cannot establish the p99 either way** — the median run's p50 "
-            f"is the only figure here stable enough to quote. Something outside the request "
-            f"path is contributing tens of milliseconds intermittently: the generator, the "
-            f"three uvicorn processes and Postgres all share one machine, and the "
-            f"`generator_lag_ms` series in the JSON shows the harness itself stalling. "
-            f"Establishing NFR-2 properly needs the generator off-box.",
+            f"is the only figure here stable enough to quote. {_why_unstable(profile)}",
             "",
         ]
 
@@ -256,34 +332,122 @@ def _render_nfr2(data: dict[str, Any]) -> list[str]:
     if saturated:
         rates = ", ".join(str(p["target_rps"]) for p in saturated)
         worst = max(saturated, key=lambda p: p["target_rps"])
-        upstream_only = worst["tiers"]["upstream_only"]
         lines += [
             f"⚠️ **The {rates} RPS profile(s) could not be offered on this host and the "
-            f"latencies in those rows are queueing artefacts, not service times.** At "
-            f"{worst['target_rps']} RPS the *stub upstream alone* — with no PEP in the path "
-            f"at all — achieved only {upstream_only['achieved_rps']} RPS at a p50 of "
-            f"{upstream_only['service_ms']['p50']} ms. The limit is the development machine "
-            f"running the generator and three uvicorn processes against each other on "
-            f"loopback, not anything in AgentIAM. Reported rather than dropped, because "
-            f"`PLAN.md` T-053 asks for the numbers actually obtained.",
+            f"latencies in those rows are queueing artefacts, not service times.** "
+            f"{_where_it_saturated(worst)} Reported rather than dropped, because `PLAN.md` "
+            f"T-053 asks for the numbers actually obtained.",
             "",
             "**So NFR-2 is not yet demonstrated at its stated rate.** What has been measured "
             "is the enforcement cost at rates this host can serve, and the honest reading is "
-            "in the row above the warning. Establishing the 500 RPS figure needs a machine "
-            "that can generate it, or the generator moved off-box.",
+            "in the row above the warning. Establishing the 500 RPS figure is what the "
+            "two-machine run below is for.",
             "",
         ]
 
     return lines
 
 
-def render() -> str:
-    """The whole document."""
+def _render_two_host(path: Path) -> list[str]:
+    """NFR-2 measured with the generator on another machine, or a plain "not yet run"."""
+    lines = ["", "## NFR-2 across two machines", ""]
+    if not path.exists():
+        return [
+            *lines,
+            "**Not yet run.** The single-host figures above share one machine between the "
+            "load generator, three uvicorn processes and Postgres. The tooling to separate them "
+            "exists (APICTA-08); the run is a human step on two hosts on one LAN:",
+            "",
+            "```",
+            "# machine A — the system under test",
+            "uv run python scripts/run_load_test.py --role server",
+            "# machine B — the generator; paste the command A prints, then:",
+            "uv run python scripts/generate_benchmark_results.py",
+            "```",
+            "",
+        ]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [
+        *lines,
+        f"Measured {data['measured_at']} against `{data.get('server_url', '?')}` from a "
+        f"second machine: tiers ①-③ crossed the link, the PEPs reached the stub over the "
+        f"server's own loopback.",
+        "",
+        *_host_line(data),
+        *nfr2_table(data),
+    ]
+
+
+def _runs(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = profile.get("all_runs") or [profile]
+    return runs
+
+
+def _why_unstable(profile: dict[str, Any]) -> str:
+    """Name the likelier cause of a p99 spread from the generator's own lag, not by habit."""
+    lags = [
+        run["tiers"]["enforcing_pep"].get("generator_lag_ms", {}).get("p99")
+        for run in _runs(profile)
+    ]
+    measured = [lag for lag in lags if lag is not None]
+    if not measured:
+        return "The generator's lag was not recorded, so the cause cannot be attributed."
+    worst = max(measured)
+    if worst > LAG_TOLERANCE_MS:
+        return (
+            f"The generator itself fell behind — `generator_lag_ms` p99 reached {worst} ms — "
+            f"so the harness itself stalling is a likely contributor: the generator, three "
+            f"uvicorn processes and Postgres share one machine. Establishing NFR-2 properly "
+            f"needs the generator off-box."
+        )
+    return (
+        f"The generator kept its schedule — `generator_lag_ms` p99 at most {worst} ms in "
+        f"every run — so the spread is on the server's side of the request, not the "
+        f"harness's: the PEP, its audit and settlement writes and Postgres still share this "
+        f"machine with the stub, and the two-machine run below separates the generator only."
+    )
+
+
+def _where_it_saturated(profile: dict[str, Any]) -> str:
+    """Which tier stopped keeping up first — the stub, the PEP's hop, or enforcement."""
+    target = profile["target_rps"]
+    tiers = profile["tiers"]
+    short = next(
+        (key for key, _ in _TIERS if tiers[key]["achieved_rps"] < target * 0.9), "enforcing_pep"
+    )
+    upstream = tiers["upstream_only"]
+    if short == "upstream_only":
+        return (
+            f"At {target} RPS the *stub upstream alone* — with no PEP in the path at all — "
+            f"achieved only {upstream['achieved_rps']} RPS at a p50 of "
+            f"{upstream['service_ms']['p50']} ms. The limit is the machine running the "
+            f"generator and three uvicorn processes against each other on loopback."
+        )
+    hop = tiers["proxy_no_enforcement"]
+    if short == "proxy_no_enforcement":
+        return (
+            f"At {target} RPS the stub alone kept up ({upstream['achieved_rps']} RPS), but "
+            f"the PEP, with no pipeline attached, peaked at {hop['achieved_rps']} RPS and the "
+            f"enforcing PEP at {tiers['enforcing_pep']['achieved_rps']}. The ceiling is the "
+            f"PEP's own proxy hop in one process, before any authorization runs; whether it "
+            f"holds with the generator on another machine is what the two-machine run "
+            f"measures."
+        )
+    return (
+        f"At {target} RPS the stub ({upstream['achieved_rps']} RPS) and the PEP's bare hop "
+        f"({hop['achieved_rps']} RPS) kept up, and the enforcing PEP peaked at "
+        f"{tiers['enforcing_pep']['achieved_rps']} RPS: authorization is the ceiling."
+    )
+
+
+def render(*, pb2: Path = _PB2, nfr2: Path = _NFR2, two_host: Path = _NFR2_TWO_HOST) -> str:
+    """The whole document. The paths are parameters so a test can render other data."""
     lines = [_HEADER]
-    if _PB2.exists():
-        lines += _render_pb2(json.loads(_PB2.read_text(encoding="utf-8")))
-    if _NFR2.exists():
-        lines += _render_nfr2(json.loads(_NFR2.read_text(encoding="utf-8")))
+    if pb2.exists():
+        lines += _render_pb2(json.loads(pb2.read_text(encoding="utf-8")))
+    if nfr2.exists():
+        lines += _render_nfr2(json.loads(nfr2.read_text(encoding="utf-8")))
+    lines += _render_two_host(two_host)
     lines += [
         "",
         "---",
@@ -293,6 +457,7 @@ def render() -> str:
         "```",
         "uv run pytest -m perf --benchmark-only          # NFR-1 and PB-2",
         "uv run python scripts/run_load_test.py          # NFR-2, brings up its own Postgres",
+        "uv run python scripts/run_load_test.py --role server   # two machines: A, then B",
         "uv run python scripts/generate_benchmark_results.py",
         "```",
         "",

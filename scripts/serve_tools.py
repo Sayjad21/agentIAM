@@ -9,16 +9,35 @@ The stub tools (T-004) are deliberately trivial: they exist so that a load test 
 measures the PEP. If the upstream had real work to do, both numbers would grow by the same
 amount and the *difference* would still be right, but the ratio a reader takes away from
 the table would be meaningless.
+
+**`--workers N`** (APICTA-08) runs N uvicorn processes, for a two-machine run where the stub
+must keep up with a generator on another host. Measured on the Fedora development host it
+changes nothing at the rates NFR-2 names: one worker served 490 RPS of a 500 RPS target at
+p50 1.2 ms, and at a 1,000 RPS target one worker and four both stalled near 410-460 RPS with
+the *generator's* scheduling lag at 5-7 s p99 — the limit was the single-process load
+generator, not this. The August results' 138 RPS came from a run that recorded no host,
+which is why `run_load_test.py` now records one.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+#: The app, as uvicorn's `factory` import string: with `workers > 1` every worker process
+#: imports and builds its own copy, which an app object cannot be passed for.
+APP: Final = "agentiam_demo.tools:create_tools_app"
+
+
+def _workers(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"--workers must be at least 1, got {value}")
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)
+    parser.add_argument(
+        "--workers", type=_workers, default=1, help="uvicorn worker processes (default 1)."
+    )
     return parser
 
 
@@ -37,13 +59,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import uvicorn
 
-    from agentiam_demo.tools import create_tools_app
-
-    print(f"stub tools on http://{args.host}:{args.port}")
+    print(f"stub tools on http://{args.host}:{args.port} ({args.workers} worker(s))")
     uvicorn.run(
-        create_tools_app(),
+        APP,
+        factory=True,
         host=args.host,
         port=args.port,
+        workers=args.workers,
         log_level="warning",
         access_log=False,
     )

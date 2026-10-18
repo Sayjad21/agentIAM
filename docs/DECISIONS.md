@@ -4974,3 +4974,95 @@ Every MCP call is `POST /mcp` with the tool in the JSON-RPC body, so `RouteTable
   `Authorized` with nothing reserved. Not reachable on the demo (its tools refuse both shapes),
   and on the money path, so it is `STATUS.md` gap 37 and its own ticket rather than a change
   made here.
+
+---
+
+## ADR-083 — Benchmarks compare the deployed composition, and record where they ran
+
+**Status:** accepted · **Ticket:** APICTA-08 · **Relates to:** ADR-049, ADR-053, ADR-062,
+`research/lease-plan.md` GAP-D/GAP-E
+
+### Context
+
+APICTA-08 asked for three things: a two-machine split of the NFR-2 load test, a re-measurement
+of the single-host figures (which predated ADR-062's harness change), and the project's first
+comparisons against the designs it replaces. Probing before building changed four of them.
+
+1. **The stub upstream was never the 500 RPS bottleneck here.** The August results recorded
+   the stub alone at 138 RPS. Measured on the Fedora host: one uvicorn worker served 490 RPS of
+   a 500 RPS target at p50 1.2 ms. At a 1,000 RPS target, one worker and four both stalled at
+   410–460 RPS with the *generator's* scheduling lag at 5–7 s p99. The ceiling is the
+   single-process load generator. `--workers` was built as the ticket asked, but does not move
+   it, and a two-machine client inherits the same ~490 RPS generator ceiling.
+2. **A benchmark of B3 that only calls `reserve()` overspends.** The first B3 reserved and never
+   settled, and on a ৳300 pool spent ৳600. A top-up releases the old lease, and the ledger took
+   back money that had been reserved but never committed. That is ADR-049's double spend, and
+   the reason the deployment drains settlements before every release.
+3. **The chaos harness's ledger client reported an empty pool as an outage.** The ledger
+   raises `LeaseUnavailableError` when a pool is empty. `scripts/pep_service.SessionLedger`
+   turns that into the `None` that marks a mandate spent. `tests/chaos/pepstack.PoolLedgerClient`
+   re-raised it, which the pool counts as *unreachable*. So a spent mandate answered the
+   retryable `LEASE_UNAVAILABLE`, and every refused call scheduled another top-up: 43,085 ledger
+   round trips in a run the deployed client finishes in 24. `scripts/serve_pep.py`, the load
+   harness, carried its own copy with the same flaw, hidden only because its pool is never spent.
+4. **No result recorded its host.** The 138 RPS figure cannot be attributed to a machine. That
+   is why this ADR does not say which one produced it.
+
+### Decision
+
+1. **Every benchmark composes the PEP as it is deployed.** B3 commits each reservation and
+   enqueues it on a `SettlementQueue` with `before_release=settlement.drain`, exactly as
+   `Pipeline.settle` and `serve_pep.py` do. It uses `SessionLedger`, and its round-trip count
+   includes the settlement batches. `serve_pep.py` now uses `SessionLedger` rather than a copy,
+   and `PoolLedgerClient` translates `LeaseUnavailableError` to `None`. A behavioural test in
+   `TestTheHarnessMatchesTheDeployedComposition` pins the harness's empty-pool answer.
+2. **Every result records its topology, harness and host** (`platform`, Python, CPU count).
+   `performance.md` drops the "these figures predate ADR-062" note only for data carrying
+   `harness: ADR-062`, so the note cannot outlive the data it describes or vanish before it.
+3. **A two-machine run writes its own file** (`nfr2-two-host.json`), never the single-host one.
+   `performance.md` renders it when present and says "Not yet run" when it is not.
+4. **A PASS needs a load the host could offer**, and the worst run decides. A saturated
+   profile is "not offered", never a pass.
+5. **The comparisons follow the existing measure/render split.**
+   `run_comparative_benchmarks.py` measures and writes JSON, and
+   `generate_comparative_results.py` renders it and owns `--check`. CI runs only the check, in
+   the evidence-pack job, as `test_ci_workflow.py` requires.
+
+### Consequences
+
+- **NFR-1, re-measured** (Fedora, Python 3.12.15, 16 CPUs): `decide()` 229.1 µs median /
+  260.7 µs p99, `verify()` 158.4 µs median. Per-request in-process cost (verify + decide +
+  extract) is 405 µs, down from the 513 µs the September run gave.
+- **NFR-2, single host, re-measured with the deployed composition.** At 100 RPS enforcement
+  p99 ranged 7.995–9.364 ms across three runs. The worst run is past the 8 ms budget, so it
+  FAILs. The generator kept its schedule (lag p99 ≤ 1.25 ms), so the spread is on the server's
+  side. At 500 RPS the stub alone reached 497.5 RPS, but the PEP's bare proxy hop peaked at
+  331–342 RPS and the enforcing PEP at 191–220. On this host the ceiling is the PEP's own
+  hop in one process, not the generator. Whether that holds with the generator on another
+  machine is what the two-machine run will say, and `performance.md` now says exactly that.
+- **The flame graph was inflating the table.** py-spy attached to the enforcing PEP during a
+  counted run gave that run a 14.2 ms enforcement p99 against 7.0 and 7.7 ms unprofiled. The
+  profile is now a pass of its own before the counted runs.
+- **`performance.md`'s narrative is computed.** Two sentences written for August's data had
+  become false: "the stub alone" fell short, and "the harness itself stalling". A third,
+  "comfortably inside", described a 7.995 ms run against an 8 ms budget. All three are now
+  chosen by the numbers.
+- **The comparisons**, from `comparative.md`: `attenuate()` 0.089 ms median against 2.424 ms
+  for the simulated token exchange. B1 17.1 ms median per call with 900 ledger round trips;
+  B3 0.007 ms with 36. The PEP's 0.405 ms beside a measured 1,252 ms median Gemini call
+  (`gemini-3.5-flash-lite`, five calls) is 0.03%.
+- **And the comparison found a defect it was not looking for: gap 38.** B3, composed exactly
+  as deployed, recorded ৳4,920 of ৳9,000 spent — reproducibly, across two runs. `drain()`
+  stops when a flush does not shorten the queue. A PEP that keeps enqueuing during a flush
+  makes it stop with settlements still queued for the lease about to be released, so
+  `RELEASE` hands spent money back and the late settlements are rejected. `comparative.md`
+  reports it as UNDER-RECORDED rather than claiming the books held. It is fixed in
+  APICTA-09, not here, because it is on the money path and needs its own tests and chaos
+  run.
+- **The two-machine tooling works across a network boundary.** It was checked with the client
+  in a Docker container dialling the host's LAN address (192.168.68.109), so through the
+  bridge and firewalld, not loopback: 450 of 450 requests answered 200 on all three tiers,
+  the token authorized the enforcing tier, and SIGTERM to the server tore down every process,
+  the container and the token file. Two real machines remain the human step. Found doing
+  it: redirected output is block-buffered, so `--role server > log` printed nothing for five
+  minutes. `main()` now line-buffers stdout.

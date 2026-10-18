@@ -2,13 +2,13 @@
   "scenario": "CH-10-settlement",
   "title": "Rolling restart under load \u2014 where the spent budget goes",
   "expected": "a RELEASE returns only the unspent remainder of the lease",
-  "run_id": "f187a8e6-6c43-4331-964e-d9c0f7f7a498",
-  "started_at": "2026-10-17T18:37:18.770316+00:00",
-  "duration_s": 1.908,
+  "run_id": "52782846-a02f-4eac-b6d2-75177032fe86",
+  "started_at": "2026-10-18T10:11:14.228752+00:00",
+  "duration_s": 1.655,
   "invariant": {
     "interval_s": 0.25,
-    "samples": 9,
-    "held": 9,
+    "samples": 8,
+    "held": 8,
     "violated": 0,
     "unavailable": 0,
     "violations": [],
@@ -20,15 +20,15 @@
       "event": "scenario started"
     },
     {
-      "t_s": 1.861,
+      "t_s": 1.625,
       "event": "stopping pep-roll-0 gracefully (settle, then RELEASE)"
     },
     {
-      "t_s": 1.906,
+      "t_s": 1.653,
       "event": "scenario ended"
     },
     {
-      "t_s": 1.906,
+      "t_s": 1.653,
       "event": "final sweep"
     }
   ],

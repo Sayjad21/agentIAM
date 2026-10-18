@@ -37,6 +37,7 @@ _WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.
 _REGENERATORS: dict[str, tuple[str, ...]] = {
     "generate_chaos_results.py": ("pytest -m chaos",),
     "generate_benchmark_results.py": ("pytest -m perf", "run_load_test.py"),
+    "generate_comparative_results.py": ("bench-compare", "run_comparative_benchmarks.py"),
 }
 
 

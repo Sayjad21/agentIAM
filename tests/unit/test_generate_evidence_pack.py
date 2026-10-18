@@ -119,6 +119,14 @@ class TestBenchmarkCoverageTable:
         expected = generate_benchmark_results.render()
         assert generate_evidence_pack._escape(expected) in html
 
+    def test_the_comparative_report_is_embedded_verbatim(self) -> None:
+        """APICTA-08: AgentIAM against the designs it replaces, beside its own numbers."""
+        from scripts import generate_comparative_results
+
+        html = generate_evidence_pack.render()
+        expected = generate_comparative_results.render(generate_comparative_results.load())
+        assert generate_evidence_pack._escape(expected) in html
+
 
 # --------------------------------------------------------------------------- chaos
 

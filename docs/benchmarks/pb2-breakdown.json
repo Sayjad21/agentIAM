@@ -1,34 +1,34 @@
 {
-  "measured_at": "2026-09-06T23:10:42.979445+00:00",
+  "measured_at": "2026-10-18T10:11:22.676987+00:00",
   "unit": "microseconds",
   "steps": {
     "caveats": {
-      "p99_us": 5.8,
-      "median_us": 3.6
+      "p99_us": 4.5,
+      "median_us": 4.1
     },
     "decide_total": {
-      "p99_us": 430.4,
-      "median_us": 277.2
+      "p99_us": 260.7,
+      "median_us": 229.1
     },
     "extract": {
-      "p99_us": 30.3,
-      "median_us": 19.5
+      "p99_us": 21.3,
+      "median_us": 17.6
     },
     "policy": {
-      "p99_us": 238.6,
-      "median_us": 132.4
+      "p99_us": 97.9,
+      "median_us": 87.7
     },
     "record_hash": {
-      "p99_us": 26.0,
-      "median_us": 15.9
+      "p99_us": 19.0,
+      "median_us": 15.3
     },
     "token_authority": {
-      "p99_us": 228.8,
-      "median_us": 111.3
+      "p99_us": 81.6,
+      "median_us": 73.7
     },
     "verify": {
-      "p99_us": 408.3,
-      "median_us": 216.2
+      "p99_us": 175.1,
+      "median_us": 158.4
     }
   }
 }

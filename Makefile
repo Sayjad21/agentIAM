@@ -2,7 +2,7 @@
 .PHONY: help install up down demo-up demo-seed demo-agent demo-mcp demo-conc demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
         test-integration \
         test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
-        benchmarks evidence
+        benchmarks bench-compare evidence
 
 UV ?= uv
 
@@ -138,6 +138,11 @@ sbom: ## Regenerate `docs/evidence/sbom.json` from the current venv (T-054)
 
 benchmarks: ## Regenerate `docs/benchmarks/performance.md` from the committed JSON (T-053)
 	$(UV) run python scripts/generate_benchmark_results.py
+
+# APICTA-08. Measures — needs Docker and, for the third comparison, an LLM backend — and
+# writes comparative.json + comparative.md. CI only re-renders it (`--check`).
+bench-compare: ## AgentIAM vs token exchange and a per-call ledger check (comparative.md)
+	$(UV) run python scripts/run_comparative_benchmarks.py
 
 evidence: ## Regenerate `docs/evidence/evidence-pack.html` from committed sources (T-055)
 	$(UV) run python scripts/generate_evidence_pack.py
