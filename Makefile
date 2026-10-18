@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install up down demo-up demo-seed demo-agent demo-conc demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
+.PHONY: help install up down demo-up demo-seed demo-agent demo-mcp demo-conc demo-down demo-reset demo-tamper demo-untamper logs ps test test-unit \
         test-integration \
         test-e2e chaos lint fmt typecheck check bench cov clean nuke security sbom \
         benchmarks evidence
@@ -59,6 +59,12 @@ demo-untamper: ## Restore the record demo-tamper edited, so Verify chain is gree
 # labelled FORCED on screen, so the refusal is shown either way. Run after demo-seed.
 demo-agent: ## A live LLM agent meets a prompt injection; the PEP refuses what its token never held
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/demo_live_agent.py --tokens /secrets/demo-tokens.json --pep-url http://pep:8080 --control-plane-url http://controlplane:8000 --force-attempt
+
+# APICTA-06. The refusal ladder again as MCP tools/call messages to POST /proxy/mcp, each rung
+# checked against the reason code REST gets for it; exits 1 if any differs. Needs only the
+# tokens demo-up's seed wrote, not demo-seed's traffic.
+demo-mcp: ## The refusal ladder over MCP tools/call, checked against what REST decides
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm --no-deps seed python scripts/demo_mcp.py --tokens /secrets/demo-tokens.json --pep-url http://pep:8080
 
 demo-down: ## Stop the demo stack, keeping volumes
 	docker compose -f docker-compose.yml -f docker-compose.demo.yml down

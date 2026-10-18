@@ -12,6 +12,14 @@ bytes, so two parsers read every request: ours and the upstream's. Measured for
 against one value while the upstream executes the other, and nothing downstream can tell.
 Picking a winner would mean picking an upstream to agree with. This module refuses instead.
 
+**MCP (APICTA-06).** Every MCP call is `POST /mcp` with the tool named in a JSON-RPC body, so a
+path cannot say which tool runs. A rule's `mcp_tool` matches the body's `params.name` as well as
+the path, and the envelope members that pick the tool (`jsonrpc`, `method`, `params.name`) get
+the same ambiguity refusal as a mapped argument — they decide *what runs*, so the two parsers
+must agree on them. On a path an MCP rule covers, a `tools/call` is matched only by an MCP
+rule, never by a plain one; a plain rule there would otherwise authorize every unmapped tool
+under its own scope (spec 10 §3.1).
+
 Purity: no network, no database, no clock. `extract()` is a pure function of the request
 bytes and a `RouteTable`. It lives in `agentiam-pep` rather than `agentiam-core` because it
 depends on Starlette's path compiler, and core admits no such dependency.
@@ -52,6 +60,15 @@ DEFAULT_MAX_EXTRACT_BODY_BYTES: Final = 1 << 20
 
 _SOURCE_KINDS: Final = frozenset({"path", "query", "body", "header"})
 _NUMBER_SUFFIX: Final = ":number"
+
+#: The one JSON-RPC method an `mcp_tool` rule matches. Everything else an MCP client sends —
+#: `initialize`, `tools/list`, notifications — names no tool and is mapped, if at all, by an
+#: ordinary rule on the same path.
+MCP_TOOL_CALL: Final = "tools/call"
+
+#: Envelope members that decide which tool runs. A duplicate of any of them is TM-26: we would
+#: authorize one tool while a parser that keeps the other occurrence runs a different one.
+_ENVELOPE_KEYS: Final = ("jsonrpc", "method", "params")
 
 #: What `RequestContext.args` admits.
 ArgValue = Decimal | int | str
@@ -144,7 +161,7 @@ def _parse_source(expression: str) -> Source:
 
 @dataclass(frozen=True, slots=True)
 class RouteRule:
-    """One (method, path) → (scope, tool, arguments) mapping."""
+    """One (method, path[, MCP tool]) → (scope, tool, arguments) mapping."""
 
     method: str
     path: str
@@ -153,11 +170,17 @@ class RouteRule:
     sources: tuple[tuple[str, Source], ...]
     regex: re.Pattern[str]
     drift_mode: DriftMode = DriftMode.STRICT
+    #: The MCP tool name this rule matches in a `tools/call` body, or None for a REST rule.
+    #: The wire name, which the upstream chooses; `tool` stays the policy's resource id.
+    mcp_tool: str | None = None
 
     @property
     def needs_body(self) -> bool:
-        """Whether extraction must read the body — the only case that buffers it."""
-        return any(source.kind == "body" for _, source in self.sources)
+        """Whether extraction must read the body — the only case that buffers it.
+
+        Always for an MCP rule, which cannot match without reading the tool's name.
+        """
+        return self.mcp_tool is not None or any(source.kind == "body" for _, source in self.sources)
 
     def matches(self, method: str, path: str) -> re.Match[str] | None:
         """Return the path match if this rule applies, else None."""
@@ -222,8 +245,19 @@ class RouteTable:
             raise ValueError("`routes` must be a list")
 
         rules: list[RouteRule] = []
+        claimed: dict[tuple[str, str], int] = {}
         for index, raw in enumerate(raw_rules):
-            rules.append(cls._compile_rule(index, raw))
+            rule = cls._compile_rule(index, raw)
+            if rule.mcp_tool is not None:
+                # Unreachable rather than ambiguous — first match wins — but a reviewer reading
+                # the second rule would believe it governs the tool, which is the same mistake.
+                first = claimed.setdefault((rule.path, rule.mcp_tool), index)
+                if first != index:
+                    raise ValueError(
+                        f"routes[{index}] maps MCP tool {rule.mcp_tool!r} on {rule.path!r}, "
+                        f"which routes[{first}] already maps; the second could never match"
+                    )
+            rules.append(rule)
 
         default = config.get("default", {})
         action = default.get("action", "deny") if isinstance(default, Mapping) else "deny"
@@ -268,6 +302,16 @@ class RouteTable:
         if not path.startswith("/"):
             raise ValueError(f"{where}.path must start with '/'")
 
+        mcp_tool = raw.get("mcp_tool")
+        if "mcp_tool" in raw:
+            if not isinstance(mcp_tool, str) or not mcp_tool:
+                raise ValueError(f"{where}.mcp_tool must be a non-empty string")
+            if method.upper() != "POST":
+                raise ValueError(
+                    f"{where}.mcp_tool needs method POST, got {method!r}: an MCP tool call is "
+                    f"always a POST"
+                )
+
         regex, _format, converters = compile_path(path)
         param_names = frozenset(converters)
 
@@ -300,6 +344,17 @@ class RouteTable:
             sources=tuple(sources),
             regex=regex,
             drift_mode=drift_mode,
+            mcp_tool=mcp_tool,
+        )
+
+    def is_mcp(self, method: str, path: str) -> bool:
+        """Whether a request is addressed to a path some `mcp_tool` rule covers.
+
+        Such a request is read as JSON-RPC whatever its `content-type` says, and refused in
+        JSON-RPC's shape (`agentiam_pep.app`).
+        """
+        return method.upper() == "POST" and any(
+            rule.mcp_tool is not None and rule.regex.match(path) for rule in self.rules
         )
 
 
@@ -313,21 +368,27 @@ def _mapping_version(rules: Sequence[RouteRule], action: str, max_body: int) -> 
     shape = {
         "default": action,
         "max_extract_body_bytes": max_body,
-        "routes": [
-            {
-                "method": rule.method,
-                "path": rule.path,
-                "scope": rule.scope,
-                "tool": rule.tool,
-                "args": {
-                    label: f"{s.kind}.{'.'.join(s.keys)}{_NUMBER_SUFFIX if s.numeric else ''}"
-                    for label, s in sorted(rule.sources)
-                },
-            }
-            for rule in rules
-        ],
+        "routes": [_rule_shape(rule) for rule in rules],
     }
     return hash_object(shape)
+
+
+def _rule_shape(rule: RouteRule) -> dict[str, object]:
+    shape: dict[str, object] = {
+        "method": rule.method,
+        "path": rule.path,
+        "scope": rule.scope,
+        "tool": rule.tool,
+        "args": {
+            label: f"{s.kind}.{'.'.join(s.keys)}{_NUMBER_SUFFIX if s.numeric else ''}"
+            for label, s in sorted(rule.sources)
+        },
+    }
+    # Only when set, so every table written before MCP keeps the version its decisions
+    # already carry.
+    if rule.mcp_tool is not None:
+        shape["mcp_tool"] = rule.mcp_tool
+    return shape
 
 
 def _normalize(text: str) -> str:
@@ -459,6 +520,83 @@ def _parse_body(body: bytes | None) -> object | None:
     return parsed
 
 
+def _refuse_mcp(detail: str) -> ExtractionError:
+    return ExtractionError(ReasonCode.MALFORMED_REQUEST, detail)
+
+
+def _mcp_tool_call(body: bytes | None, limit: int) -> tuple[object, str | None]:
+    """Read an MCP request's envelope: the parsed body, and the tool it calls if it calls one.
+
+    Refuses anything whose tool the upstream could read differently: a body that is absent,
+    oversized or not a JSON-RPC object, a batch, a duplicated envelope member, and a
+    `tools/call` that is not plainly JSON-RPC 2.0 with a string `params.name`.
+    """
+    if body is None or not body:
+        raise _refuse_mcp("an MCP request must carry a JSON-RPC body")
+    if len(body) > limit:
+        raise _refuse_mcp(
+            f"body is {len(body)} bytes, over the {limit} byte extraction limit for an MCP request"
+        )
+    parsed = _parse_body(body)
+    if isinstance(parsed, list):
+        # Batching left MCP in 2025-06-18, but an upstream that still accepts it runs every
+        # member, and one decision cannot authorize several tools.
+        raise _refuse_mcp("a JSON-RPC batch cannot be authorized as one tool call")
+    if not isinstance(parsed, _Object):
+        raise _refuse_mcp("an MCP request body must be a JSON-RPC object")
+    for key in _ENVELOPE_KEYS:
+        if key in parsed.duplicates:
+            raise _refuse_mcp(
+                f"JSON-RPC member {key!r} appears more than once; the upstream would choose "
+                f"one and this gateway cannot know which"
+            )
+
+    if "method" not in parsed:
+        # A response to a server-initiated request: names no tool.
+        return parsed, None
+    method = parsed["method"]
+    if not isinstance(method, str):
+        raise _refuse_mcp("JSON-RPC member 'method' must be a string")
+    if method != MCP_TOOL_CALL:
+        return parsed, None
+
+    if parsed.get("jsonrpc") != "2.0":
+        raise _refuse_mcp("a tools/call must declare jsonrpc '2.0'")
+    params = parsed.get("params")
+    if not isinstance(params, _Object):
+        raise _refuse_mcp("a tools/call must carry a params object")
+    if "name" in params.duplicates:
+        raise _refuse_mcp(
+            "params member 'name' appears more than once; the upstream would choose one tool "
+            "and this gateway cannot know which"
+        )
+    name = params.get("name")
+    if not isinstance(name, str) or not name:
+        raise _refuse_mcp("a tools/call must name its tool with a string params.name")
+    return parsed, name
+
+
+def mcp_request_id(body: bytes | None) -> str | int | None:
+    """The JSON-RPC id to echo in a refusal: a string or an integer, else None.
+
+    Never itself a reason to refuse — a request the PEP refuses for its id would be refused
+    for something that does not decide what runs. `null` is what JSON-RPC prescribes when the
+    id cannot be read.
+    """
+    if not body:
+        return None
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    request_id = parsed.get("id")
+    if isinstance(request_id, bool) or not isinstance(request_id, str | int):
+        return None
+    return request_id
+
+
 def extract(
     table: RouteTable,
     *,
@@ -485,8 +623,18 @@ def extract(
         ExtractionError: If the route is unmapped and the default is deny, if the request is
             ambiguous (TM-26), or if a declared-numeric argument will not scale.
     """
+    mcp = table.is_mcp(method, path)
+    envelope: object | None = None
+    tool_call: str | None = None
+    if mcp:
+        envelope, tool_call = _mcp_tool_call(body, table.max_extract_body_bytes)
+
     matched: tuple[RouteRule, re.Match[str]] | None = None
     for rule in table.rules:
+        # On an MCP path a tool call is matched by its own rule and nothing else, and every
+        # other method only by a plain rule. One comparison says both.
+        if mcp and rule.mcp_tool != tool_call:
+            continue
         found = rule.matches(method.upper(), path)
         if found is not None:
             matched = (rule, found)
@@ -494,9 +642,10 @@ def extract(
 
     if matched is None:
         if table.deny_unmapped:
+            what = f"MCP tool {tool_call!r} at " if tool_call is not None else ""
             raise ExtractionError(
                 ReasonCode.MALFORMED_REQUEST,
-                f"no route mapping for {method.upper()} {path}; an unmapped route is an "
+                f"no route mapping for {what}{method.upper()} {path}; an unmapped route is an "
                 f"unreviewed route",
             )
         return Extraction(scope="", tool="", args={}, arg_digest=hash_object({}))
@@ -506,8 +655,8 @@ def extract(
     query = _collect_query(query_string)
     header_map = _collect_headers(headers)
 
-    parsed_body: object | None = None
-    if rule.needs_body and body is not None:
+    parsed_body: object | None = envelope
+    if rule.needs_body and body is not None and not mcp:
         if len(body) > table.max_extract_body_bytes:
             raise ExtractionError(
                 ReasonCode.MALFORMED_REQUEST,

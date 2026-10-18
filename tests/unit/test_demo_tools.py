@@ -12,10 +12,12 @@ screencast. Caught by running it three times; these tests are what stop it comin
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from collections.abc import AsyncGenerator
 from decimal import Decimal
+from typing import Any
 
 import httpx
 import pytest
@@ -24,6 +26,7 @@ from agentiam_demo.tools import (
     BENIGN_INVOICE,
     INJECTION,
     INVOICES,
+    MCP_TOOLS,
     POISONED_INVOICE,
     VENDORS,
     create_tools_app,
@@ -142,6 +145,96 @@ class TestEmail:
 
     async def test_a_missing_recipient_is_400(self, client: httpx.AsyncClient) -> None:
         assert (await client.post("/email/send", json={})).status_code == 400
+
+
+async def rpc(client: httpx.AsyncClient, method: str, params: object = None) -> dict[str, Any]:
+    body: dict[str, object] = {"jsonrpc": "2.0", "id": 1, "method": method}
+    if params is not None:
+        body["params"] = params
+    response = await client.post("/mcp", json=body)
+    assert response.status_code == 200
+    reply: dict[str, Any] = response.json()
+    assert reply["jsonrpc"] == "2.0"
+    assert reply["id"] == 1
+    return reply
+
+
+async def tool(client: httpx.AsyncClient, name: str, arguments: object) -> dict[str, Any]:
+    return await rpc(client, "tools/call", {"name": name, "arguments": arguments})
+
+
+class TestMcp:
+    """The same four upstreams over MCP's `tools/call` (APICTA-06).
+
+    The answers are the REST answers, re-wrapped: the point of a second protocol in the demo is
+    that the PEP decides it the same way, which is only checkable if the tools behind it agree.
+    """
+
+    async def test_tools_list_names_every_tool(self, client: httpx.AsyncClient) -> None:
+        listed = (await rpc(client, "tools/list"))["result"]["tools"]
+        assert [t["name"] for t in listed] == [t["name"] for t in MCP_TOOLS]
+        assert all(t["inputSchema"]["type"] == "object" for t in listed)
+
+    async def test_a_read_returns_what_rest_returns(self, client: httpx.AsyncClient) -> None:
+        result = (await tool(client, "get_invoice", {"invoice_id": "inv_001"}))["result"]
+        assert result["isError"] is False
+        assert result["structuredContent"] == INVOICES["inv_001"]
+        assert json.loads(result["content"][0]["text"]) == INVOICES["inv_001"]
+
+    async def test_a_vendor(self, client: httpx.AsyncClient) -> None:
+        result = (await tool(client, "get_vendor", {"vendor_id": "ven_01"}))["result"]
+        assert result["structuredContent"] == VENDORS["ven_01"]
+
+    async def test_a_payment_matches_its_rest_twin(self, client: httpx.AsyncClient) -> None:
+        payload = {"amount": "1250.0000", "recipient": {"account_id": "acct_9001"}}
+        over_rest = (await client.post("/payments", json=payload)).json()
+        result = (await tool(client, "initiate_payment", payload))["result"]
+        assert result["structuredContent"] == over_rest
+
+    async def test_a_numeric_amount_never_becomes_a_float(self, client: httpx.AsyncClient) -> None:
+        """Seventeen significant digits: a float would round it before `Decimal` saw it."""
+        response = await client.post(
+            "/mcp",
+            content=b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":'
+            b'"initiate_payment","arguments":{"amount":12345678901.123456,'
+            b'"recipient":{"account_id":"a"}}}}',
+            headers={"content-type": "application/json"},
+        )
+        assert response.json()["result"]["structuredContent"]["amount"] == "12345678901.123456"
+
+    async def test_both_emails(self, client: httpx.AsyncClient) -> None:
+        for name in ("send_email", "send_email_external"):
+            result = (await tool(client, name, {"to": "a@example.com"}))["result"]
+            assert result["structuredContent"]["status"] == "queued", name
+
+    async def test_a_tool_failure_is_a_result_not_a_protocol_error(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """MCP's own split: the tool ran and failed, which the model should get to read."""
+        result = (await tool(client, "get_invoice", {"invoice_id": "inv_999"}))["result"]
+        assert result["isError"] is True
+        assert "inv_999" in result["content"][0]["text"]
+
+    async def test_bad_arguments_are_a_tool_failure(self, client: httpx.AsyncClient) -> None:
+        result = (await tool(client, "initiate_payment", {"amount": "x"}))["result"]
+        assert result["isError"] is True
+
+    async def test_an_unknown_tool_is_invalid_params(self, client: httpx.AsyncClient) -> None:
+        assert (await tool(client, "delete_everything", {}))["error"]["code"] == -32602
+
+    async def test_arguments_that_are_not_an_object_are_invalid_params(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        assert (await tool(client, "get_invoice", ["inv_001"]))["error"]["code"] == -32602
+
+    async def test_an_unknown_method_is_method_not_found(self, client: httpx.AsyncClient) -> None:
+        assert (await rpc(client, "resources/list"))["error"]["code"] == -32601
+
+    async def test_a_body_that_is_not_json_rpc_is_invalid_request(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        response = await client.post("/mcp", json=[1, 2])
+        assert response.json()["error"]["code"] == -32600
 
 
 class TestDeterminism:

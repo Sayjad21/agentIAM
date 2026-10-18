@@ -16,7 +16,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-agent', 'demo-conc', 'demo-down', 'demo-reset',
+    [ValidateSet('help', 'install', 'up', 'down', 'demo-up', 'demo-seed', 'demo-agent', 'demo-mcp', 'demo-conc', 'demo-down', 'demo-reset',
                  'demo-tamper', 'demo-untamper',
                  'logs', 'ps',
                  'test', 'test-unit', 'test-integration', 'test-e2e', 'chaos', 'lint', 'fmt',
@@ -67,6 +67,7 @@ switch ($Target) {
             'sbom'             = 'Regenerate docs/evidence/sbom.json from the current venv'
             'demo-seed'        = 'Drive the demo scenario through a running stack (T-057)'
             'demo-agent'       = 'A live LLM agent meets a prompt injection (APICTA-05)'
+            'demo-mcp'         = 'The refusal ladder over MCP tools/call (APICTA-06)'
             'demo-conc'        = 'Three siblings, three PEPs, one pool, all at once'
             'demo-reset'       = 'Wipe all demo data and bring the stack back up empty'
             'demo-tamper'      = 'Edit one audit record so Verify chain turns red (demo only)'
@@ -194,6 +195,15 @@ switch ($Target) {
                       '--pep-url', 'http://pep:8080',
                       '--control-plane-url', 'http://controlplane:8000',
                       '--force-attempt')
+    }
+    'demo-mcp' {
+        # The refusal ladder as MCP tools/call messages, each rung checked against what REST
+        # decides; exits 1 if any differs.
+        Invoke-Step @('docker', 'compose', '-f', 'docker-compose.yml', '-f',
+                      'docker-compose.demo.yml', 'run', '--rm', '--no-deps', 'seed',
+                      'python', 'scripts/demo_mcp.py',
+                      '--tokens', '/secrets/demo-tokens.json',
+                      '--pep-url', 'http://pep:8080')
     }
     'demo-conc' {
         # The sibling race, live. Every run is a fresh mandate - one run spends the pool -

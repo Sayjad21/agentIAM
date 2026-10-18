@@ -1,6 +1,6 @@
 # Spec 10 — HTTP Scope and Argument Extraction
 
-**Status:** accepted · **Ticket:** T-020 · **Implements:** `PLAN.md` §8, §9 T-020
+**Status:** accepted · **Ticket:** T-020; §3.1 APICTA-06 · **Implements:** `PLAN.md` §8, §9 T-020
 **Depends on:** [`02-caveat-language.md`](02-caveat-language.md), [`09-decision-record.md`](09-decision-record.md)
 **Consumed by:** T-020, T-021, T-022, T-042, T-051
 **Resolves:** `02-caveat-language.md` §10 Q1 — *the `arg` path vocabulary and its extraction rules*
@@ -98,6 +98,81 @@ and exists so a catch-all deny rule can be written explicitly.
 
 The `scope` value is compared against the token's granted scopes as an opaque string. This
 document does not constrain the scope vocabulary; `PLAN.md` §2 does.
+
+### 3.1 MCP `tools/call` — the `mcp_tool` matcher (APICTA-06)
+
+Every MCP call is `POST /mcp`, with the tool named in a JSON-RPC body:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+ "params": {"name": "initiate_payment",
+            "arguments": {"amount": "1250.0000", "recipient": {"account_id": "acct_9001"}}}}
+```
+
+A path table cannot tell `initiate_payment` from `get_invoice`, so a rule may carry
+**`mcp_tool`**, the tool's wire name:
+
+```json
+{ "method": "POST", "path": "/mcp", "mcp_tool": "initiate_payment",
+  "scope": "payment:initiate", "tool": "payment_api",
+  "args": { "payment.amount": "body.params.arguments.amount:number",
+            "payment.to":     "body.params.arguments.recipient.account_id" } }
+```
+
+`mcp_tool` is what the upstream calls the tool; `tool` stays the policy's resource id. A rule
+that reuses its REST twin's `scope`, `tool` and argument labels is decided identically on either
+protocol, because nothing after step 1 can see which one a call arrived on. Arguments use the
+`body.` syntax of §4.1 unchanged.
+
+**Matching.** A path that some `mcp_tool` rule's pattern matches is an **MCP path**, for `POST`
+only. A `POST` to it is read as JSON-RPC **whatever its `content-type` says** — the tool's
+identity is in the body, so §6's "a non-JSON body yields no values" cannot apply — and then:
+
+| The body is | Matched by |
+|---|---|
+| A `tools/call` naming tool *T* | Only a rule with `mcp_tool` = *T*, compared exactly: no case folding, no normalization |
+| Any other method (`initialize`, `tools/list`, a notification), or a response with no `method` | Only a rule **without** `mcp_tool` |
+
+The second column is the load-bearing one. First match wins (§3), so if a plain `POST /mcp` rule
+could match a `tools/call`, every tool nobody mapped would be authorized under that rule's
+scope while the table read as if it denied them. A `tools/call` naming an unmapped tool is
+therefore unmapped, and follows `default.action` like any unmapped route. A `GET` to the path
+(MCP's server-to-client stream) or a `DELETE` (session end) is not an MCP request here and
+matches ordinary rules.
+
+**Refused as ambiguous (§5), `MALFORMED_REQUEST`:** an absent, empty, oversized
+(`max_extract_body_bytes`) or non-JSON body; a body that is not a JSON object; a **batch** (an
+array — removed from MCP in 2025-06-18, but an upstream that still accepts one runs every
+member, and one decision cannot authorize several tools); a duplicated `jsonrpc`, `method` or
+`params` member, or a duplicated `params.name`; a non-string `method`; and a `tools/call` whose
+`jsonrpc` is not `"2.0"`, whose `params` is not an object, or whose `name` is not a non-empty
+string. The duplicate rule is TM-26 one level up — measured, `json.loads` keeps the last of two
+`name` members, so `"name": "initiate_payment", "name": "get_invoice"` reads as a read to us and
+as a payment to a parser that keeps the first.
+
+**Load-time errors:** `mcp_tool` that is not a non-empty string; `mcp_tool` on a method other
+than `POST`; and two rules naming the same `mcp_tool` on the same path, since the second could
+never match.
+
+**Refusals** are a JSON-RPC error at the HTTP status the REST refusal uses —
+`{"jsonrpc": "2.0", "id": <the request's id>, "error": {"code": -32001, "message": <detail>,
+"data": <spec 09 §11.3's body>}}`, labelled `application/json`. The id is echoed when it is a
+string or an integer, else `null`; it never causes a refusal. Measured against the MCP Python
+SDK (`mcp` 2.3.0): a non-2xx JSON-RPC error labelled `application/json` reaches the caller as
+that error, so the status stays honest at no cost to an MCP client.
+
+**`mapping_version`** (§8) includes `mcp_tool` for every rule that has one, and is unchanged for
+a table that has none.
+
+**Out of scope, stated:**
+
+* **Streaming.** A response streamed as SSE is forwarded byte for byte like any other response;
+  nothing inside it is inspected or authorized. Messages on the `GET` stream — server-initiated
+  requests such as sampling — are not tool calls and are not decided here.
+* **`tools/list` filtering** (T-041's "an agent cannot see tools it may not call") is not
+  built. A listing is an ordinary method: mapped by a plain rule, or refused as unmapped.
+* **Sessions.** `Mcp-Session-Id` is forwarded like any other header; the PEP keeps no session
+  state, and a `tools/call` is decided on its own token, never on a session's history.
 
 ---
 
@@ -313,6 +388,7 @@ Stated rather than discovered later.
 | 3 | The digest is over extracted args, not the body | §7. A field nobody mapped is not in the digest and not authorized |
 | 4 | Ambiguity refusal covers mapped names only | An unmapped repeated parameter is forwarded as sent. Correct — nothing constrains it — but it means the PEP is not a general request sanitizer |
 | 5 | `max_extract_body_bytes` is a per-request cap, not a concurrent-memory bound | `max_connections` (100) × 1 MiB is the worst case. Recorded for T-053's load profile |
+| 6 | §6's content-type rule fails open against an upstream that parses JSON regardless of `content-type` | A `body.` argument sent as `text/plain` is not extracted, so its predicates are vacuous, while such an upstream still reads it. Measured: the demo's FastAPI tools refuse a non-JSON content type with 422, so the demo is not exposed; Go's `json.Decoder` on a raw body would be. MCP paths are exempt (§3.1). With a spend argument this is an unbudgeted payment: `STATUS.md` gap 37 |
 
 ---
 

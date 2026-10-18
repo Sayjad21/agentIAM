@@ -4899,3 +4899,78 @@ reported a false reason: not "retry", but "the human's budget is gone".
   §4.8's last bullet described as the control plane's problem to limit.
 - `_Registry`'s protocol changes from `async def ensure` to `def note_created`; the watch no
   longer awaits anything, so a slow ledger cannot back up the subscription loop.
+
+---
+
+## ADR-082 — An MCP tool call is matched by its own rule, or by nothing
+
+**Status:** accepted · **Ticket:** APICTA-06 · **Spec:** 10 §3.1 · **Reopens, in reduced form:**
+T-041/T-042 (`PLAN.md` §21) · **Relates to:** TM-26, ADR-023
+
+### Context
+
+Every MCP call is `POST /mcp` with the tool in the JSON-RPC body, so `RouteTable`'s
+`(method, path)` match cannot tell `initiate_payment` from `get_invoice`. The ticket adds
+`mcp_tool` to a rule. Four questions it left open were settled by probing:
+
+1. **What happens to the plain rules on the same path.** First match wins (spec 10 §3). A plain
+   `POST /mcp` rule — the natural way to map `initialize` or `tools/list` — placed before or
+   after the MCP rules would match a `tools/call` for any tool nobody mapped, and authorize it
+   under the plain rule's scope while the table read as if it denied it. A catch-all `ANY
+   /{rest:path}` rule does the same.
+2. **Whether the envelope is TM-26's problem.** Measured, `json.loads` keeps the last of two
+   `name` members. `"name": "initiate_payment", "name": "get_invoice"` is a read to us and a
+   payment to an upstream parser that keeps the first. The tool's identity is now something
+   the two parsers must agree on, exactly like a constrained argument.
+3. **Whether the body can be skipped on a non-JSON content type**, as spec 10 §6 does for REST.
+   Measured: the demo's FastAPI tools refuse `text/plain` and an absent content type with 422,
+   but the extractor cannot know its upstream is FastAPI.
+4. **Which HTTP status a refusal carries.** The ticket says the REST one. `PLAN.md` T-041 says
+   "a denial returns a well-formed MCP error, not a transport failure", and a 403 looked like
+   it might be one. Read from the MCP Python SDK (`mcp` 2.3.0, `client/streamable_http.py`):
+   on a status ≥ 400 it parses the body and, if it is a JSON-RPC error labelled
+   `application/json`, delivers that error to the caller.
+
+### Decision
+
+1. **On an MCP path a `tools/call` is matched only by the rule naming its tool, and every
+   other method only by a plain rule.** One comparison in `extract()` —
+   `if mcp and rule.mcp_tool != tool_call: continue` — says both. An unmapped tool follows
+   `default.action` like an unmapped route.
+2. **The envelope members that pick the tool are refused when ambiguous**: a duplicated
+   `jsonrpc`, `method`, `params` or `params.name`; a batch; a non-object body; a `tools/call`
+   that is not plainly JSON-RPC 2.0 with a non-empty string name. The name is compared
+   exactly — no case folding or normalization — so a name we do not recognise is unmapped,
+   which fails closed whichever way the upstream would have read it.
+3. **An MCP path's body is read whatever its content type says**, under the same
+   `max_extract_body_bytes` cap.
+4. **A refusal is a JSON-RPC error at the REST status**, `error.code` −32001 (JSON-RPC's
+   implementation-defined server range), `error.data` the whole spec 09 §11.3 body so
+   `decision_id` and `escalation_id` reach an MCP client too. The id is echoed when it is a
+   string or integer, else `null`, and is never itself a reason to refuse.
+5. **`mapping_version` gains `mcp_tool` only for rules that have one**, so every REST-only
+   table keeps the version its recorded decisions already carry.
+
+### Consequences
+
+- Every guard above was removed in turn and its test went red (15 of 15), including the
+  fall-through comparison, which is the one a refactor would most plausibly "simplify".
+- MCP and REST decide alike by construction rather than by care: the shipped MCP rules reuse
+  their REST twins' scope, policy tool id and argument labels, and nothing after step 1 can see
+  which protocol a call came in on. `make demo-mcp` checks every rung of the refusal ladder
+  against REST's reason code and exits 1 on a difference; the `demo-stack` CI job runs it.
+- **What T-041/T-042 asked for and this does not do**: no `initialize` handling, no
+  scope-filtered `tools/list` (EC-X12), no SSE inspection — a streamed response is forwarded
+  byte for byte and nothing inside it is authorized — and T-042's "tested against ≥ 3 real MCP
+  servers" is met by one stub. Both tickets stay deferred for those parts.
+- Found on the way, fixed here: `bootstrap_demo_secrets.py` refreshed only the role map on an
+  existing secrets volume, so a route added to `serve_pep.ROUTES` never reached a stack that
+  had been brought up before — every `tools/call` would have been refused as unmapped. It now
+  rewrites `routes.json` as well; the file is derived, so rewriting it rotates nothing.
+- Found on the way, not fixed: question 3's answer applies to REST too. A `body.` argument sent
+  under a non-JSON content type is not extracted, so its predicates are vacuous, while an
+  upstream that parses regardless of content type still reads it. For a payment that composes
+  with spec 02 §3.2 into something worse — measured, `authorize(POST /payments, body=None)` is
+  `Authorized` with nothing reserved. Not reachable on the demo (its tools refuse both shapes),
+  and on the money path, so it is `STATUS.md` gap 37 and its own ticket rather than a change
+  made here.

@@ -98,7 +98,6 @@ def _missing(out: Path) -> set[str]:
 def generate(out: Path) -> None:
     """Write every credential file into `out`. Pure filesystem side effect, no network."""
     from agentiam_core.tokens import generate_keypair
-    from scripts.serve_pep import ROUTES
 
     out.mkdir(parents=True, exist_ok=True)
 
@@ -107,8 +106,15 @@ def generate(out: Path) -> None:
     (out / "root_public_key.hex").write_text(root.public_key.to_bytes().hex(), encoding="utf-8")
 
     _write_policy(out)
-    (out / "routes.json").write_text(json.dumps(ROUTES), encoding="utf-8")
+    _write_routes(out)
     _write_role_assignments(out)
+
+
+def _write_routes(out: Path) -> None:
+    """The route table, from `serve_pep.ROUTES`. Derived, so rewriting it rotates nothing."""
+    from scripts.serve_pep import ROUTES
+
+    (out / "routes.json").write_text(json.dumps(ROUTES), encoding="utf-8")
 
 
 def _write_policy(out: Path) -> None:
@@ -197,10 +203,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     out = Path(args.out)
 
     if _is_complete(out) and not args.force:
-        # Refreshed anyway, so an agent added to the demo tree reaches an existing secrets
-        # volume without rotating the keys every token was minted under.
+        # Refreshed anyway, so an agent added to the demo tree — or a route added to the
+        # table, as APICTA-06's MCP rules were — reaches an existing secrets volume without
+        # rotating the keys every token was minted under.
+        _write_routes(out)
         _write_role_assignments(out)
-        print(f"{out}: already bootstrapped (use --force to rotate); role map refreshed")
+        print(f"{out}: already bootstrapped (use --force to rotate); routes, role map refreshed")
         return 0
 
     if _missing(out) == {"bundle_signing_key.hex"} and not args.force:
@@ -208,6 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # to keep. Replacing the policy half alone keeps the root key, and so every token the
         # seeder minted; regenerating wholesale would invalidate them all.
         _write_policy(out)
+        _write_routes(out)
         _write_role_assignments(out)
         print(f"{out}: added the bundle-signing key and re-signed the boot bundle; root key kept")
         return 0

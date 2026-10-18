@@ -1177,6 +1177,12 @@ Deps: T-018. Accept: `initialize`, `tools/list`, `tools/call`, notifications, an
 Deps: T-041. Accept: `tool_id` → scope mapping; arguments extracted for `ArgPredicate` caveats; tested against ≥ 3 real MCP servers (filesystem, fetch, and one custom).
 *Rationale: coupled to T-041 (deferred MCP gateway).*
 
+> **Superseded in part (APICTA-06, ADR-082):** `tools/call` extraction is built — a rule's
+> `mcp_tool` matches the JSON-RPC body, arguments are read with the existing `body.` syntax, and
+> refusals are JSON-RPC errors. Governed by [`specs/10-scope-extraction.md`](specs/10-scope-extraction.md)
+> §3.1. Not built: T-041's `initialize` handling, scope-filtered `tools/list` and SSE, and T-042's
+> "≥ 3 real MCP servers" (one stub). Both tickets stay deferred for those parts.
+
 **T-043 · Keycloak OIDC integration**
 Deps: T-001. Accept: human login; task approval requires a valid session; `principal_id` from the OIDC `sub` flows into the mandate and appears in the custody chain.
 

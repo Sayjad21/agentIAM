@@ -289,6 +289,26 @@ class TestIdempotency:
         assert roles == bootstrap_demo_secrets.ROLE_ASSIGNMENTS
         assert (tmp_path / "root_public_key.hex").read_text(encoding="utf-8") == first_key
 
+    def test_a_second_run_refreshes_a_stale_route_table_without_rotating(
+        self, tmp_path: Path
+    ) -> None:
+        """A route added to `serve_pep.ROUTES` must reach an existing secrets volume.
+
+        APICTA-06's MCP rules are the case that found it: a volume bootstrapped before them
+        kept the old `routes.json`, so every `tools/call` was refused as unmapped on a stack
+        whose code had them. Same shape as the role map above, and the same fix.
+        """
+        from scripts.serve_pep import ROUTES
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+        first_key = (tmp_path / "root_public_key.hex").read_text(encoding="utf-8")
+        (tmp_path / "routes.json").write_text('{"routes": []}', encoding="utf-8")
+
+        bootstrap_demo_secrets.main(["--out", str(tmp_path)])
+
+        assert json.loads((tmp_path / "routes.json").read_text(encoding="utf-8")) == ROUTES
+        assert (tmp_path / "root_public_key.hex").read_text(encoding="utf-8") == first_key
+
     def test_force_does_rotate(self, tmp_path: Path) -> None:
         bootstrap_demo_secrets.main(["--out", str(tmp_path)])
         first = (tmp_path / "root_public_key.hex").read_text(encoding="utf-8")

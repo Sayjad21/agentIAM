@@ -13,22 +13,30 @@ derived from the request instead.
 **Money is `Decimal`, rendered as a string.** Rule 6 does not stop applying because this is a
 stub — a float here would come back through the PEP's commit path and into the ledger.
 
-MCP versions of these are T-041/T-042 and deferred (`PLAN.md` §21); these speak plain HTTP,
-which is what the T-018 gateway proxies.
+**Two protocols, one implementation.** Every tool is also an MCP tool on `POST /mcp`
+(APICTA-06): `tools/list` and `tools/call` over JSON-RPC, answered with the very function the
+REST route calls. The demo's claim is that the PEP decides a call the same way on either
+protocol, which can only be checked if the tools behind it answer the same way too.
+`initialize`, sessions and SSE streaming are not implemented — nothing the PEP decides depends
+on them (spec 10 §3.1).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any, Final
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 __all__ = [
     "BENIGN_INVOICE",
     "INJECTION",
     "INVOICES",
+    "MCP_TOOLS",
     "POISONED_INVOICE",
     "VENDORS",
     "create_tools_app",
@@ -92,6 +100,142 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{digest[:12]}"
 
 
+def _invoice(invoice_id: str) -> dict[str, Any]:
+    invoice = INVOICES.get(invoice_id)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail=f"no invoice {invoice_id}")
+    return invoice
+
+
+def _vendor(vendor_id: str) -> dict[str, Any]:
+    vendor = VENDORS.get(vendor_id)
+    if vendor is None:
+        raise HTTPException(status_code=404, detail=f"no vendor {vendor_id}")
+    return vendor
+
+
+def _payment(body: dict[str, Any]) -> dict[str, Any]:
+    raw_amount = body.get("amount")
+    recipient = body.get("recipient", {})
+    account_id = recipient.get("account_id") if isinstance(recipient, dict) else None
+    if raw_amount is None or account_id is None:
+        raise HTTPException(status_code=400, detail="amount and recipient.account_id required")
+    try:
+        amount = Decimal(str(raw_amount))
+    except Exception as exc:  # a malformed amount is the caller's error, not a crash
+        raise HTTPException(status_code=400, detail="amount is not a number") from exc
+
+    return {
+        "payment_id": _stable_id("pay", str(account_id), f"{amount:f}"),
+        "account_id": account_id,
+        "amount": f"{amount:f}",
+        "status": "accepted",
+    }
+
+
+def _email(body: dict[str, Any], *, prefix: str) -> dict[str, Any]:
+    to = body.get("to")
+    if not to:
+        raise HTTPException(status_code=400, detail="to is required")
+    return {"message_id": _stable_id(prefix, str(to)), "to": to, "status": "queued"}
+
+
+def _object_schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {"type": "object", "properties": properties, "required": required}
+
+
+_STRING: Final = {"type": "string"}
+
+#: What `tools/list` answers, in order. The names are the ones `scripts/serve_pep.py`'s MCP
+#: rules match; each rule's `scope` and `tool` are its REST twin's, so a token and a policy
+#: cannot tell which protocol a call came in on.
+MCP_TOOLS: Final[tuple[dict[str, Any], ...]] = (
+    {
+        "name": "get_invoice",
+        "description": "Read one invoice by id.",
+        "inputSchema": _object_schema({"invoice_id": _STRING}, ["invoice_id"]),
+    },
+    {
+        "name": "get_vendor",
+        "description": "Read one vendor by id.",
+        "inputSchema": _object_schema({"vendor_id": _STRING}, ["vendor_id"]),
+    },
+    {
+        "name": "initiate_payment",
+        "description": "Pay an amount in BDT to a recipient account.",
+        "inputSchema": _object_schema(
+            {
+                "amount": {"type": "string", "description": "BDT, up to four decimal places"},
+                "recipient": _object_schema({"account_id": _STRING}, ["account_id"]),
+            },
+            ["amount", "recipient"],
+        ),
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email inside the organization.",
+        "inputSchema": _object_schema({"to": _STRING}, ["to"]),
+    },
+    {
+        "name": "send_email_external",
+        "description": "Send an email outside the organization.",
+        "inputSchema": _object_schema({"to": _STRING}, ["to"]),
+    },
+)
+
+#: The REST implementation behind each MCP tool name.
+_MCP_HANDLERS: Final[dict[str, Callable[[dict[str, Any]], dict[str, Any]]]] = {
+    "get_invoice": lambda args: _invoice(str(args.get("invoice_id", ""))),
+    "get_vendor": lambda args: _vendor(str(args.get("vendor_id", ""))),
+    "initiate_payment": _payment,
+    "send_email": lambda args: _email(args, prefix="msg"),
+    "send_email_external": lambda args: _email(args, prefix="msg-ext"),
+}
+
+#: JSON-RPC 2.0's own error codes (§5.1).
+_INVALID_REQUEST: Final = -32600
+_METHOD_NOT_FOUND: Final = -32601
+_INVALID_PARAMS: Final = -32602
+
+
+def _rpc_result(request_id: object, result: dict[str, Any]) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def _call_tool(request_id: object, params: object) -> dict[str, Any]:
+    """`tools/call`, mapped onto MCP's split between the two ways a call can fail.
+
+    An unknown tool or a malformed `arguments` is a protocol error — the call never happened.
+    A tool that ran and refused (an unknown invoice, a missing amount) is a *result* with
+    `isError`, which is what MCP gives a model to read and recover from.
+    """
+    name = params.get("name") if isinstance(params, dict) else None
+    handler = _MCP_HANDLERS.get(name) if isinstance(name, str) else None
+    if handler is None:
+        return _rpc_error(request_id, _INVALID_PARAMS, f"unknown tool {name!r}")
+    arguments = params.get("arguments", {}) if isinstance(params, dict) else None
+    if not isinstance(arguments, dict):
+        return _rpc_error(request_id, _INVALID_PARAMS, "arguments must be an object")
+    try:
+        payload = handler(arguments)
+    except HTTPException as exc:
+        return _rpc_result(
+            request_id, {"content": [{"type": "text", "text": str(exc.detail)}], "isError": True}
+        )
+    return _rpc_result(
+        request_id,
+        {
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+            "structuredContent": payload,
+            "isError": False,
+        },
+    )
+
+
 def create_tools_app() -> FastAPI:
     """One ASGI app carrying all four stub tools.
 
@@ -117,10 +261,7 @@ def create_tools_app() -> FastAPI:
     @app.get("/invoices/{invoice_id}")
     async def get_invoice(invoice_id: str) -> dict[str, Any]:
         """One invoice, or 404."""
-        invoice = INVOICES.get(invoice_id)
-        if invoice is None:
-            raise HTTPException(status_code=404, detail=f"no invoice {invoice_id}")
-        return invoice
+        return _invoice(invoice_id)
 
     # -- vendors -------------------------------------------------------------------
 
@@ -132,10 +273,7 @@ def create_tools_app() -> FastAPI:
     @app.get("/vendors/{vendor_id}")
     async def get_vendor(vendor_id: str) -> dict[str, Any]:
         """One vendor, or 404."""
-        vendor = VENDORS.get(vendor_id)
-        if vendor is None:
-            raise HTTPException(status_code=404, detail=f"no vendor {vendor_id}")
-        return vendor
+        return _vendor(vendor_id)
 
     # -- payments ------------------------------------------------------------------
 
@@ -147,32 +285,14 @@ def create_tools_app() -> FastAPI:
         `actual`, which may differ from what was reserved. Returning it is what makes the
         commit path exercisable end to end.
         """
-        raw_amount = body.get("amount")
-        recipient = body.get("recipient", {})
-        account_id = recipient.get("account_id") if isinstance(recipient, dict) else None
-        if raw_amount is None or account_id is None:
-            raise HTTPException(status_code=400, detail="amount and recipient.account_id required")
-        try:
-            amount = Decimal(str(raw_amount))
-        except Exception as exc:  # a malformed amount is the caller's error, not a crash
-            raise HTTPException(status_code=400, detail="amount is not a number") from exc
-
-        return {
-            "payment_id": _stable_id("pay", str(account_id), f"{amount:f}"),
-            "account_id": account_id,
-            "amount": f"{amount:f}",
-            "status": "accepted",
-        }
+        return _payment(body)
 
     # -- email ---------------------------------------------------------------------
 
     @app.post("/email/send")
     async def send_email(body: dict[str, Any]) -> dict[str, Any]:
         """Accept an internal email. Sends nothing, which is the point of a stub here."""
-        to = body.get("to")
-        if not to:
-            raise HTTPException(status_code=400, detail="to is required")
-        return {"message_id": _stable_id("msg", str(to)), "to": to, "status": "queued"}
+        return _email(body, prefix="msg")
 
     @app.post("/email/send-external")
     async def send_email_external(body: dict[str, Any]) -> dict[str, Any]:
@@ -184,9 +304,30 @@ def create_tools_app() -> FastAPI:
         { !resource.is_external }` turns on. One endpoint could not express both sides, so
         the condition had nothing to distinguish and no end-to-end path (TODO item 26).
         """
-        to = body.get("to")
-        if not to:
-            raise HTTPException(status_code=400, detail="to is required")
-        return {"message_id": _stable_id("msg-ext", str(to)), "to": to, "status": "queued"}
+        return _email(body, prefix="msg-ext")
+
+    # -- MCP -----------------------------------------------------------------------
+
+    @app.post("/mcp")
+    async def mcp(request: Request) -> JSONResponse:
+        """`tools/list` and `tools/call` over JSON-RPC, always answered with HTTP 200.
+
+        Parsed by hand rather than through a Pydantic body, because a JSON-RPC error has to
+        carry the request's own id — which a 422 from FastAPI's validation never would.
+        """
+        try:
+            # `Decimal`, not float: an amount crosses this line on its way to the ledger.
+            message = json.loads(await request.body(), parse_float=Decimal)
+        except ValueError:
+            return JSONResponse(_rpc_error(None, _INVALID_REQUEST, "not JSON"))
+        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+            return JSONResponse(_rpc_error(None, _INVALID_REQUEST, "not a JSON-RPC request"))
+        request_id = message.get("id")
+        method = message.get("method")
+        if method == "tools/list":
+            return JSONResponse(_rpc_result(request_id, {"tools": list(MCP_TOOLS)}))
+        if method == "tools/call":
+            return JSONResponse(_call_tool(request_id, message.get("params")))
+        return JSONResponse(_rpc_error(request_id, _METHOD_NOT_FOUND, f"no method {method!r}"))
 
     return app

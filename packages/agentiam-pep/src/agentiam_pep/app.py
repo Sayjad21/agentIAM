@@ -30,6 +30,15 @@ Three things about the forwarding path were settled by measurement rather than b
    `RuntimeError: Stream consumed`, so extraction must precede forwarding.
 
 **Trailers are not handled, and cannot be on this stack.** See ADR-020.
+
+**MCP (APICTA-06).** A `tools/call` arrives on the same proxy route and runs the same ten steps.
+Two things differ, both decided by `RouteTable.is_mcp`: the body is always read, whatever its
+`content-type` says, because the tool's name is in it; and a refusal is a JSON-RPC error
+envelope at the HTTP status the REST refusal uses. Measured against the MCP Python SDK
+(`mcp` 2.3.0, `streamable_http.py`): a non-2xx response whose body is a JSON-RPC error labelled
+`application/json` reaches the caller as that error, not as a transport failure — so the status
+can stay honest without costing an MCP client the reason code. A streamed (SSE) response is
+forwarded byte for byte like any other; nothing in it is authorized (spec 10 §3.1).
 """
 
 from __future__ import annotations
@@ -48,6 +57,7 @@ from prometheus_client.registry import Collector
 from agentiam_core.errors import ReasonCode
 from agentiam_core.models import BudgetDimension
 from agentiam_pep.config import PepSettings
+from agentiam_pep.extractor import mcp_request_id
 from agentiam_pep.headers import filter_request_headers, filter_response_headers
 from agentiam_pep.pipeline import Authorized, Refused
 from agentiam_pep.tracing import configure_tracing
@@ -61,6 +71,11 @@ if TYPE_CHECKING:
 
 #: Where proxied traffic enters. `PLAN.md` §8: `ANY /proxy/{upstream_path}`.
 PROXY_PREFIX: Final = "/proxy"
+
+#: The JSON-RPC error code of every MCP refusal. JSON-RPC reserves -32000 to -32099 for
+#: implementation-defined server errors; the reason itself travels in `error.data`, exactly as
+#: the REST body carries it, so one code is enough.
+MCP_REFUSAL_CODE: Final = -32001
 
 
 def _build_metrics(registry: CollectorRegistry) -> tuple[Counter, Histogram]:
@@ -244,11 +259,13 @@ def create_app(
         with span_cm as span:
             authorized: Authorized | None = None
             if pipeline is not None:
-                # Read the body only when some route maps a `body.` argument; otherwise the
-                # stream is left untouched and the proxy hop stays constant-memory
-                # (ADR-023). Measured: `json()` then `stream()` replays fine, the reverse
-                # raises.
-                request_body = await request.body() if _reads_body(request) else None
+                routes = getattr(pipeline, "routes", None)
+                mcp = routes is not None and routes.is_mcp(request.method, "/" + upstream_path)
+                # Read the body only when some route maps a `body.` argument, or the request
+                # is MCP; otherwise the stream is left untouched and the proxy hop stays
+                # constant-memory (ADR-023). Measured: `json()` then `stream()` replays fine,
+                # the reverse raises.
+                request_body = await request.body() if mcp or _reads_body(request) else None
                 outcome = await pipeline.authorize(
                     method=request.method,
                     path="/" + upstream_path,
@@ -261,6 +278,11 @@ def create_app(
                         span.set_attribute("agentiam.outcome", "refuse")
                         span.set_attribute("agentiam.reason_code", outcome.reason_code.value)
                     requests_total.labels(request.method, str(outcome.status)).inc()
+                    if mcp:
+                        return JSONResponse(
+                            _mcp_refusal(outcome, mcp_request_id(request_body)),
+                            status_code=outcome.status,
+                        )
                     return JSONResponse(outcome.body(), status_code=outcome.status)
                 authorized = outcome
                 if span is not None:
@@ -350,6 +372,19 @@ def _reads_body(request: Request) -> bool:
     return "json" in content_type.lower()
 
 
+def _mcp_refusal(outcome: Refused, request_id: str | int | None) -> dict[str, object]:
+    """A refusal in JSON-RPC's shape: spec 09 §11.3's body, whole, as `error.data`.
+
+    Whole rather than just the reason code, so `decision_id` and `escalation_id` reach an MCP
+    client too — one that cannot see the escalation id cannot follow it up.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": MCP_REFUSAL_CODE, "message": outcome.detail, "data": outcome.body()},
+    }
+
+
 def _gateway_error(status: int, detail: str) -> JSONResponse:
     """Fail closed with a reason code from the closed set (rule 5, `PLAN.md` §6.9)."""
     return JSONResponse(
@@ -358,4 +393,4 @@ def _gateway_error(status: int, detail: str) -> JSONResponse:
     )
 
 
-__all__ = ["PROXY_PREFIX", "create_app"]
+__all__ = ["MCP_REFUSAL_CODE", "PROXY_PREFIX", "create_app"]

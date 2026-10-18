@@ -15,11 +15,11 @@ than none.
 |---|---|
 | **Tickets** | **49 of 53 in scope done** · T-057 partly done · T-058, T-059, T-061 (reduced) left · 8 deferred · 61 defined (`PLAN.md` §9) |
 | **Milestones** | Everything through hardening (T-051…T-056) is complete. Demo and submission (T-057…T-061) is in progress |
-| **Tests** | 3,321 collected. `make check` runs 2,943, all passing; the other 378 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
+| **Tests** | 3,444 collected. `make check` runs 3,066, all passing; the other 378 are `integration`, `e2e`, `chaos` and `perf`, each run by its own target and CI job |
 | **Coverage** | `agentiam-core` 100% of statements, held since T-005. Whole tree ~98% when last measured (T-051). Reported, not gated — gap 14 |
 | **CI** | Nine jobs on push/PR: lint, types and tests with the NFR-1 benchmark · integration against real Postgres · end-to-end slice · core purity · evidence pack, `performance.md` and `chaos-results.md` drift checks · compose health · full demo stack (NFR-8) · security scan (bandit, pip-audit, trivy, gitleaks, SBOM, log secret scanner) · nightly chaos. `release.yml` is tag-triggered and has never run against a real tag |
 | **Specs** | 10 (`specs/01`…`10`), each written before its code |
-| **ADRs** | 81 (ADR-001…ADR-081) |
+| **ADRs** | 82 (ADR-001…ADR-082) |
 
 ---
 
@@ -35,7 +35,7 @@ than none.
 | Activation gate, Cedar UI, NL compiler (T-026…T-031) | all (T-031 in APICTA-01 Part D) | — |
 | Drift (T-032…T-036) | T-032, T-033, T-036 | T-034, T-035 |
 | Escalation, revocation, Bloom cache, subtree revocation (T-037…T-040) | all | — |
-| MCP, Keycloak, SPIRE (T-041…T-044) | T-043 | T-041, T-042, T-044 |
+| MCP, Keycloak, SPIRE (T-041…T-044) | T-043; `tools/call` extraction of T-042 in APICTA-06 | T-041, T-042, T-044 |
 | Console screens, Grafana/OTEL, escalation UI (T-045…T-050) | all | — |
 | Red team, chaos, load, security scan, evidence pack, deployment (T-051…T-056) | all | — |
 | Demo and submission (T-057…T-061) | — | T-060 |
@@ -68,8 +68,8 @@ Each has a resumption trigger, recorded in `PLAN.md` §21.
 | T-015 | Adaptive lease sizing. Fixed leases behave identically for the demo; the algorithm is specified in spec 04 §12. Also where gap 8's `max_fraction` clamp belongs | Production traffic with variable rate |
 | T-034 | Drift dataset — 2,000+ labelled pairs, weeks of human labelling | Research phase |
 | T-035 | Calibrated drift classifier | After T-034 |
-| T-041 | MCP streamable-HTTP gateway. The HTTP PEP proves the pipeline; MCP is the adoption path | Adoption push |
-| T-042 | MCP scope extractor | With T-041 |
+| T-041 | MCP streamable-HTTP gateway: `initialize`, scope-filtered `tools/list`, SSE. The HTTP PEP proves the pipeline; MCP is the adoption path | Adoption push |
+| T-042 | MCP scope extractor. **`tools/call` is built** (APICTA-06, ADR-082); what is left is "tested against ≥ 3 real MCP servers" — there is one stub | With T-041 |
 | T-044 | SPIRE workload identity. The original rationale — "mTLS gives the same outcome" — does not hold: there is no TLS between any services (§3) | Enterprise SPIFFE requirement, after TLS exists |
 | T-060 | Paper draft. BIIN scores the demo and report. The research track is planned in `research/` | Post-BIIN |
 
@@ -88,7 +88,7 @@ claim; `MASTER.md` §8 has the talk-track version.
 
 | What the console or docs say | What is actually true | Gap |
 |---|---|---|
-| "One URL change to install" (MCP gateway) | No MCP code anywhere; T-041/T-042 deferred | — |
+| "One URL change to install" (MCP gateway) | MCP `tools/call` over HTTP runs the same ten steps and is decided as REST is (APICTA-06; `make demo-mcp` checks every refusal layer against REST). But only `tools/call` is mapped: a stock MCP client's `initialize` is refused as unmapped (the SDK's `Client` sends it first — read from `mcp` 2.3.0), there is no scope-filtered `tools/list`, and SSE is forwarded uninspected. A raw JSON-RPC client works; an off-the-shelf one does not, yet | T-041 |
 | Drift detection | Rule-based v0, three of six features, opt-in Ollama profile, NFR-9 never measured. Every demo route has drift `off` | — |
 | "mTLS in place; SPIFFE deferred" (`PLAN.md` T-044) | No TLS between any services | — |
 | "Periodic checkpoints signed by the audit service key" (`PLAN.md` §6.8) | No checkpoints, no signatures | — |
@@ -118,6 +118,7 @@ findings in `JOURNAL.md`'s appendix; a number is never reused.
 | 10 | **`tests/integration/test_budget_schema.py` duplicates `conftest.py`'s fixtures.** T-012 predates the shared conftest; noted in its header and left alone | Two copies of the container and migration fixtures drift apart | Same cleanup as §4.3 |
 | 12 | **No HTTP trailer support, and none available.** Measured across httpx, Starlette and uvicorn: no layer exposes trailers (ADR-020) | One T-018 acceptance criterion consciously unmet. Costs nothing for the demo; trailers are rare on HTTP/1.1 | Only reopens if T-041 (MCP, deferred) needs them — and the fix would be in the ASGI server, not here |
 | 35 | **The deployed PEP's recorded decision latency is ~1–2 ms, not the 0.43 ms in-process figure.** `latency_us` spans `authorize()` steps 1–7. Measured on the demo stack (APICTA-05): warm, a scope refusal records 0.8–2.0 ms and an allowed read 1.1–2.6 ms; the first request after idle, 11.7 ms. T-053's 145 µs `decide()` + 209 µs `verify()` is the in-process benchmark and does not include extraction, chain-identity parsing, principal resolution or a containerized host. `DEMO.md` beat 3 said *"Denied in 0.4 ms"* with the latency panel visible, which shows the recorded number | A presenter quoting 0.4 ms beside a panel reading 1.7 ms | Profile where the deployed millisecond goes — APICTA-08, which re-measures the hot path anyway |
+| 37 | **A payment whose amount is not extracted is authorized with nothing reserved.** Measured (APICTA-06): `authorize(POST /payments, body=None)` — what the gateway passes for a body labelled `text/plain` — returns `Authorized` and the pool does not move. Two causes compose: spec 02 §3.2 makes an absent argument vacuous, so neither the ceiling caveat nor the policy's amount condition fires; and spec 10 §6 does not read a body whose content type is not JSON. An upstream that parses JSON regardless of content type (Go's `json.Decoder` on a raw body does), or that defaults a missing amount, executes a payment no budget saw. MCP paths are exempt from the second cause: they read the body whatever it is labelled | Not reachable on the demo: its FastAPI tools refuse a non-JSON content type and a missing amount with 422/400, over REST and MCP alike. Against a lenient upstream it is an unbudgeted payment | A route that spends must require its amount — refuse the request when the mapped spend argument is absent, rather than relying on the upstream to — and refuse a non-JSON content type on routes that map a `body.` source. Money path: its own ticket, with `make chaos` |
 | 36 | **The console names the wrong block for a failing caveat.** `CaveatRef.block_index` is the caveat's position in the flattened list `token_caveats()` returns, and `explain()` prints it as *"block N"*. Measured live: the doc reader's scope refusal reads *"block 0's scope_subset caveat"* — block 0 is the authority block, and the caveat sits in block 1 — and a depth-2 settlement agent's ceiling reads *"block 3"* on a chain with blocks 0–2 | The drawer points an operator at the wrong delegation step. The reason code and caveat kind are right | Carry the block index through `token_caveats()` (one block per caveat group), or print the caveat kind without a block number |
 
 ---

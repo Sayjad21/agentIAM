@@ -118,6 +118,36 @@ ROUTES: Final[dict[str, Any]] = {
             },
             "drift_mode": "off",
         },
+        # APICTA-06: the same tools over MCP. Every call is `POST /mcp`, so `mcp_tool` picks
+        # the rule from the JSON-RPC body; scope, policy tool id and argument labels are each
+        # rule's REST twin's, so a token and the bundle decide a call identically on either
+        # protocol. Appended, so no REST rule's position — or match — moves.
+        *(
+            {
+                "method": "POST",
+                "path": "/mcp",
+                "mcp_tool": mcp_tool,
+                "scope": scope,
+                "tool": tool,
+                "args": {label: f"body.params.arguments.{source}" for label, source in args},
+                "drift_mode": "off",
+            }
+            for mcp_tool, scope, tool, args in (
+                ("get_invoice", "invoice:read", "invoice_api", [("invoice.id", "invoice_id")]),
+                ("get_vendor", "vendor:read", "vendor_api", [("vendor.id", "vendor_id")]),
+                ("send_email", "email:send", "email_internal", [("email.to", "to")]),
+                ("send_email_external", "email:send", "email_external", [("email.to", "to")]),
+                (
+                    "initiate_payment",
+                    "payment:initiate",
+                    "payment_api",
+                    [
+                        ("payment.amount", "amount:number"),
+                        ("payment.to", "recipient.account_id"),
+                    ],
+                ),
+            )
+        ),
     ],
     "default": {"action": "deny"},
 }

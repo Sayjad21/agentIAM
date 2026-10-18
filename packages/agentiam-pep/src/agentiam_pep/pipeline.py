@@ -283,6 +283,11 @@ class Pipeline:
         self._settlement = settlement
 
     @property
+    def routes(self) -> RouteTable:
+        """The route table step 1 reads — the gateway asks it which requests are MCP."""
+        return self._routes
+
+    @property
     def pools(self) -> LeasePoolRegistry:
         """The pools this PEP spends from, one per mandate."""
         return self._pools

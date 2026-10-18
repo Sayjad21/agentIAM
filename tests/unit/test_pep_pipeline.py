@@ -264,6 +264,7 @@ async def a_pipeline(
     mandate_id: uuid.UUID = MANDATE_ID,
     pools: LeasePoolRegistry | None = None,
     settlement: SettlementQueue | None = None,
+    routes: dict[str, object] = ROUTES,
 ) -> tuple[Pipeline, CollectingSink, LeasePool]:
     sink = CollectingSink()
     pool = LeasePool(
@@ -274,7 +275,7 @@ async def a_pipeline(
     )
     await pool.prime(BudgetDimension.SPEND_BDT)
     pipeline = Pipeline(
-        routes=RouteTable.from_config(ROUTES),
+        routes=RouteTable.from_config(routes),
         key_set=KEY_SET,
         policy=CedarEngine(
             PolicyBundle(version="bundle-1", cedar_source=policy_source), tools=TOOLS

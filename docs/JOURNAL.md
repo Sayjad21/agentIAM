@@ -3959,6 +3959,40 @@ that itself and leaves the mandate's status alone. Pinned by unit tests rather t
 a ledger that raises leaves the verdict `LEASE_UNAVAILABLE`, and one that returns `None` marks
 the mandate spent.
 
+### APICTA-06 · MCP through the same pipeline, and the rule that would have caught every tool
+
+The ticket was a matcher: a rule's `mcp_tool` picks it from the JSON-RPC body, since every MCP
+call is the same `POST /mcp`. Three questions it did not ask turned out to matter more than the
+matcher.
+
+First, what a *plain* rule on the same path does. First match wins, so a `POST /mcp` rule —
+the obvious way to let `initialize` or `tools/list` through — would catch every `tools/call`
+for a tool nobody mapped and authorize it under its own scope, while the table read as if it
+denied it. So on an MCP path a tool call is matched only by its own rule, and everything else
+only by a plain one. It is one comparison in `extract()`, and the guard-removal pass found it
+the most load-bearing line in the ticket: delete it and 17 tests in five classes go red,
+REST-parity ones included.
+
+Second, whether the envelope is TM-26's problem. Measured, `json.loads` keeps the last of two
+`name` members, so `"name": "initiate_payment", "name": "get_invoice"` is a read to the PEP and
+a payment to an upstream that keeps the first. `make demo-mcp` sends exactly that as the doc
+reader, and it is refused.
+
+Third, what status a refusal carries. The ticket said REST's; `PLAN.md` T-041 says a denial must
+not be a transport failure. Reading the MCP Python SDK settled it — `mcp` 2.3.0 surfaces a
+JSON-RPC error at a 4xx when it is labelled `application/json` — so both hold at once.
+
+Two findings outside MCP. `bootstrap_demo_secrets.py` refreshed only the role map on an
+existing volume, so new routes would never have reached a running demo: every `tools/call`
+refused as unmapped on a stack whose code had them. Fixed. And probing whether the MCP path
+should honour spec 10 §6's content-type rule showed the rule's REST consequence: a payment whose
+body is not read is `Authorized` with nothing reserved, because an absent amount is vacuous to
+every check. The demo's tools refuse both shapes, so it is not reachable there; against a
+lenient upstream it is an unbudgeted payment. Gap 37, its own ticket.
+
+What it is not: a gateway. A stock MCP client sends `initialize` first and the PEP refuses it as
+unmapped. The MASTER row says so.
+
 ---
 
 ## What the numbers looked like at T-033

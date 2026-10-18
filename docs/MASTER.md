@@ -75,7 +75,7 @@ today.
 | C8 | Just-in-time elevation with human approval | **Built.** The PEP opens escalations itself; approval can only narrow the request and enforces separation of duties. The elevated token is minted under the task's own mandate and delegation path, and the agent that asked collects it with its own token and retries by itself (SDK `call_with_escalation_wait`). Measured live: ৳75,000 asked, ৳50,000 approved, ৳50,000 paid |
 | C9 | Fast subtree revocation | **Built.** One click in the identity tree for a signed-in approver, or the API with an operator token |
 | C10 | Hash-chained audit and custody query | **Built.** Verifiable live from the console |
-| C11 | MCP gateway and HTTP PEP | **HTTP PEP only.** MCP is deferred (T-041, T-042) |
+| C11 | MCP gateway and HTTP PEP | **HTTP PEP, plus MCP `tools/call` through the same pipeline** (APICTA-06): the tool is matched from the JSON-RPC body and a refusal is a JSON-RPC error. `make demo-mcp` checks every refusal layer over MCP against REST's reason code. Not a gateway yet: `initialize` and `tools/list` are not mapped, so an off-the-shelf MCP client cannot connect through the PEP (T-041) |
 | C12 | Admin console | **Built.** Overview, identity tree, live decisions, budgets, audit and custody, escalations, policy |
 | C13 | Reference demo agent | **Built.** `make demo-agent`: a live LLM (Gemini, Groq or Ollama) acting as the doc reader through the SDK and the PEP, with a scripted fallback. The transcript reports what the model actually did — measured: `gemini-3.5-flash-lite` resisted the invoice's injection, so the refusal was shown with a labelled forced attempt. The rest of the traffic is still scripted |
 | C14 | Observability | **Built.** OTEL traces to Tempo, Prometheus, two Grafana dashboards |
@@ -165,7 +165,7 @@ and model training beyond a small classifier.
 | **Tickets** | 49 of the 53 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 8 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
 | **Tests** | 3,321 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,943 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 81 in `DECISIONS.md` |
+| **ADRs** | 82 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -190,7 +190,7 @@ Deferred from the original 61-ticket plan, each with a resumption trigger in `PL
 | T-015 | Adaptive lease sizing | Fixed leases behave the same for the demo |
 | T-034 | Drift dataset (2,000+ labelled pairs) | Weeks of human labelling |
 | T-035 | Calibrated ML drift classifier | Needs T-034 |
-| T-041 / T-042 | MCP gateway and scope extractor | The HTTP PEP proves the pipeline; MCP is the adoption path |
+| T-041 / T-042 | MCP gateway and scope extractor | The HTTP PEP proves the pipeline; MCP is the adoption path. `tools/call` extraction is built (APICTA-06); the gateway half — `initialize`, filtered `tools/list`, SSE — is not |
 | T-044 | SPIRE workload identity | Was "mTLS gives the same outcome" — but **no TLS exists between any services** |
 | T-060 | Paper draft | BIIN scores the demo and report |
 
@@ -287,6 +287,7 @@ change (ADR-062) that adds roughly 0.45 ms at depth 3, so a re-run is owed.
 | NL → Cedar compiler | **27/30 (90%)** on a 30-case self-validating dataset, hosted `gemini-flash-lite-latest` (resolved to `gemini-3.5-flash-lite`), median 2.6 s. Local `qwen2.5:7b` scored 13/30 | `scripts/evaluate_compiler.py` |
 | Settlement batching | Refusals under CH-10 load fell from 33.6% to **2.0%** | ADR-053 |
 | Sibling race (INV-5) | Three PEPs, three siblings asking for 2× the pool: total allowed never exceeds the pool | `make demo-conc` |
+| MCP decides as REST does | All nine rungs of the refusal ladder sent as `tools/call` get REST's reason code, including a smuggled duplicate tool name refused as TM-26 | `make demo-mcp`, run by the `demo-stack` CI job |
 
 Supply chain: CycloneDX SBOM (136 components) checked in CI; bandit, pip-audit, trivy and
 gitleaks all clean, with waivers documented in
@@ -476,6 +477,7 @@ chain → the caveat that allowed or refused it.
 docker compose -f docker-compose.yml -f docker-compose.demo.yml \
   run --rm --no-deps seed python scripts/run_invariant_checker.py --once
 
+make demo-mcp     # the refusal ladder as MCP tools/call, each rung checked against REST's answer
 make demo-down    # stop, keep data
 make demo-reset   # wipe every demo volume (DB, secrets, Keycloak) and come back empty; then make demo-seed
 ```
@@ -506,7 +508,7 @@ From the 2026-10-16 audit ([`STATUS.md`](STATUS.md) §3). Until each one is wire
 |---|---|
 | "The model was fooled and the PEP stopped it" — unless the transcript says so | The live model has been measured resisting the injection; then the refusal on screen is the labelled forced attempt |
 | "Denied in 0.4 ms" on stage | The PEP records ~1–2 ms on the demo stack (gap 35); 0.43 ms is the in-process decision |
-| "One URL change to install" (MCP) | No MCP code exists |
+| "One URL change to install" (MCP) | Only `tools/call` is mapped. A stock MCP client sends `initialize` first and the PEP refuses it as unmapped |
 | "mTLS in place" | No TLS between any services |
 | "Signed audit checkpoints" | No checkpoints or signatures exist yet |
 | "Model-checked lease protocol" | 400 random interleavings in an uncommitted script |

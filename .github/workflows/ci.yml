@@ -396,6 +396,11 @@ jobs:
           status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8082/proxy/invoices/inv-1)
           test "$status" = "401"
 
+      # APICTA-06. Every refusal layer again, as MCP tools/call through the built image, each
+      # checked against the reason code REST gets; the script exits 1 on any difference.
+      - name: MCP tools/call decides as REST does
+        run: make demo-mcp
+
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v
