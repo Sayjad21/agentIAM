@@ -1,5 +1,5 @@
 {
-  "measured_at": "2026-10-18T10:42:06.740510+00:00",
+  "measured_at": "2026-10-18T11:40:48.601850+00:00",
   "host": {
     "platform": "Linux-7.2.11-200.fc44.x86_64-x86_64-with-glibc2.43",
     "python": "3.12.15",
@@ -8,14 +8,14 @@
   "attenuation": {
     "in_process": {
       "n": 500,
-      "median_us": 89.0,
-      "p99_us": 254.0,
+      "median_us": 114.1,
+      "p99_us": 142.8,
       "child_verifies": true
     },
     "token_exchange": {
       "n": 500,
-      "median_us": 2424.1,
-      "p99_us": 4273.7,
+      "median_us": 3723.2,
+      "p99_us": 5287.9,
       "lookups": 501
     }
   },
@@ -27,9 +27,9 @@
     "lease_size": "1000.0000",
     "b1": {
       "n": 900,
-      "median_us": 17123.6,
-      "p99_us": 27352.3,
-      "calls_per_s": 169.4,
+      "median_us": 17111.2,
+      "p99_us": 27550.7,
+      "calls_per_s": 167.7,
       "ledger_round_trips": 900,
       "refused": 0,
       "overspend": "0.0000",
@@ -38,15 +38,15 @@
     },
     "b3": {
       "n": 900,
-      "median_us": 6.9,
-      "p99_us": 63.2,
-      "calls_per_s": 7368.2,
-      "ledger_round_trips": 36,
+      "median_us": 9.1,
+      "p99_us": 70.3,
+      "calls_per_s": 4141.3,
+      "ledger_round_trips": 42,
       "refused": 0,
-      "waits": 176,
+      "waits": 148,
       "overspend": "0.0000",
       "spent": "9000.0000",
-      "committed": "4920.0000"
+      "committed": "9000.0000"
     }
   },
   "context": {
@@ -56,8 +56,8 @@
       "backend": "gemini",
       "model": "gemini-3.5-flash-lite",
       "n": 5,
-      "median_ms": 1252.3,
-      "max_ms": 1302.1
+      "median_ms": 1178.7,
+      "max_ms": 1334.3
     }
   }
 }

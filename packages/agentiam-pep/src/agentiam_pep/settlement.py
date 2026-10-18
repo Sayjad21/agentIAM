@@ -166,6 +166,10 @@ class SettlementQueue:
         self.declined = 0
         self.dropped = 0
         self.failed_attempts = 0
+        #: Monotonic counts of what entered and left the deque. `drain()` measures its
+        #: progress with these, never with `len(_pending)` — see `drain()` for why.
+        self._enqueued = 0
+        self._popped = 0
 
     # -- lifecycle ------------------------------------------------------------------
 
@@ -257,6 +261,7 @@ class SettlementQueue:
                 now=stamped,
             )
         )
+        self._enqueued += 1
 
     # -- draining -------------------------------------------------------------------
 
@@ -273,17 +278,28 @@ class SettlementQueue:
             await self._flush_locked()
 
     async def drain(self) -> None:
-        """Flush repeatedly until the queue is empty or the ledger stops accepting.
+        """Flush until everything queued *when this was called* has reached the ledger.
 
         `flush()` moves one batch; this moves all of them. Stops on the first batch that
         makes no progress, so an unreachable ledger ends the drain instead of spinning —
         the caller (shutdown, or a test taking a reading) gets control back either way, and
         `pending` says what is left.
+
+        **Progress is items popped, not queue length** (gap 38, APICTA-09). It used to stop
+        when a flush did not shorten the queue. But the PEP keeps serving while a top-up
+        drains, and when it enqueued a batch's worth during one flush the queue stayed the
+        same length, this returned, and `LeasePool._release` released a lease whose
+        settlements were still queued — `RELEASE` handed spent money back and the late
+        settlements were rejected. Measured by `make bench-compare`: ৳4,920 of ৳9,000
+        recorded. Nor does it chase what is enqueued after it began: a PEP that never stops
+        spending must not hold a release up forever, and those settlements are against the
+        new lease anyway.
         """
-        while self._pending:
-            before = len(self._pending)
+        target = self._enqueued
+        while self._popped < target and self._pending:
+            before = self._popped
             await self.flush()
-            if len(self._pending) >= before:
+            if self._popped == before:
                 return
 
     def _next_batch(self) -> list[PendingSettlement]:
@@ -327,6 +343,7 @@ class SettlementQueue:
         # be lost if this coroutine is cancelled mid-commit — a replay is free.
         for applied in verdicts:
             self._pending.popleft()
+            self._popped += 1
             if applied:
                 self.applied += 1
             else:

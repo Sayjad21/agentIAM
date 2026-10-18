@@ -106,7 +106,11 @@ class TestMatching:
 
     def test_an_absent_argument_is_absent_not_a_denial(self) -> None:
         """Spec 10 §2's third row holds over MCP exactly as over REST."""
-        assert mcp(table(PAY), call("initiate_payment", {})).args == {}
+        assert mcp(table(READ), call("get_invoice", {})).args == {}
+
+    def test_except_the_amount_a_payment_spends(self) -> None:
+        """Gap 37, over MCP as over REST: an unpriced payment is refused, not free."""
+        refused(table(PAY), call("initiate_payment", {"recipient": {"account_id": "a"}}))
 
     def test_a_number_finer_than_four_places_is_still_refused(self) -> None:
         refused(table(PAY), call("initiate_payment", {"amount": "0.00005"}))

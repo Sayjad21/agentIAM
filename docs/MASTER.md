@@ -165,7 +165,7 @@ and model training beyond a small classifier.
 | **Tickets** | 49 of the 53 in-scope tickets done. T-057 (demo scripting) is partly done; T-058 (failure drills), T-059 (submission package) and T-061 (reduced OSS release) are left. 8 deferred. Detail in [`STATUS.md`](STATUS.md) §2 |
 | **Tests** | 3,321 collected (unit, property, integration, e2e, security, chaos, perf); `make check` runs 2,943 |
 | **Specs** | 10, all written before their code |
-| **ADRs** | 83 in `DECISIONS.md` |
+| **ADRs** | 84 in `DECISIONS.md` |
 | **CI** | Lint, types and tests with the NFR-1 benchmark; integration; e2e; nightly chaos; core purity; evidence pack; compose health; the full demo stack (NFR-8); security scan |
 
 The current sprint is [`APICTA_TICKETS.md`](APICTA_TICKETS.md): eight tickets that wire up
@@ -284,12 +284,14 @@ From [`benchmarks/comparative.md`](benchmarks/comparative.md) (`make bench-compa
 
 | Comparison | AgentIAM | Alternative |
 |---|---|---|
-| Delegating a narrower credential | `attenuate()` in process, **0.089 ms** median | Simulated OAuth2 token exchange (loopback, keep-alive, one indexed lookup, no TLS), **2.424 ms** |
-| A shared budget, 3 PEPs × 300 calls | Leases (B3), **0.007 ms** per call, 36 ledger round trips | `FOR UPDATE` per call (B1), **17.1 ms**, 900 round trips |
-| The PEP beside the model call it guards | **0.405 ms** in process | A measured median Gemini call (`gemini-3.5-flash-lite`), **1,252 ms** — the PEP is 0.03% |
+| Delegating a narrower credential | `attenuate()` in process, **0.114 ms** median | Simulated OAuth2 token exchange (loopback, keep-alive, one indexed lookup, no TLS), **3.723 ms** |
+| A shared budget, 3 PEPs × 300 calls | Leases (B3), **0.009 ms** per call, 42 ledger round trips | `FOR UPDATE` per call (B1), **17.1 ms**, 900 round trips |
+| The PEP beside the model call it guards | **0.405 ms** in process | A measured median Gemini call (`gemini-3.5-flash-lite`), **1,179 ms** — the PEP is 0.03% |
 
-The B3 run also found gap 38: under sustained load the ledger recorded ৳4,920 of ৳9,000
-spent. The latency comparison stands; the accounting does not until APICTA-09.
+Both budget designs recorded every taka allowed (৳9,000 of ৳9,000). That holds since APICTA-09
+closed gap 38; the first B3 run recorded ৳4,920. One run each. The attenuation pair moved
+between runs (0.089/2.424 ms in APICTA-08's run), so quote the order of magnitude, not the
+ratio.
 
 ### 6.3 Other measurements
 
@@ -525,7 +527,6 @@ From the 2026-10-16 audit ([`STATUS.md`](STATUS.md) §3). Until each one is wire
 |---|---|
 | "The model was fooled and the PEP stopped it" — unless the transcript says so | The live model has been measured resisting the injection; then the refusal on screen is the labelled forced attempt |
 | "Denied in 0.4 ms" on stage | The PEP records ~1–2 ms on the demo stack (gap 35); 0.43 ms is the in-process decision |
-| "The ledger records every taka spent" | Under sustained load a top-up can release a lease with settlements still queued: measured ৳4,920 recorded of ৳9,000 (gap 38, APICTA-09) |
 | "One URL change to install" (MCP) | Only `tools/call` is mapped. A stock MCP client sends `initialize` first and the PEP refuses it as unmapped |
 | "mTLS in place" | No TLS between any services |
 | "Signed audit checkpoints" | No checkpoints or signatures exist yet |

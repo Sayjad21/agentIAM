@@ -197,6 +197,12 @@ reject if arg("email.domain", $d), !["example.com", "corp.example"].contains($d)
   when it builds the request context; string values are passed through unscaled.
 - Compiles to `reject if` with the **negated** predicate, so the caveat is vacuous when the
   argument is absent and binding when present. `x <= v` becomes `reject if arg(p, $x), $x > v`.
+- **One exception, enforced before the caveat is consulted: the spend argument.** A route that
+  maps `payment.amount` refuses a request that does not carry it (`MALFORMED_REQUEST`, spec
+  10 §4.4). Absent, the request asks for ৳0, nothing is reserved, and every amount predicate,
+  ceiling and policy condition passes vacuously — a payment no budget sees (APICTA-09, gap 37).
+  This does not change the caveat's semantics; it guarantees the fact exists where it is
+  load-bearing.
 - **`narrows`:** defined only for the **same path and comparable operator**:
   - numeric upper bounds: `v₁ ≤ v₂`; lower bounds: `v₁ ≥ v₂`
   - set membership: `S₁ ⊆ S₂`

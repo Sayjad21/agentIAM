@@ -58,6 +58,12 @@ PLACES: Final = 4
 #: an unbounded read here would reintroduce TM-14 at the gateway (spec 10 §6).
 DEFAULT_MAX_EXTRACT_BODY_BYTES: Final = 1 << 20
 
+#: The argument the pipeline spends on (`Pipeline._context_for`). The one exception to spec 02
+#: §3.2's "absent is vacuous": a route that maps it must declare it numeric, and a request on
+#: such a route that does not carry it is refused — a payment the PEP cannot price is a
+#: payment no budget sees (gap 37).
+SPEND_ARG: Final = "payment.amount"
+
 _SOURCE_KINDS: Final = frozenset({"path", "query", "body", "header"})
 _NUMBER_SUFFIX: Final = ":number"
 
@@ -329,6 +335,12 @@ class RouteTable:
                 source = _parse_source(expression)
             except ValueError as exc:
                 raise ValueError(f"{where}.args[{label!r}]: {exc}") from exc
+            if label == SPEND_ARG and not source.numeric:
+                raise ValueError(
+                    f"{where}.args[{label!r}] must be declared `:number`: it is what the "
+                    f"pipeline spends, and text is never priced, so this route could only "
+                    f"ever reserve ৳0 (gap 37)"
+                )
             if source.kind == "path" and source.name not in param_names:
                 raise ValueError(
                     f"{where}.args[{label!r}] reads path parameter {source.name!r}, "
@@ -356,6 +368,17 @@ class RouteTable:
         return method.upper() == "POST" and any(
             rule.mcp_tool is not None and rule.regex.match(path) for rule in self.rules
         )
+
+    def reads_body(self, method: str, path: str) -> bool:
+        """Whether any rule this request could match reads its body — whatever it is labelled.
+
+        The gateway used to read a body only when its `content-type` said JSON, so a payment
+        labelled `text/plain` carried no amount to us while an upstream that parses JSON
+        regardless of the label executed it (gap 37). Reading what that upstream would read is
+        spec 10 §5's rule; a body that is not JSON still yields no values, as before.
+        """
+        upper = method.upper()
+        return any(rule.needs_body and rule.matches(upper, path) is not None for rule in self.rules)
 
 
 def _mapping_version(rules: Sequence[RouteRule], action: str, max_body: int) -> str:
@@ -686,6 +709,15 @@ def extract(
             continue
 
         args[label] = _to_scaled(raw, label) if source.numeric else _to_text(raw, label)
+
+    if SPEND_ARG not in args and any(label == SPEND_ARG for label, _ in rule.sources):
+        # The one argument spec 02 §3.2's "absent is vacuous" cannot cover: absent, the
+        # request asks for ৳0, nothing is reserved, and every amount check passes vacuously.
+        raise ExtractionError(
+            ReasonCode.MALFORMED_REQUEST,
+            f"{method.upper()} {path} spends, and the request carries no {SPEND_ARG!r}; a "
+            f"payment this gateway cannot price is one no budget would see",
+        )
 
     return Extraction(
         scope=rule.scope,

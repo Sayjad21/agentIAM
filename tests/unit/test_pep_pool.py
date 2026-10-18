@@ -78,7 +78,11 @@ class FakeLedger:
         self.released.append(lease_id)
 
 
-def a_pool(ledger: FakeLedger, **over: object) -> LeasePool:
+def a_pool(ledger: FakeLedger, **over: Any) -> LeasePool:
+    # Most tests here reserve without ever committing, so a replaced lease would wait the
+    # full production `retire_wait` for a settlement that never comes (APICTA-09). The
+    # tests about that wait set it themselves.
+    over.setdefault("retire_wait", timedelta(milliseconds=20))
     settings = PoolSettings(
         pep_id="pep-1",
         lease_size=Decimal(100),
@@ -964,7 +968,10 @@ def a_registry(
 ) -> LeasePoolRegistry:
     return LeasePoolRegistry(
         ledger,
-        PoolSettings(pep_id="pep-1", lease_size=Decimal(100)),
+        # Short for the reason `a_pool` gives: these tests reserve without committing.
+        PoolSettings(
+            pep_id="pep-1", lease_size=Decimal(100), retire_wait=timedelta(milliseconds=20)
+        ),
         now=clock or (lambda: NOW),
         **over,
     )
@@ -1113,3 +1120,119 @@ class TestLeasePoolRegistry:
         assert status["pools"][str(A)]["lease_state"] == "active"
         assert status["refused"][str(B)] == "unknown"
         assert str(B) not in status["pools"]
+
+
+class TestALeaseIsNotReleasedWhileOwed:
+    """Gap 38's second cause, APICTA-09: a request in flight across a top-up.
+
+    The request reserves on lease A and waits for its upstream; a top-up swaps the pool to B
+    and used to release A at once. `RELEASE` returned A's reserved money to the pool, and the
+    late settlement was charged to *B* — whose ledger clamp then dropped it once B was spent.
+    Measured against a real ledger: ৳190 spent, ৳140 committed, the ৳50 in flight lost.
+    """
+
+    @staticmethod
+    async def swapped(pool: LeasePool) -> tuple[Any, uuid.UUID]:
+        """Hold a reservation on the first lease, then drive a top-up to a second."""
+        await pool.prime(SPEND)
+        inflight = pool.reserve(SPEND, Decimal(50))
+        spent = pool.reserve(SPEND, Decimal(40))  # 10 left: under the low-water mark
+        pool.commit(SPEND, spent, Decimal(40))  # answered at once; only `inflight` is open
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if pool._held[SPEND].lease.id != inflight.lease_id:
+                break
+        return inflight, pool._held[SPEND].lease.id
+
+    async def test_a_late_settlement_is_charged_to_the_lease_it_was_reserved_on(self) -> None:
+        pool = a_pool(FakeLedger())
+        inflight, current = await self.swapped(pool)
+        assert current != inflight.lease_id
+
+        outcome = pool.commit(SPEND, inflight, Decimal(50))
+
+        assert outcome.lease_id == inflight.lease_id
+        await pool.drain()
+
+    async def test_the_old_lease_is_not_released_while_a_reservation_on_it_is_open(
+        self,
+    ) -> None:
+        ledger = FakeLedger()
+        pool = a_pool(ledger, retire_wait=timedelta(seconds=30))
+        inflight, _ = await self.swapped(pool)
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+        assert inflight.lease_id not in ledger.released
+
+        pool.commit(SPEND, inflight, Decimal(50))
+        await pool.drain()
+        assert inflight.lease_id in ledger.released
+
+    async def test_settlement_drains_after_the_last_commit_and_before_the_release(self) -> None:
+        """`before_release` must see the late settlement, or ADR-049's ordering is moot."""
+        order: list[str] = []
+        ledger = FakeLedger()
+
+        async def before_release() -> None:
+            order.append("drain")
+
+        settings = PoolSettings(
+            pep_id="pep-1",
+            lease_size=Decimal(100),
+            ttl=timedelta(seconds=60),
+            skew=timedelta(seconds=5),
+            retire_wait=timedelta(seconds=30),
+        )
+        pool = LeasePool(
+            ledger, settings, mandate_id=MANDATE, now=lambda: NOW, before_release=before_release
+        )
+        inflight, _ = await self.swapped(pool)
+        await asyncio.sleep(0)
+        order.append("commit")
+        pool.commit(SPEND, inflight, Decimal(50))
+        await pool.drain()
+
+        assert order[:2] == ["commit", "drain"]
+
+    async def test_a_reservation_that_never_settles_holds_the_release_only_so_long(
+        self,
+    ) -> None:
+        """An upstream that timed out never settles; the old lease must still go back."""
+        ledger = FakeLedger()
+        pool = a_pool(ledger, retire_wait=timedelta(milliseconds=50))
+        inflight, _ = await self.swapped(pool)
+
+        await pool.drain()
+
+        assert inflight.lease_id in ledger.released
+        assert pool.released_unsettled == 1
+
+    async def test_shutdown_waits_for_the_held_lease_s_open_reservations(self) -> None:
+        ledger = FakeLedger()
+        pool = a_pool(ledger, retire_wait=timedelta(seconds=30))
+        await pool.prime(SPEND)
+        inflight = pool.reserve(SPEND, Decimal(10))
+
+        closing = asyncio.create_task(pool.aclose())
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert inflight.lease_id not in ledger.released
+
+        pool.commit(SPEND, inflight, Decimal(10))
+        await closing
+        assert inflight.lease_id in ledger.released
+
+    async def test_a_reservation_whose_lease_is_gone_keeps_its_own_lease_id(self) -> None:
+        """Late beyond the bound, the settlement keeps the lease that funded it.
+
+        The ledger rejects it and records an anomaly (spec 04 §11), rather than it being
+        charged to a lease that never funded it.
+        """
+        pool = a_pool(FakeLedger(), retire_wait=timedelta(milliseconds=10))
+        inflight, current = await self.swapped(pool)
+        await pool.drain()
+
+        outcome = pool.commit(SPEND, inflight, Decimal(50))
+
+        assert outcome.lease_id == inflight.lease_id != current

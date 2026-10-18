@@ -260,6 +260,14 @@ this system can talk about.
 `NaN` deserves its own line: every comparison against it is false, so a `reject if` predicate
 over `NaN` never fires and the caveat silently passes. Refusing it is not tidiness.
 
+### 4.4 The spend argument
+
+`payment.amount` is what the pipeline spends on. A route that maps it **must declare it
+`:number`** — a load-time error otherwise, because text is never priced and such a route could
+only ever reserve ৳0 — and a request on that route **that does not carry it is refused**,
+`MALFORMED_REQUEST`. This is the one exception to §2's "absent is not denied", for the reason
+spec 02 §3.2's note gives (gap 37).
+
 ---
 
 ## 5. Agreement with the upstream — the part that matters
@@ -344,9 +352,16 @@ The bound: a route with a `body.` mapping reads at most `max_extract_body_bytes`
 an unbounded read here would be TM-14 (control-plane denial of service) reintroduced at the
 gateway. Routes without a `body.` mapping stream unchanged and are not subject to the cap.
 
-A body that is not valid JSON, or whose `content-type` is not a JSON media type, yields no
-`body.` values. It is **not** denied — see §2's third row; a form-encoded upload to a route whose
-caveats do not constrain its body is a legitimate request.
+**The body is read whatever its `content-type` says**, on every route that maps a `body.`
+source (APICTA-09). It used to be read only when labelled JSON, and that broke §5's rule: a
+payment sent as `text/plain` carried no amount to us, while an upstream that parses JSON
+regardless of the label — Go's `json.Decoder` on a raw body does — executed it. Refusing
+non-JSON labels would also have closed it, and denied the legitimate case below.
+
+A body that is not valid JSON yields no `body.` values. It is **not** denied — see §2's third
+row; a form-encoded upload to a route whose caveats do not constrain its body is a legitimate
+request. The one argument that may not be absent is §4.4's.
+
 
 ---
 
@@ -383,12 +398,12 @@ Stated rather than discovered later.
 
 | # | Limitation | Bound |
 |---|---|---|
-| 1 | A JSON key containing a literal `.` is unreachable | The mapping fails to resolve, so the arg is absent, so predicates over it are vacuous. Fails **open** for that one path — the only such case in this document, and it requires the upstream to use dotted keys |
+| 1 | A JSON key containing a literal `.` is unreachable | The mapping fails to resolve, so the arg is absent, so predicates over it are vacuous. Fails **open** for that one path — the only such case in this document, and it requires the upstream to use dotted keys. For the spend argument it fails **closed**: §4.4 refuses the request |
 | 2 | No array indexing | A caveat cannot constrain `items[0].amount`. Deliberate (§4.1); revisited when a demo workflow needs it |
 | 3 | The digest is over extracted args, not the body | §7. A field nobody mapped is not in the digest and not authorized |
 | 4 | Ambiguity refusal covers mapped names only | An unmapped repeated parameter is forwarded as sent. Correct — nothing constrains it — but it means the PEP is not a general request sanitizer |
 | 5 | `max_extract_body_bytes` is a per-request cap, not a concurrent-memory bound | `max_connections` (100) × 1 MiB is the worst case. Recorded for T-053's load profile |
-| 6 | §6's content-type rule fails open against an upstream that parses JSON regardless of `content-type` | A `body.` argument sent as `text/plain` is not extracted, so its predicates are vacuous, while such an upstream still reads it. Measured: the demo's FastAPI tools refuse a non-JSON content type with 422, so the demo is not exposed; Go's `json.Decoder` on a raw body would be. MCP paths are exempt (§3.1). With a spend argument this is an unbudgeted payment: `STATUS.md` gap 37 |
+| 6 | ~~§6's content-type rule fails open against a lenient upstream~~ | **Closed** (APICTA-09): a body-mapped route's body is read whatever its label (§6), and a payment without its amount is refused (§4.4). Was `STATUS.md` gap 37 |
 
 ---
 

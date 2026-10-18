@@ -5066,3 +5066,96 @@ comparisons against the designs it replaces. Probing before building changed fou
   the container and the token file. Two real machines remain the human step. Found doing
   it: redirected output is block-buffered, so `--role server > log` printed nothing for five
   minutes. `main()` now line-buffers stdout.
+
+---
+
+## ADR-084 — A lease is released only after what it funded has settled, and a payment must carry its price
+
+**Status:** accepted · **Ticket:** APICTA-09 · **Closes:** `STATUS.md` gaps 37 and 38 ·
+**Completes:** ADR-049's settle-before-release · **Specs:** 04 §4.3/§4.5, 10 §4.4/§6, 02 §3.2
+
+### Context
+
+Two ways for spend to escape the ledger, both found by measurement.
+
+**Gap 38 — settle-before-release did not hold under load.** Spec 04 §4.5's `RELEASE` has a
+precondition: *"the PEP has drained all unsettled reservations on this lease"*. ADR-049 met it
+for the queue at rest and missed two cases where it was not at rest:
+
+1. **The drain gave up early.** `SettlementQueue.drain()` stopped when a flush did not shorten
+   the queue. During a top-up the PEP keeps serving, so when it enqueued a batch's worth (64)
+   during one flush, the queue stayed the same length, `drain()` returned, and the old lease
+   was released with its settlements still queued. Measured by `make bench-compare`
+   (three PEPs, 300 calls each, deployed composition): **৳4,920 recorded of ৳9,000 spent**,
+   reproducibly.
+2. **A request in flight across a top-up.** A reservation taken on lease A whose upstream had
+   not answered when the top-up swapped to B was committed against *B*, because
+   `LeasePool.commit` settled against whichever lease was held at commit time. A's
+   `RELEASE` had already returned the reserved money, and B's ledger clamp dropped the
+   settlement once B was spent. Measured against a real ledger: **৳190 spent, ৳140
+   committed** — exactly the ৳50 in flight.
+
+**Gap 37 — a payment without a price.** Spec 02 §3.2 makes an absent argument vacuous, so
+with no `payment.amount` a payment asked for ৳0: nothing reserved, and every ceiling and policy
+condition passed. Two things made it reachable: the gateway read a body only when labelled
+JSON, so `text/plain` carried no amount to us while a lenient upstream executed it, and a route
+mapping the amount without `:number` extracted text, which the pipeline never prices.
+
+### Decision
+
+1. **`drain()` flushes everything enqueued before it was called**, measuring progress by items
+   popped against a monotonic enqueue count. It still stops on a flush that pops nothing, so
+   an unreachable ledger ends a shutdown. It does not chase what is enqueued after it began:
+   that belongs to the new lease, and a PEP that never stops spending must not hold a release
+   up forever.
+2. **A reservation settles against the lease that funded it.** The pool keeps every unreleased
+   lease by id and commits against `reservation.lease_id`. A reservation whose lease is
+   already gone keeps its own lease id, so the ledger rejects it as a §11 anomaly instead of
+   charging a lease that never funded it.
+3. **A replaced lease is retired, not released.** A background task waits until no reservation
+   taken on it is open, then drains and releases. The top-up itself is not delayed. The wait
+   is bounded by `PoolSettings.retire_wait` (30 s, the gateway's read timeout) and by the
+   lease's `expires_at - skew`. Reservations still open at the bound are released anyway and
+   counted (`released_unsettled`), with a warning. Shutdown waits for the held lease the
+   same way.
+4. **The spend argument is required and numeric.** A route mapping `payment.amount` must
+   declare it `:number` (a load-time error otherwise), and a request on it without the amount
+   is `MALFORMED_REQUEST`, over REST and MCP alike. It is the one exception to "absent is
+   vacuous".
+5. **A body-mapped route's body is read whatever its label** (`RouteTable.reads_body`), as MCP
+   paths already were. *Considered and rejected:* refusing non-JSON content types on such
+   routes. That also closes the gap, but it denies spec 10 §6's legitimate case — a form
+   upload to a route whose caveats do not constrain it — and §5's rule is to read the request
+   as the upstream will, not to choose which upstreams to support.
+
+### Consequences
+
+- **Gap 38, both causes, measured closed.** `make bench-compare`'s B3 now records ৳9,000 of
+  ৳9,000 spent, with no settlement rejected (was ৳4,920). The in-flight probe gives ৳190 of
+  ৳190, charged to the lease that funded it (was ৳140). B3's ledger round trips rose from 36 to
+  42, the extra commit batches a complete drain makes.
+- **The accounting test now catches it at the scale it happens.** The integration suite's
+  small B3 case passed even with the old `drain()`: at 40 calls a PEP never enqueues a full
+  batch during one flush. A benchmark-scale case was added, and it fails without the fix
+  (measured).
+- **Every new guard is load-bearing.** Each of seven was removed in turn and a test went red:
+  the drain's popped count, settling against the funding lease, the retirement wait, the
+  shutdown wait, the required spend argument, its numeric declaration, and reading
+  body-mapped routes whatever the label.
+- `make check` 3,177, `make test-integration` 354, e2e 13, `make chaos` 10 of 10. On the demo
+  stack, `make demo-mcp` matched 9 of 9 rungs and `demo-seed`'s refusal ladder was unchanged.
+  One first-run `LEASE_UNAVAILABLE` on a freshly restarted PEP did not reproduce, and the PEP
+  logged no unsettled release.
+- `comparative.md` is one run, and its attenuation figures moved between this run and
+  APICTA-08's: `attenuate()` 0.089 → 0.114 ms median, the simulated exchange 2.42 → 3.72 ms.
+  The ratio swung from 27× to 33×. The budget figures were stable: B1 17.1 ms both times.
+
+**Costs, stated:**
+- An upstream call that never settles (the gateway's 502/504 paths do not settle) keeps its
+  old lease's unspent remainder out of the pool for up to `retire_wait`, where before it went
+  back at once — along with the money that request had reserved, which was the defect.
+- The pool now holds one id per open reservation and one entry per unreleased lease. Both are
+  bounded by in-flight requests and by the retire wait.
+- A body-mapped route now buffers a non-JSON body it used to stream. The existing
+  `max_extract_body_bytes` cap applies, though the gateway still reads the whole body before
+  that check, as it always has for JSON bodies (pre-existing, not changed here).

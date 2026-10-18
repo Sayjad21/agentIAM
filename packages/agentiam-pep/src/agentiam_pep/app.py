@@ -261,11 +261,17 @@ def create_app(
             if pipeline is not None:
                 routes = getattr(pipeline, "routes", None)
                 mcp = routes is not None and routes.is_mcp(request.method, "/" + upstream_path)
-                # Read the body only when some route maps a `body.` argument, or the request
-                # is MCP; otherwise the stream is left untouched and the proxy hop stays
-                # constant-memory (ADR-023). Measured: `json()` then `stream()` replays fine,
-                # the reverse raises.
-                request_body = await request.body() if mcp or _reads_body(request) else None
+                # Read the body only when a route this request could match maps a `body.`
+                # argument (or it is MCP) — whatever its `content-type` says, since the
+                # upstream may parse it regardless (gap 37). Otherwise the stream is left
+                # untouched and the proxy hop stays constant-memory (ADR-023). Measured:
+                # `json()` then `stream()` replays fine, the reverse raises.
+                reads = (
+                    routes.reads_body(request.method, "/" + upstream_path)
+                    if routes is not None
+                    else _reads_body(request)
+                )
+                request_body = await request.body() if mcp or reads else None
                 outcome = await pipeline.authorize(
                     method=request.method,
                     path="/" + upstream_path,
@@ -360,11 +366,11 @@ def create_app(
 
 
 def _reads_body(request: Request) -> bool:
-    """Whether extraction needs this request's body.
+    """Whether to read the body, for a pipeline that exposes no route table.
 
-    Only methods that carry one, and only when it is JSON — a form upload through a route
-    whose caveats do not constrain its body is a legitimate request that must keep streaming
-    (spec 10 §6).
+    The fallback only: with `pipeline.routes` the gateway asks `RouteTable.reads_body`,
+    which reads a body-mapped route's body whatever its label (gap 37). Without one it can
+    only guess from the method and `content-type`, as it did before APICTA-09.
     """
     if request.method in {"GET", "HEAD", "DELETE", "OPTIONS"}:
         return False

@@ -61,8 +61,8 @@ fallback) and T-059 (submission package).
 | APICTA-05 | DONE — `make demo-agent`, live on Gemini and offline; gaps 35, 36 filed |
 | APICTA-02 | DONE — Parts A–C (ADR-078, ADR-079, ADR-080); gaps 25 and 7 closed; beat 4 live. Two follow-ups after the parts: two CH-04 harness fixes its own settlement drain exposed, and **ADR-081** — the Part B announcement had every PEP lease from every mandate, starving the one that served it. CI green on `apicta-sprint` (run 39059003803) |
 | APICTA-06 | DONE — `tools/call` through the same pipeline (ADR-082); `make demo-mcp` 9/9 against REST live, and in the `demo-stack` CI job. Not a gateway: `initialize`/`tools/list` unmapped. Gap 37 filed. CI green on `apicta-sprint` (run 39115596127) |
-| APICTA-08 | DONE — tooling, single-host re-measure, comparisons (ADR-083); two-machine split checked across a network boundary. Found gap 38. The two-machine run itself is the human step |
-| APICTA-09 | TODO |
+| APICTA-08 | DONE — tooling, single-host re-measure, comparisons (ADR-083); two-machine split checked across a network boundary. Found gap 38. The two-machine run itself is the human step. CI green on `apicta-sprint` (run 39122293974, #176) |
+| APICTA-09 | DONE — gaps 37 and 38 closed (ADR-084): B3 records ৳9,000 of ৳9,000, the in-flight probe ৳190 of ৳190; unpriced payments refused over REST and MCP |
 
 Mark `IN_PROGRESS` when starting and `DONE` only after `make check`, the ticket's own
 verification commands and (once CI runs again) a green CI run. Update `STATUS.md` in the same
@@ -551,7 +551,8 @@ Then STATUS.md §3 MCP row reworded to what holds (tools/call over HTTP; no SSE 
   `run_load_test.py --seconds 5 --repeat 1`, `make bench-compare`, `make benchmarks`,
   `make evidence` run. Two-host tooling checked with the client in a container dialling the
   LAN address. Found **gap 38** (→ APICTA-09) and two harness ledger copies that read an empty
-  pool as an outage (fixed here)
+  pool as an outage (fixed here). CI green on `apicta-sprint` at `dcc1b9f`, all nine jobs (run
+  39122293974, #176)
 - **Maps to:** NFR-2; fix-queue item 21; `research/lease-plan.md` baselines B0–B3
 
 **Problem statement.**
@@ -602,7 +603,11 @@ Then STATUS.md §5 item 21 and §7 R-2 with whatever the run shows; `MASTER.md` 
 
 ## APICTA-09 — Money-path correctness: an unextracted amount, and settlements that lose the race
 
-- **Status:** TODO
+- **Status:** DONE (ADR-084). `make check` 3,177, `make test-integration` 354, e2e 13,
+  `make chaos` 10/10; `make bench-compare` B3 ৳9,000 of ৳9,000; demo stack `demo-seed` and
+  `demo-mcp` 9/9. Step 2's probe found the in-flight path real (৳50 lost of ৳190), so `pool.py`
+  changed too. Gap 37 was closed by *reading* a body-mapped route whatever its label rather
+  than refusing non-JSON labels, which would have denied spec 10 §6's form uploads
 - **Maps to:** STATUS.md gaps 37 and 38; ADR-049; spec 02 §3.2, spec 04 §4.4 and §11, spec 10 §6
 
 **Problem statement.**

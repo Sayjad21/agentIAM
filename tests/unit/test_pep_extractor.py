@@ -321,23 +321,34 @@ class TestArgumentSources:
             call(bad, "POST", "/payments", body=body)
         assert caught.value.reason is ReasonCode.MALFORMED_REQUEST
 
+    @staticmethod
+    def _dotted(label: str) -> RouteTable:
+        return RouteTable.from_config(
+            {
+                "routes": [
+                    {
+                        "method": "POST",
+                        "path": "/payments",
+                        "scope": "payment:initiate",
+                        "tool": "payment_api",
+                        "args": {label: "body.a.b:number"},
+                    }
+                ],
+                "default": {"action": "deny"},
+            }
+        )
+
     def test_a_dotted_key_is_unreachable_and_fails_open(self) -> None:
         """Spec 10 §9 limitation 1, stated so it is not discovered later."""
-        config = {
-            "routes": [
-                {
-                    "method": "POST",
-                    "path": "/payments",
-                    "scope": "payment:initiate",
-                    "tool": "payment_api",
-                    "args": {"payment.amount": "body.a.b:number"},
-                }
-            ],
-            "default": {"action": "deny"},
-        }
-        odd = RouteTable.from_config(config)
+        odd = self._dotted("payment.fee")
         result = call(odd, "POST", "/payments", body=json.dumps({"a.b": "5"}).encode())
-        assert "payment.amount" not in result.args
+        assert "payment.fee" not in result.args
+
+    def test_except_for_the_spend_argument_which_fails_closed(self) -> None:
+        """Gap 37: an amount the gateway cannot read is a payment it will not price."""
+        odd = self._dotted("payment.amount")
+        with pytest.raises(ExtractionError):
+            call(odd, "POST", "/payments", body=json.dumps({"a.b": "5"}).encode())
 
 
 class TestNumericScaling:

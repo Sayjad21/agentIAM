@@ -183,6 +183,12 @@ enqueue LEDGER_COMMIT(lease_id, actual, reservation.id)   -- batched, async
 
 The refund is local and immediate; the ledger learns about it via the reduced `actual`.
 
+`lease` here is **the lease the reservation was taken on** (`reservation.lease_id`), not the
+one the PEP holds when the commit happens. They differ for a request still in flight across a
+top-up. Charged to the new lease, the settlement was clamped by that lease's `outstanding`
+once the new lease was spent, and the in-flight money was lost — measured against a real
+ledger as ৳190 spent and ৳140 committed (APICTA-09, gap 38).
+
 ### 4.4 `LEDGER_COMMIT(lease_id, amount, reservation_id)`
 
 Ledger-side. Idempotent by `reservation_id`.
@@ -210,7 +216,7 @@ Three guards in one operation, and each protects something different — see §6
 Graceful shutdown or idle.
 
 ```
-PRECONDITION: the PEP has drained all unsettled reservations on this lease
+PRECONDITION: the PEP has drained all unsettled reservations on this lease     -- see below
 BEGIN
   SELECT lease FOR UPDATE
   IF lease.state != 'active': ROLLBACK; RETURN
@@ -218,6 +224,21 @@ BEGIN
   lease.state := 'released'
 COMMIT
 ```
+
+**How the PEP meets the precondition** (APICTA-09, ADR-084). It is the whole of ADR-049's
+settle-before-release, and two gaps let a release through without it (gap 38):
+
+1. *Reservations still open.* A replaced lease is retired, not released: the PEP waits until
+   every reservation taken on it has committed, then releases. The wait is bounded by
+   `retire_wait` (default 30 s, the gateway's read timeout) and by the lease's own
+   `expires_at - skew`. A reservation still open at the bound, such as an upstream that
+   timed out and never settled, is released anyway: its late `LEDGER_COMMIT` is the §11
+   anomaly, and the PEP counts it (`released_unsettled`). Shutdown waits the same way.
+2. *Settlements still queued.* Before the release, the settlement queue flushes **everything
+   enqueued before the release began**, judging progress by items flushed. It used to judge
+   by queue length, and stopped while the PEP kept enqueuing: ৳4,920 of ৳9,000 recorded
+   under `make bench-compare`'s load. It does not chase settlements enqueued after the
+   release began, which belong to the new lease.
 
 ### 4.6 `REAP()`
 

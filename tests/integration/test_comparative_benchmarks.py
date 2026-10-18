@@ -82,10 +82,14 @@ class TestBudget:
             assert isinstance(stats, dict)
             assert Decimal(stats["overspend"]) == 0, design
 
-    async def test_b1_records_every_taka_it_allows(self, result: dict[str, object]) -> None:
-        b1 = result["b1"]
-        assert isinstance(b1, dict)
-        assert Decimal(b1["committed"]) == Decimal(b1["spent"])
+    @pytest.mark.parametrize("design", ["b1", "b3"])
+    async def test_the_ledger_records_every_taka_allowed(
+        self, result: dict[str, object], design: str
+    ) -> None:
+        """Gap 38: B3 used to commit ৳4,920 of ৳9,000 — the overspend check cannot see that."""
+        stats = result[design]
+        assert isinstance(stats, dict)
+        assert Decimal(stats["committed"]) == Decimal(stats["spent"]), design
 
     async def test_every_call_is_accounted_for(self, result: dict[str, object]) -> None:
         for design in ("b1", "b3"):
@@ -109,3 +113,22 @@ class TestBudget:
             assert isinstance(stats, dict)
             assert stats["refused"] > 0, design
             assert Decimal(stats["overspend"]) == 0, design
+
+    async def test_b3_at_the_benchmark_s_own_scale_records_every_taka(
+        self, migrated_engine: AsyncEngine, postgres_url: str
+    ) -> None:
+        """Gap 38 at the size it was measured: ৳4,920 of ৳9,000 before APICTA-09.
+
+        The small fixture above cannot show it — at 40 calls a PEP never enqueues a full
+        batch during one flush, which is what made `drain()` give up — measured: with the
+        old `drain()` the small case still passed.
+        """
+        result = await bench.measure_budget(
+            postgres_url,
+            peps=3,
+            calls_per_pep=300,
+            amount=Decimal("10.0000"),
+            lease_size=Decimal("1000.0000"),
+        )
+        b3 = result["b3"]
+        assert Decimal(b3["committed"]) == Decimal(b3["spent"]) == Decimal("9000.0000")

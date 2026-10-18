@@ -40,7 +40,7 @@ from agentiam_pep.errors import ReservationInsufficientError, UnknownMandateErro
 from agentiam_pep.lease import CommitOutcome, LocalLease, Reservation, commit, reserve
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable, Coroutine, Mapping
     from datetime import datetime
 
 __all__ = [
@@ -53,6 +53,9 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+#: How often a retiring lease checks whether its open reservations have settled.
+_SETTLE_POLL_S = 0.005
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,11 +114,18 @@ class PoolSettings:
     ttl: timedelta = timedelta(seconds=60)
     skew: timedelta = timedelta(seconds=5)
     low_water: Decimal = Decimal("0.25")
+    #: How long a replaced lease waits for reservations still open on it before it is
+    #: released (APICTA-09, gap 38). A reservation settles when the upstream answers, so this
+    #: covers the gateway's 30 s read timeout; it is also capped at the lease's own expiry
+    #: minus `skew`, past which the reaper may reclaim it anyway.
+    retire_wait: timedelta = timedelta(seconds=30)
 
     def __post_init__(self) -> None:
         """Reject a configuration that cannot be safe (spec 04 §9.2)."""
         if self.lease_size <= 0:
             raise ValueError("lease_size must be positive")
+        if self.retire_wait < timedelta(0):
+            raise ValueError("retire_wait must not be negative")
         if not (0 <= self.low_water < 1):
             raise ValueError("low_water must be in [0, 1)")
         if self.ttl <= 2 * self.skew:
@@ -166,7 +176,16 @@ class LeasePool:
         self._now = now
         self._before_release = before_release
         self._held: dict[BudgetDimension, _Held] = {}
+        #: Every lease not yet released — the held ones and any being retired — so a
+        #: reservation settles against the lease that funded it (gap 38).
+        self._leases: dict[uuid.UUID, LocalLease] = {}
+        #: Reservations taken and not yet committed, by the lease they were taken on.
+        self._open: dict[uuid.UUID, set[uuid.UUID]] = {}
         self._closed = False
+        #: Leases released with reservations still open after `retire_wait`. Their late
+        #: settlements reach a released lease, are rejected (spec 04 §11) and recorded as
+        #: anomalies; this counts how often the bound was what ended the wait.
+        self.released_unsettled = 0
         self._renewer: asyncio.Task[None] | None = None
         #: `ACQUIRE`s that could not reach the ledger. Each leaves the mandate's status as it
         #: was: an outage says nothing about whether the budget is spent.
@@ -178,6 +197,39 @@ class LeasePool:
     def mandate_id(self) -> uuid.UUID:
         """The mandate every lease in this pool is drawn from."""
         return self._mandate_id
+
+    def _track(self, held: _Held, work: Coroutine[Any, Any, None]) -> None:
+        """Run `work` as one of `held`'s tasks, so `drain()` and `aclose()` await it."""
+        task = asyncio.get_running_loop().create_task(work)
+        held.tasks.add(task)
+        task.add_done_callback(held.tasks.discard)
+
+    async def _settled(self, lease: LocalLease) -> None:
+        """Wait, bounded, until no reservation taken on `lease` is still open."""
+        loop = asyncio.get_running_loop()
+        until_expiry = (lease.expires_at - self._settings.skew - self._now()).total_seconds()
+        deadline = loop.time() + max(
+            0.0, min(self._settings.retire_wait.total_seconds(), until_expiry)
+        )
+        while self._open.get(lease.id) and loop.time() < deadline:
+            await asyncio.sleep(_SETTLE_POLL_S)
+        still_open = len(self._open.get(lease.id, ()))
+        if still_open:
+            self.released_unsettled += still_open
+            logger.warning(
+                "releasing lease %s with %d reservation(s) still open after %.1f s; their "
+                "settlements will be rejected and recorded as anomalies",
+                lease.id,
+                still_open,
+                self._settings.retire_wait.total_seconds(),
+            )
+
+    async def _retire(self, lease: LocalLease) -> None:
+        """Release a replaced lease once what it funded has settled — gap 38."""
+        await self._settled(lease)
+        self._leases.pop(lease.id, None)
+        self._open.pop(lease.id, None)
+        await self._release(lease.id)
 
     async def _release(self, lease_id: uuid.UUID) -> None:
         """`RELEASE` one lease, after letting anything owed against it settle first.
@@ -260,15 +312,15 @@ class LeasePool:
             return None
 
         if held is None:
-            self._held[dimension] = _Held(
-                lease=LocalLease(
-                    id=grant.id,
-                    granted=grant.granted,
-                    remaining_local=grant.granted,
-                    expires_at=grant.expires_at,
-                    state=LeaseState.ACTIVE,
-                )
+            lease = LocalLease(
+                id=grant.id,
+                granted=grant.granted,
+                remaining_local=grant.granted,
+                expires_at=grant.expires_at,
+                state=LeaseState.ACTIVE,
             )
+            self._held[dimension] = _Held(lease=lease)
+            self._leases[lease.id] = lease
             return grant
 
         # A top-up replaces the lease rather than adding to it. Holding two leases for one
@@ -282,6 +334,7 @@ class LeasePool:
             expires_at=grant.expires_at,
             state=LeaseState.ACTIVE,
         )
+        self._leases[held.lease.id] = held.lease
         held.mandate_exhausted = False
         # Served, or superseded: a request still too large is refused again on its retry,
         # and that refusal records it afresh — keeping it here was measured to change nothing.
@@ -291,7 +344,10 @@ class LeasePool:
         # revocation gossip starts marking leases from outside, this is where an already
         # retired lease must be skipped — releasing one twice is TM-21's shape (ADR-009).
         old.state = LeaseState.RELEASED
-        await self._release(old.id)
+        # Retired off this task, so the next top-up is not held up behind the wait: a request
+        # still in flight on `old` settles against it, and only then is it drained and
+        # released (gap 38). Releasing it here returned the in-flight money to the pool.
+        self._track(held, self._retire(old))
         return grant
 
     # -- the hot path ---------------------------------------------------------------
@@ -307,6 +363,7 @@ class LeasePool:
         if held is None or self._closed:
             raise ReservationInsufficientError(f"no active lease for {dimension.value} on this PEP")
         reservation = reserve(held.lease, amount, now=self._now(), skew=self._settings.skew)
+        self._open.setdefault(reservation.lease_id, set()).add(reservation.id)
         self._maybe_schedule_topup(dimension, held)
         return reservation
 
@@ -323,7 +380,22 @@ class LeasePool:
             raise ReservationInsufficientError(
                 f"no lease for {dimension.value}; cannot settle {reservation.id}"
             )
-        return commit(held.lease, reservation, actual, now=self._now(), skew=self._settings.skew)
+        self._open.get(reservation.lease_id, set()).discard(reservation.id)
+        # Against the lease that funded it, which is not the held one if a top-up swapped it
+        # meanwhile (gap 38). Charged to the held lease instead, the settlement was clamped
+        # once that lease was spent, and the money it recorded was lost.
+        lease = self._leases.get(reservation.lease_id)
+        if lease is None:
+            # Retired past `retire_wait`. The ledger rejects this and records an anomaly
+            # (spec 04 §11) — the honest outcome — rather than it landing on a lease that
+            # never funded it.
+            return CommitOutcome(
+                reservation_id=reservation.id,
+                lease_id=reservation.lease_id,
+                amount=actual,
+                escalated=False,
+            )
+        return commit(lease, reservation, actual, now=self._now(), skew=self._settings.skew)
 
     def check(self, requested: Mapping[BudgetDimension, Decimal]) -> BudgetVerdict:
         """`BudgetOracle` — whether the held leases cover `requested`. Reserves nothing.
@@ -555,7 +627,10 @@ class LeasePool:
         self._closed = True
         for held in self._held.values():
             if held.lease.state is LeaseState.ACTIVE:
+                # A request still in flight settles first, for the reason a top-up waits.
+                await self._settled(held.lease)
                 held.lease.state = LeaseState.RELEASED
+                self._leases.pop(held.lease.id, None)
                 await self._release(held.lease.id)
 
 
